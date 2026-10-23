@@ -135,18 +135,31 @@ def 讀日期紀錄():
     return 紀錄
 
 
+def 寫入一天(這天):
+    """每天存成一個檔案：data/prices/2026-10/20261023.csv.gz
+    （GitHub 會保留每次修改的舊版本，一天一檔可以讓歷史紀錄長得最慢）"""
+    日 = 這天["date"].iloc[0]
+    檔案 = 行情資料夾 / 日[:7] / f"{日.replace('-', '')}.csv.gz"
+    檔案.parent.mkdir(parents=True, exist_ok=True)
+    這天 = 這天.drop_duplicates("code", keep="last").sort_values("code").copy()
+    這天[["volume", "value"]] = 這天[["volume", "value"]].round().astype("Int64")
+    這天.round(2).to_csv(檔案, index=False, compression="gzip")
+
+
+def 轉換舊格式():
+    """舊版是一個月一個檔，拆成一天一檔。"""
+    for 檔案 in 行情資料夾.glob("*.csv.gz"):
+        表 = pd.read_csv(檔案, dtype={"code": str})
+        for _, 這天 in 表.groupby("date"):
+            寫入一天(這天)
+        檔案.unlink()
+        print(f"已轉換 {檔案.name}")
+
+
 def 存檔(暫存, 指數們, 紀錄):
     行情資料夾.mkdir(parents=True, exist_ok=True)
-    if 暫存:
-        新資料 = pd.concat(暫存)
-        for 月份, 這個月 in 新資料.groupby(新資料["date"].str[:7]):
-            檔案 = 行情資料夾 / f"{月份}.csv.gz"
-            if 檔案.exists():
-                這個月 = pd.concat([pd.read_csv(檔案, dtype={"code": str}), 這個月])
-            這個月 = 這個月.drop_duplicates(["date", "code"], keep="last").sort_values(["date", "code"])
-            這個月[["volume", "value"]] = 這個月[["volume", "value"]].round().astype("Int64")
-            這個月 = 這個月.round(2)
-            這個月.to_csv(檔案, index=False, compression="gzip")
+    for 這天 in 暫存:
+        寫入一天(這天)
     if 指數們:
         新指數 = pd.DataFrame(指數們)
         if 指數檔.exists():
@@ -167,6 +180,7 @@ def main():
     最後一天 = 今天 if 現在.hour >= 15 else 今天 - dt.timedelta(days=1)
     第一天 = 今天 - dt.timedelta(days=int(參數.years * 365))
     紀錄 = 讀日期紀錄()
+    轉換舊格式()
     開始時間 = time.time()
 
     待抓 = []
@@ -205,9 +219,9 @@ def main():
         time.sleep(3)
     存檔(暫存, 指數們, 紀錄)
 
-    # 刪掉超過保留年限的舊月份
-    for 檔案 in 行情資料夾.glob("*.csv.gz"):
-        if 檔案.name[:7] < 第一天.strftime("%Y-%m"):
+    # 刪掉超過保留年限的舊資料
+    for 檔案 in 行情資料夾.glob("*/*.csv.gz"):
+        if 檔案.name[:8] < 第一天.strftime("%Y%m%d"):
             檔案.unlink()
 
 
