@@ -4,6 +4,10 @@ on:
   schedule:
     - cron: "0 10 * * 1-5"   # 週一到週五 台灣時間 18:00
   workflow_dispatch:          # 可以在 Actions 頁面手動按 Run workflow
+    inputs:
+      years:
+        description: "資料庫保留幾年"
+        default: "3"
 
 permissions:
   contents: write
@@ -18,7 +22,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install pandas requests
-      - run: python update_data.py --years 3 --max-minutes 320
+      - run: python update_data.py --years ${{ github.event.inputs.years || 3 }} --max-minutes 320
       - name: 存回 GitHub
         if: always()
         run: |
