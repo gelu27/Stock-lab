@@ -10,11 +10,14 @@
 #   data/status/2026-10.txt               哪些日期已經抓過（ok / closed）
 #   data/intraday/20261022.csv            加權指數當日分時（保留最近 5 天）
 #   data/esb/20261022.csv.gz              興櫃行情（櫃買只提供最新一天，每天累積）
-#   data/fundamental/revenue.csv, eps.csv 最新月營收、最新一季 EPS
+#   data/fundamental/revenue.csv, eps.csv 最新月營收、最新一季 EPS（eps.csv 每季累積保留）
+#   data/fundamental/revenue_history.csv   近 5 年每月營收（公開資訊觀測站），算「營收創新高」
+#   data/fundamental/capital.csv           股本與發行股數，算「週轉率」
 #   data/fx.csv                           美元兌台幣匯率
 
 import argparse
 import datetime as dt
+import io
 import json
 import re
 import time
@@ -357,8 +360,65 @@ def 抓基本面():
             "eps": EPS.map(轉數字),
         }))
     if EPS們:
-        pd.concat(EPS們).to_csv(資料夾 / "fundamental" / "eps.csv", index=False)
+        檔案 = 資料夾 / "fundamental" / "eps.csv"
+        表 = pd.concat(EPS們)
+        if 檔案.exists():  # 保留以前各季，才能算「近三季 EPS 合計」
+            表 = pd.concat([pd.read_csv(檔案, dtype={"code": str}), 表])
+        表.drop_duplicates(["code", "quarter"], keep="last").sort_values(["code", "quarter"]).to_csv(檔案, index=False)
         print("EPS 完成")
+    抓股本()
+    抓歷史營收()
+
+
+def 抓股本():
+    列們 = []
+    for 網址, 市場 in (("https://openapi.twse.com.tw/v1/opendata/t187ap03_L", "上市"),
+                     ("https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O", "上櫃")):
+        資料 = (證交所 if 市場 == "上市" else 櫃買)(網址)
+        for 列 in 資料 or []:
+            代號 = 列.get("公司代號", 列.get("SecuritiesCompanyCode", "")).strip()
+            股本 = 轉數字(列.get("實收資本額", 列.get("Paidin.Capital.NTDollars")))
+            面額 = 轉數字(re.sub(r"[^\d.]", "", str(列.get("普通股每股面額", 列.get("ParValueOfCommonStock", "")))))
+            if not 面額 or 面額 != 面額:
+                面額 = 10.0
+            列們.append({"code": 代號, "capital": 股本, "shares": 股本 / 面額})
+    if 列們:
+        pd.DataFrame(列們).round(0).to_csv(資料夾 / "fundamental" / "capital.csv", index=False)
+        print("股本完成")
+
+
+def 抓歷史營收(月數=60):
+    """公開資訊觀測站每月營收彙總 CSV；已經有的月份不重抓（最近 2 個月會重抓，因為有公司晚公布）。"""
+    檔案 = 資料夾 / "fundamental" / "revenue_history.csv"
+    舊 = pd.read_csv(檔案, dtype={"code": str}) if 檔案.exists() else pd.DataFrame(columns=["code", "month", "revenue"])
+    已有 = set(舊["month"])
+    今天 = dt.date.today()
+    年, 月 = 今天.year, 今天.month
+    新們 = []
+    for i in range(月數):
+        月 -= 1
+        if 月 == 0:
+            年, 月 = 年 - 1, 12
+        月份 = f"{年}-{月:02d}"
+        if 月份 in 已有 and i >= 2:
+            continue
+        for 類 in ("sii", "otc"):
+            time.sleep(3)
+            try:
+                r = requests.get(f"https://mopsov.twse.com.tw/nas/t21/{類}/t21sc03_{年 - 1911}_{月}.csv",
+                                 headers=標頭, timeout=30)
+                if r.status_code != 200 or "公司代號" not in r.content[:600].decode("utf-8-sig", "ignore"):
+                    continue
+                表 = pd.read_csv(io.StringIO(r.content.decode("utf-8-sig")), dtype=str)
+                新們.append(pd.DataFrame({"code": 表["公司代號"].str.strip(), "month": 月份,
+                                         "revenue": 表["營業收入-當月營收"].map(轉數字)}))
+            except Exception as 錯誤:
+                print(f"  歷史營收 {月份} {類} 失敗：{錯誤}")
+    if 新們:
+        表 = pd.concat([舊] + 新們).dropna(subset=["revenue"])
+        表 = 表.drop_duplicates(["code", "month"], keep="last").sort_values(["code", "month"])
+        表.to_csv(檔案, index=False)
+        print(f"歷史營收完成，共 {表['month'].nunique()} 個月")
 
 
 def 抓匯率():

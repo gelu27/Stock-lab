@@ -1,6 +1,7 @@
 # 計算核心：讀資料庫、算技術指標、選股、回測
 # 想調整選股或回測規則，主要改這個檔案
 
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -21,6 +22,7 @@ import pandas as pd
     "量比 高→低": ("量比", False),
     "法人5日買超 多→少": ("法人5日買超", False),
     "投信連買天數 多→少": ("投信連買", False),
+    "週轉率 高→低": ("週轉率", False),
 }
 
 
@@ -76,19 +78,48 @@ def 讀取分時():
 
 
 def 讀取基本面():
-    """最新月營收與最新一季 EPS，回傳以代號為索引的表。"""
+    """最新月營收、EPS、股本，回傳以代號為索引的表。"""
     表 = None
     f = 資料夾 / "fundamental" / "revenue.csv"
     if f.exists():
         r = pd.read_csv(f, dtype={"code": str}).drop_duplicates("code", keep="last").set_index("code")
         表 = r.rename(columns={"month": "營收月份", "rev_yoy": "營收年增率", "rev_mom": "營收月增率",
                               "rev_cum_yoy": "累計營收年增率"})[["營收月份", "營收年增率", "營收月增率", "累計營收年增率"]]
+        h = 資料夾 / "fundamental" / "revenue_history.csv"
+        if h.exists():
+            歷史 = pd.concat([pd.read_csv(h, dtype={"code": str}), r.reset_index()[["code", "month", "revenue"]]])
+            歷史 = 歷史.drop_duplicates(["code", "month"], keep="last").sort_values(["code", "month"])
+            最新 = 歷史.groupby("code").tail(1).set_index("code")
+            以前最高 = 歷史.groupby("code")["revenue"].apply(lambda s: s.iloc[:-1].max() if len(s) >= 13 else np.nan)
+            表["營收創新高"] = (最新["revenue"] >= 以前最高).reindex(表.index).fillna(False)
     f = 資料夾 / "fundamental" / "eps.csv"
     if f.exists():
-        e = pd.read_csv(f, dtype={"code": str}).drop_duplicates("code", keep="last").set_index("code")
-        e = e.rename(columns={"quarter": "EPS季度", "eps": "EPS"})[["EPS季度", "EPS"]]
-        表 = e if 表 is None else 表.join(e, how="outer")
+        e = pd.read_csv(f, dtype={"code": str}).sort_values(["code", "quarter"])
+        最新 = e.drop_duplicates("code", keep="last").set_index("code")
+        最新 = 最新.rename(columns={"quarter": "EPS季度", "eps": "EPS"})[["EPS季度", "EPS"]]
+        最新["近三季EPS"] = _近三季EPS(e).reindex(最新.index).fillna(最新["EPS"])
+        表 = 最新 if 表 is None else 表.join(最新, how="outer")
+    f = 資料夾 / "fundamental" / "capital.csv"
+    if f.exists():
+        c = pd.read_csv(f, dtype={"code": str}).drop_duplicates("code", keep="last").set_index("code")
+        c = pd.DataFrame({"股本億": (c["capital"] / 1e8).round(2), "發行股數": c["shares"]})
+        表 = c if 表 is None else 表.join(c, how="outer")
     return 表
+
+
+def _近三季EPS(e):
+    """交易所公布的是「今年累計」EPS，先換成單季再加最近三季；資料不夠的股票回傳空值。"""
+    e = e.copy()
+    e["年"], e["季"] = e["quarter"].str[:4], e["quarter"].str[-1].astype(int)
+    前一季 = e.groupby(["code", "年"])["eps"].shift()
+    前一季號 = e.groupby(["code", "年"])["季"].shift()
+    e["單季"] = np.where(e["季"] == 1, e["eps"], np.where(前一季號 == e["季"] - 1, e["eps"] - 前一季, np.nan))
+    def 加總(g):
+        g = g.tail(3)
+        序 = g["年"].astype(int) * 4 + g["季"]
+        連續 = len(g) == 3 and 序.iloc[-1] - 序.iloc[0] == 2
+        return g["單季"].sum() if 連續 and g["單季"].notna().all() else np.nan
+    return e.groupby("code").apply(加總)
 
 
 def 讀取興櫃最新():
@@ -131,10 +162,26 @@ def 計算指標(原始):
     表["還原價"] = np.exp(np.log1p(表["日報酬"]).groupby(表["code"]).cumsum())
 
     群 = 表.groupby("code", sort=False)
-    for 天數 in (5, 20, 60):
+    for 天數 in (5, 10, 20, 60):
         表[f"MA{天數}"] = _滾動(群, "還原價", 天數)
-    表["20日漲幅"] = ((表["還原價"] / 群["還原價"].shift(20) - 1) * 100).round(2)
+    for 天數 in (3, 5, 10, 20, 30, 40):
+        表[f"{天數}日漲幅"] = ((表["還原價"] / 群["還原價"].shift(天數) - 1) * 100).round(2)
     表["成交張數"] = (表["volume"] / 1000).round()
+    表["5日均量"] = _滾動(群, "成交張數", 5).round()
+    # 今天的量是前 5 天平均的幾倍（不含今天，爆量才看得出來）
+    表["量對5日均"] = (表["成交張數"] / 群["5日均量"].shift().replace(0, np.nan)).round(2)
+    # 均線「剛勾起來」：今天 5 日線往上，昨天還沒往上
+    MA5昨 = 群["MA5"].shift()
+    上揚 = 表["MA5"] > MA5昨
+    表["MA5勾起"] = 上揚 & ~上揚.groupby(表["code"]).shift(fill_value=True)
+    # 盤整箱型：前 20 個交易日（不含今天）的最高、最低價
+    前高 = 群["high"].shift()
+    前低 = 群["low"].shift()
+    表["箱頂"] = 前高.groupby(表["code"]).rolling(20, min_periods=20).max().reset_index(level=0, drop=True)
+    箱底 = 前低.groupby(表["code"]).rolling(20, min_periods=20).min().reset_index(level=0, drop=True)
+    表["箱寬"] = ((表["箱頂"] / 箱底 - 1) * 100).round(1)
+    表["昨高"] = 前高
+    表["振幅"] = ((表["high"] - 表["low"]) / 前一天.where(前一天 > 0) * 100).round(2)
     表["成交值億"] = (表["value"] / 1e8).round(2)
     表["量比"] = (表["volume"] / _滾動(群, "volume", 20)).round(2)
     表["距52週高點"] = ((表["還原價"] / _滾動(群, "還原價", 240, "max", 20) - 1) * 100).round(1)
@@ -152,6 +199,7 @@ def 計算指標(原始):
             表[中] = (表[英] / 1000).round()
         群 = 表.groupby("code", sort=False)
         表["法人5日買超"] = _滾動(群, "法人買超", 5, "sum", 1).round()
+        表["法人10日買超"] = _滾動(群, "法人買超", 10, "sum", 1).round()
         表["外資連買"] = _連續天數(表["外資買超"] > 0, 表["code"])
         表["投信連買"] = _連續天數(表["投信買超"] > 0, 表["code"])
         表["融資餘額"] = 表["margin"]
@@ -203,12 +251,93 @@ def 選股(當日, 條件):
             結果 = 結果[結果[欄] >= c[鍵]]
     if c.get("融資5日增減上限") is not None and "融資5日增減" in 結果.columns:
         結果 = 結果[結果["融資5日增減"] <= c["融資5日增減上限"]]
+    # ----- 烏賊課程用到的條件 -----
+    if any(c.get(k) is not None for k in ("股本上限", "週轉率下限")) and "股本億" not in 結果.columns:
+        結果 = 結果.join(_股本表(), on="代號")
+    if "股本億" in 結果.columns and "發行股數" in 結果.columns:
+        結果 = 結果.assign(週轉率=(結果["volume"] / 結果["發行股數"] * 100).round(2))
+    for 天數, 下限, 上限 in c.get("區間漲跌幅") or []:  # 近 N 日漲跌幅介於下限與上限之間
+        if 下限 is not None:
+            結果 = 結果[結果[f"{天數}日漲幅"] > 下限]
+        if 上限 is not None:
+            結果 = 結果[結果[f"{天數}日漲幅"] < 上限]
+    if c.get("週轉率下限") is not None and "週轉率" in 結果.columns:
+        結果 = 結果[結果["週轉率"] > c["週轉率下限"]]
+    if c.get("股本上限") is not None and "股本億" in 結果.columns:
+        結果 = 結果[結果["股本億"] < c["股本上限"]]
+    if c.get("量對5日均下限") is not None:
+        結果 = 結果[結果["量對5日均"] > c["量對5日均下限"]]
+    if c.get("收盤低於MA5"):
+        結果 = 結果[結果["還原價"] < 結果["MA5"]]
+    if c.get("法人10日賣超下限") is not None and "法人10日買超" in 結果.columns:
+        結果 = 結果[結果["法人10日買超"] < -c["法人10日賣超下限"]]
+    if c.get("近三季EPS下限") is not None and "近三季EPS" in 結果.columns:
+        結果 = 結果[結果["近三季EPS"] > c["近三季EPS下限"]]
+    if c.get("營收創新高") and "營收創新高" in 結果.columns:
+        結果 = 結果[結果["營收創新高"] == True]  # noqa: E712
+    if c.get("過濾低價低量"):  # 講義：過濾股價 5 元以下、五日均量 500 張以下
+        結果 = 結果[(結果["收盤"] >= 5) & (結果["5日均量"] >= 500)]
     if c.get("排除ETF", True):
         結果 = 結果[~結果["代號"].str.startswith("00")]
     欄, 由小到大 = 排序方式[c.get("排序", "殖利率 高→低")]
     if 欄 not in 結果.columns:
         return 結果
     return 結果.sort_values(欄, ascending=由小到大, na_position="last")
+
+
+@lru_cache(maxsize=1)
+def _股本表():
+    f = 資料夾 / "fundamental" / "capital.csv"
+    if not f.exists():
+        return pd.DataFrame(columns=["股本億", "發行股數"])
+    c = pd.read_csv(f, dtype={"code": str}).drop_duplicates("code", keep="last").set_index("code")
+    return pd.DataFrame({"股本億": (c["capital"] / 1e8).round(2), "發行股數": c["shares"]})
+
+
+# 烏賊 0530 課程「如何選股」的五組條件（原本在 MoneyDJ 選股大師設定）
+烏賊條件 = {
+    "烏賊條件（一）短線活躍小型股": {
+        "說明": "近 20 日漲跌幅 > 10%、今日週轉率 > 10%、股本 < 20 億；過濾股價 5 元以下、五日均量 500 張以下",
+        "條件": {"區間漲跌幅": [(20, 10, None)], "週轉率下限": 10, "股本上限": 20, "過濾低價低量": True,
+               "排序": "週轉率 高→低"},
+    },
+    "烏賊條件（二）盤整中量增": {
+        "說明": "今日量 > 五日均量 1.2 倍、近 30 日漲跌幅 < 1%；過濾低價低量；再看外資與投信動向",
+        "條件": {"量對5日均下限": 1.2, "區間漲跌幅": [(30, None, 1)], "過濾低價低量": True,
+               "排序": "法人5日買超 多→少"},
+    },
+    "烏賊條件（三）爆量起漲": {
+        "說明": "近 10 日漲跌幅 > 1%、今日量 > 五日均量 3 倍、今日量 > 100 張、股本 < 30 億；不過濾低價低量",
+        "條件": {"區間漲跌幅": [(10, 1, None)], "量對5日均下限": 3, "成交張數下限": 100, "股本上限": 30,
+               "排序": "量比 高→低"},
+    },
+    "烏賊條件（四）強勢股拉回": {
+        "說明": "收盤 < 5 日均線、近 40 日漲跌幅 > 30%、近 10 日三大法人賣超 > 10000 張；過濾低價低量",
+        "條件": {"收盤低於MA5": True, "區間漲跌幅": [(40, 30, None)], "法人10日賣超下限": 10000,
+               "過濾低價低量": True, "排序": "20日漲幅 高→低"},
+    },
+    "烏賊條件（五）低價成長股": {
+        "說明": "股價 < 50 元、近三季 EPS 合計 > 0.5 元、最新月營收創歷史新高、月營收年增率 > 20%；不過濾低價低量",
+        "條件": {"股價區間": (0, 49.99), "近三季EPS下限": 0.5, "營收創新高": True, "營收年增率下限": 20,
+               "排序": "營收年增率 高→低"},
+    },
+}
+
+
+def 每日功課(今日, 檔數=20):
+    """講義「每天的功課」六張榜單。"""
+    表 = 今日[(今日["收盤"] > 0) & ~今日["代號"].str.startswith("00")].copy()
+    表["3&5日"] = 表["3日漲幅"].fillna(0) + 表["5日漲幅"].fillna(0)
+    # 三&五日強勢股的重點：貼近 5 日或 10 日線（±3% 內）且 5 日線往上，最好是剛勾起來
+    貼近 = ((表["還原價"] / 表["MA5"] - 1).abs() <= 0.03) | ((表["還原價"] / 表["MA10"] - 1).abs() <= 0.03)
+    表["重點"] = np.where(貼近 & 表["MA5勾起"], "★ 剛勾起", np.where(貼近 & (表["MA5"] > 0), "貼近均線", ""))
+    強 = 表[(表["3日漲幅"] > 0) & (表["5日漲幅"] > 0)].nlargest(檔數, "3&5日")
+    弱 = 表[(表["3日漲幅"] < 0) & (表["5日漲幅"] < 0)].nsmallest(檔數, "3&5日")
+    return {
+        "三&五日強勢股": 強, "三&五日弱勢股": 弱,
+        "量大股": 表.nlargest(檔數, "成交張數"), "大幅震盪股": 表[表["成交張數"] >= 500].nlargest(檔數, "振幅"),
+        "強勢股": 表.nlargest(檔數, "漲跌幅"), "弱勢股": 表.nsmallest(檔數, "漲跌幅"),
+    }
 
 
 # ---------- 4. 回測 ----------
@@ -229,8 +358,11 @@ def 回測(指標, 條件, 開始, 結束, 最多檔數=10, 調倉="每月", 停
     日期們 = 報酬表.index
     依日期 = {d: g for d, g in 區間.groupby("date")}
 
-    期別 = 日期們.to_period("W" if 調倉 == "每週" else "M")
-    訊號日 = set(日期們[np.r_[期別[1:] != 期別[:-1], True]])
+    if 調倉 == "每日":
+        訊號日 = set(日期們)
+    else:
+        期別 = 日期們.to_period("W" if 調倉 == "每週" else "M")
+        訊號日 = set(日期們[np.r_[期別[1:] != 期別[:-1], True]])
     訊號日.add(日期們[0])
 
     現金 = float(初始資金)
@@ -390,6 +522,8 @@ def 計算庫存(持股, 最新行情, *其他報價):
     "均線交叉": "短均線由下往上穿過長均線時買進，由上往下穿過時賣出",
     "站上均線": "收盤價站上均線時買進，跌破均線時賣出",
     "RSI 超賣反彈": "RSI 低於下限時買進，高於上限時賣出",
+    "盤整突破（烏賊）": "前 20 日箱型盤整（高低差 25% 以內），收盤突破箱頂且量大於五日均量 1.5 倍時買進；跌破十日線賣出",
+    "均線勾起（烏賊）": "股價貼近 5 日或 10 日線（3% 以內）且 5 日線剛勾起時買進；跌破十日線賣出",
 }
 
 
@@ -407,15 +541,15 @@ def 個股回測(指標, 代號, 開始, 結束, 策略="均線交叉", 短=5, �
         想持有 = 均(短) > 均(長)
     elif 策略 == "站上均線":
         想持有 = 表["還原價"] > 均(長)
-    else:  # RSI 超賣反彈：低於下限進場，高於上限出場，中間維持原狀
-        狀態, 序列 = False, []
-        for v in 表["RSI"]:
-            if pd.notna(v) and v < RSI下限:
-                狀態 = True
-            elif pd.notna(v) and v > RSI上限:
-                狀態 = False
-            序列.append(狀態)
-        想持有 = pd.Series(序列, index=表.index)
+    elif 策略 == "RSI 超賣反彈":  # 低於下限進場，高於上限出場，中間維持原狀
+        想持有 = _進出狀態(表["RSI"] < RSI下限, 表["RSI"] > RSI上限)
+    else:  # 烏賊課程：進場條件各自不同，出場都是跌破十日線
+        if 策略 == "盤整突破（烏賊）":
+            進 = (表["收盤"] > 表["箱頂"]) & (表["箱寬"] <= 25) & (表["量對5日均"] >= 1.5)
+        else:
+            貼近 = ((表["還原價"] / 表["MA5"] - 1).abs() <= 0.03) | ((表["還原價"] / 表["MA10"] - 1).abs() <= 0.03)
+            進 = 貼近 & 表["MA5勾起"].astype(bool)
+        想持有 = _進出狀態(進, 表["還原價"] < 表["MA10"])
 
     現金, 股數價值, 持有中 = float(初始資金), 0.0, False
     進場 = None
@@ -455,6 +589,17 @@ def 個股回測(指標, 代號, 開始, 結束, 策略="均線交叉", 短=5, �
     績效 = 計算績效(曲線, 交易表, None)
     績效["買進持有(%)"] = (基準.iloc[-1] - 1) * 100
     return {"曲線": 曲線, "基準": 基準, "交易": 交易表, "績效": 績效, "價格": 表}
+
+
+def _進出狀態(進場, 出場):
+    狀態, 序列 = False, []
+    for 進, 出 in zip(進場.fillna(False), 出場.fillna(False)):
+        if 進 and not 狀態:
+            狀態 = True
+        elif 出:
+            狀態 = False
+        序列.append(狀態)
+    return pd.Series(序列, index=進場.index)
 
 
 def _紀錄(進場, r, 原因):

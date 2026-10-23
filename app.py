@@ -170,46 +170,53 @@ if 指標 is None:
 st.sidebar.markdown(f'<div class="sec">SCREEN RULES</div>', unsafe_allow_html=True)
 條件 = {}
 條件["市場"] = st.sidebar.multiselect("市場", ["上市", "上櫃"], default=["上市", "上櫃"])
-with st.sidebar.expander("基本面", expanded=True):
-    if st.checkbox("本益比上限", True):
-        條件["本益比上限"] = st.number_input("本益比 ≤", value=15.0, step=1.0)
-    if st.checkbox("殖利率下限", True):
-        條件["殖利率下限"] = st.number_input("殖利率(%) ≥", value=4.0, step=0.5)
-    if st.checkbox("股價淨值比上限"):
-        條件["淨值比上限"] = st.number_input("淨值比 ≤", value=2.0, step=0.1)
-    if st.checkbox("月營收年增率下限"):
-        條件["營收年增率下限"] = st.number_input("營收年增率(%) ≥", value=20.0, step=5.0)
-    if st.checkbox("月營收月增率下限"):
-        條件["營收月增率下限"] = st.number_input("營收月增率(%) ≥", value=0.0, step=5.0)
-    if st.checkbox("累計營收年增率下限"):
-        條件["累計營收年增率下限"] = st.number_input("累計營收年增率(%) ≥", value=10.0, step=5.0)
-    if st.checkbox("最新一季 EPS 下限"):
-        條件["EPS下限"] = st.number_input("EPS(元) ≥", value=1.0, step=0.5)
-    st.caption("月營收與 EPS 只有最新一期，組合回測時不會套用。")
-with st.sidebar.expander("籌碼面", expanded=True):
-    if st.checkbox("外資連續買超"):
-        條件["外資連買下限"] = st.number_input("外資連買天數 ≥", value=3, step=1)
-    if st.checkbox("投信連續買超"):
-        條件["投信連買下限"] = st.number_input("投信連買天數 ≥", value=3, step=1)
-    if st.checkbox("三大法人 5 日合計買超"):
-        條件["法人5日買超下限"] = st.number_input("法人 5 日買超(張) ≥", value=1000, step=500)
-    if st.checkbox("融資 5 日增減上限"):
-        條件["融資5日增減上限"] = st.number_input("融資 5 日增減(%) ≤", value=0.0, step=1.0)
-with st.sidebar.expander("技術面", expanded=True):
-    if st.checkbox("站上均線"):
-        條件["站上均線"] = st.selectbox("收盤價站上", [5, 20, 60], index=1, format_func=lambda n: f"{n} 日均線")
-    條件["均線多頭排列"] = st.checkbox("均線多頭排列（5 > 20 > 60 日）")
-    if st.checkbox("20 日漲幅下限"):
-        條件["20日漲幅下限"] = st.number_input("20 日漲幅(%) ≥", value=5.0, step=1.0)
-    if st.checkbox("RSI 區間"):
-        條件["RSI區間"] = st.slider("RSI(14)", 0, 100, (30, 70))
-    if st.checkbox("量比下限（今日量 ÷ 20 日均量）"):
-        條件["量比下限"] = st.number_input("量比 ≥", value=1.5, step=0.1)
-with st.sidebar.expander("流動性與價格", expanded=True):
-    條件["成交張數下限"] = st.number_input("成交張數 ≥", value=500, step=100)
-    條件["股價區間"] = st.slider("收盤價", 0, 3000, (10, 1000))
-    條件["排除ETF"] = st.checkbox("排除 ETF", True)
-條件["排序"] = st.sidebar.selectbox("排序依據", list(engine.排序方式))
+範本 = st.sidebar.selectbox("策略範本", ["自訂條件"] + list(engine.烏賊條件),
+                          help="烏賊 0530 課程的五組選股條件，選了之後下面的自訂條件會暫停使用")
+if 範本 == "自訂條件":
+    with st.sidebar.expander("基本面", expanded=True):
+        if st.checkbox("本益比上限", True):
+            條件["本益比上限"] = st.number_input("本益比 ≤", value=15.0, step=1.0)
+        if st.checkbox("殖利率下限", True):
+            條件["殖利率下限"] = st.number_input("殖利率(%) ≥", value=4.0, step=0.5)
+        if st.checkbox("股價淨值比上限"):
+            條件["淨值比上限"] = st.number_input("淨值比 ≤", value=2.0, step=0.1)
+        if st.checkbox("月營收年增率下限"):
+            條件["營收年增率下限"] = st.number_input("營收年增率(%) ≥", value=20.0, step=5.0)
+        if st.checkbox("月營收月增率下限"):
+            條件["營收月增率下限"] = st.number_input("營收月增率(%) ≥", value=0.0, step=5.0)
+        if st.checkbox("累計營收年增率下限"):
+            條件["累計營收年增率下限"] = st.number_input("累計營收年增率(%) ≥", value=10.0, step=5.0)
+        if st.checkbox("最新一季 EPS 下限"):
+            條件["EPS下限"] = st.number_input("EPS(元) ≥", value=1.0, step=0.5)
+        st.caption("月營收與 EPS 只有最新一期，組合回測時不會套用。")
+    with st.sidebar.expander("籌碼面", expanded=True):
+        if st.checkbox("外資連續買超"):
+            條件["外資連買下限"] = st.number_input("外資連買天數 ≥", value=3, step=1)
+        if st.checkbox("投信連續買超"):
+            條件["投信連買下限"] = st.number_input("投信連買天數 ≥", value=3, step=1)
+        if st.checkbox("三大法人 5 日合計買超"):
+            條件["法人5日買超下限"] = st.number_input("法人 5 日買超(張) ≥", value=1000, step=500)
+        if st.checkbox("融資 5 日增減上限"):
+            條件["融資5日增減上限"] = st.number_input("融資 5 日增減(%) ≤", value=0.0, step=1.0)
+    with st.sidebar.expander("技術面", expanded=True):
+        if st.checkbox("站上均線"):
+            條件["站上均線"] = st.selectbox("收盤價站上", [5, 20, 60], index=1, format_func=lambda n: f"{n} 日均線")
+        條件["均線多頭排列"] = st.checkbox("均線多頭排列（5 > 20 > 60 日）")
+        if st.checkbox("20 日漲幅下限"):
+            條件["20日漲幅下限"] = st.number_input("20 日漲幅(%) ≥", value=5.0, step=1.0)
+        if st.checkbox("RSI 區間"):
+            條件["RSI區間"] = st.slider("RSI(14)", 0, 100, (30, 70))
+        if st.checkbox("量比下限（今日量 ÷ 20 日均量）"):
+            條件["量比下限"] = st.number_input("量比 ≥", value=1.5, step=0.1)
+    with st.sidebar.expander("流動性與價格", expanded=True):
+        條件["成交張數下限"] = st.number_input("成交張數 ≥", value=500, step=100)
+        條件["股價區間"] = st.slider("收盤價", 0, 3000, (10, 1000))
+        條件["排除ETF"] = st.checkbox("排除 ETF", True)
+    條件["排序"] = st.sidebar.selectbox("排序依據", list(engine.排序方式))
+else:
+    st.sidebar.info(engine.烏賊條件[範本]["說明"])
+    條件.update(engine.烏賊條件[範本]["條件"])
+    條件["排除ETF"] = True
 
 分頁 = st.tabs(["01 / 市場總覽", "02 / 選股", "03 / 回測"])
 
@@ -360,6 +367,31 @@ with 分頁[0]:
 
 # ---------- 02 選股 ----------
 with 分頁[1]:
+  選股分頁 = st.tabs(["條件選股", "烏賊每日功課"])
+  with 選股分頁[1]:
+    st.caption("講義「每天的功課」：每天看這六張榜，熟悉股性。三&五日強勢股的重點是找貼近 5 日或 10 日線、"
+               "均線剛勾起來的股票（★）；股本小、量大、有題材最好。")
+    功課 = engine.每日功課(今日)
+    功課欄 = [c for c in ["代號", "名稱", "市場", "收盤", "漲跌幅", "3日漲幅", "5日漲幅", "振幅", "成交張數",
+                        "量對5日均", "股本億", "外資買超", "投信買超", "重點"] if c in 今日.columns or c == "重點"]
+    for 標籤, 分頁表 in zip(功課, st.tabs(list(功課))):
+        with 分頁表:
+            表 = 功課[標籤]
+            if "股本億" not in 表.columns:
+                表 = 表.join(engine._股本表(), on="代號")
+            st.dataframe(上色(表[[c for c in 功課欄 if c in 表.columns]]), hide_index=True, width="stretch",
+                         height=420)
+    with st.expander("課程重點：盤整、上升、下降趨勢怎麼操作"):
+        st.markdown("""
+- **盤整格局**：找出最高點與最低點畫成箱型（框框），注意箱子左右兩邊爆量的日子；**收盤突破箱頂**、量放大是轉強訊號。
+- **上升趨勢**：沿著 5 日、10 日線走，突破前波高點後一路墊高；**怎麼買？靠近昨天高點買**，強勢股別人追高，你買拉回點。
+- **下降趨勢**：**跌破十日線後**轉弱，反彈到壓力就該小心；弱勢股別人追空，你買反彈點。
+- **五分 K**：用盤中 5 分鐘 K 線找當日進出場點，避免看到大單就追或被嚇跑（本站目前只有日線資料）。
+- **烏賊的話**：勇於嘗試＋嚴格停損；隔日沖反應不如預期就砍；小波段請把握反轉點或跌破關鍵價位。
+
+這些規則已做成「個股回測」裡的 **盤整突破（烏賊）** 與 **均線勾起（烏賊）** 兩個策略，左側「策略範本」可直接套用五組選股條件。
+""")
+  with 選股分頁[0]:
     結果 = engine.選股(今日, 條件)
     卡片列([
         卡片("符合條件", f"{len(結果)}", "檔", 青),
@@ -371,6 +403,9 @@ with 分頁[1]:
                         "營收年增率", "營收月增率", "累計營收年增率", "EPS", "成交張數",
                         "外資買超", "投信買超", "法人5日買超", "外資連買", "投信連買", "融資5日增減",
                         "20日漲幅", "RSI", "量比", "距52週高點"] if c in 結果.columns]
+    if 範本 != "自訂條件":  # 烏賊條件多看幾個相關欄位
+        顯示欄[3:3] = [c for c in ["週轉率", "股本億", "量對5日均", "5日均量", "10日漲幅", "30日漲幅", "40日漲幅",
+                                 "法人10日買超", "近三季EPS"] if c in 結果.columns]
     st.dataframe(上色(結果[顯示欄]), hide_index=True, width="stretch", height=420)
     st.download_button("下載 CSV", 結果[顯示欄].to_csv(index=False).encode("utf-8-sig"),
                        file_name=f"選股_{最新日:%Y%m%d}.csv")
@@ -416,7 +451,7 @@ with 分頁[2]:
         開始 = a.date_input("開始日期", max(最早, 最新日.date() - dt.timedelta(days=730)), min_value=最早,
                          max_value=最新日.date())
         結束 = b.date_input("結束日期", 最新日.date(), min_value=最早, max_value=最新日.date())
-        調倉 = c.selectbox("調倉頻率", ["每月", "每週"])
+        調倉 = c.selectbox("調倉頻率", ["每月", "每週", "每日"])
         檔數 = d.number_input("最多持有檔數", 1, 50, 10)
         資金 = e.number_input("初始資金", 100_000, 100_000_000, 1_000_000, step=100_000)
         a, b = st.columns(2)
