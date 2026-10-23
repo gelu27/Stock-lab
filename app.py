@@ -7,7 +7,11 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+import importlib
+
 import engine
+
+importlib.reload(engine)  # 程式更新後確保用的是最新版的計算規則
 
 st.set_page_config(page_title="TW//STOCK LAB", page_icon="◢", layout="wide")
 
@@ -86,14 +90,21 @@ def 上色(表):
 
 # ---------- 讀資料 ----------
 @st.cache_data(ttl=3600, show_spinner="讀取資料庫中…")
-def 載入():
+def 載入(資料版本):
+    # 資料版本變了（每天更新後）就會重新讀取，不會一直用舊的暫存
     原始 = engine.讀取資料庫()
     if 原始 is None:
         return None, None
     return engine.計算指標(原始), engine.讀取加權指數()
 
 
-指標, 加權 = 載入()
+def 資料版本():
+    紀錄 = engine.資料夾 / "dates.txt"
+    檔數 = len(list((engine.資料夾 / "prices").glob("**/*.csv.gz")))
+    return f"{紀錄.stat().st_mtime if 紀錄.exists() else 0}-{檔數}"
+
+
+指標, 加權 = 載入(資料版本())
 
 st.markdown("""<div class="hero"><div class="kicker">TAIWAN STOCK EXCHANGE // PERSONAL LAB</div>
 <div class="title">台股<span>觀測</span>實驗室</div>
@@ -101,6 +112,7 @@ st.markdown("""<div class="hero"><div class="kicker">TAIWAN STOCK EXCHANGE // PE
             unsafe_allow_html=True)
 
 if 指標 is None:
+    載入.clear()
     st.warning("資料庫還是空的。請到 GitHub 專案的「Actions」頁面，點「更新資料庫」→「Run workflow」，"
                "第一次大約需要 1 到 2 小時，完成後重新整理本頁。")
     st.stop()
