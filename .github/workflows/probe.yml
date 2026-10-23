@@ -1,9 +1,0 @@
-name: 測試資料來源
-on: workflow_dispatch
-jobs:
-  probe:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: pip install requests
-      - run: python tools/probe.py

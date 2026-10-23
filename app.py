@@ -142,16 +142,17 @@ def 載入(資料版本):
 
 
 def 資料版本():
-    紀錄 = engine.資料夾 / "dates.txt"
+    紀錄們 = list((engine.資料夾 / "status").glob("*.txt")) + list(engine.資料夾.glob("dates.txt"))
+    最新 = max((f.stat().st_mtime for f in 紀錄們), default=0)
     檔數 = len(list((engine.資料夾 / "prices").glob("**/*.csv.gz")))
-    return f"{紀錄.stat().st_mtime if 紀錄.exists() else 0}-{檔數}"
+    return f"{最新}-{檔數}"
 
 
 指標, 加權 = 載入(資料版本())
 
 st.markdown("""<div class="hero"><div class="kicker">TAIWAN STOCK EXCHANGE // PERSONAL LAB</div>
 <div class="title">台股<span>觀測</span>實驗室</div>
-<div class="sub">SCREEN · BACKTEST · OBSERVE — 資料來源：臺灣證券交易所</div></div>""",
+<div class="sub">SCREEN · BACKTEST · OBSERVE — 資料來源：臺灣證券交易所、證券櫃檯買賣中心</div></div>""",
             unsafe_allow_html=True)
 
 if 指標 is None:
@@ -161,11 +162,14 @@ if 指標 is None:
     st.stop()
 
 最新日 = 指標["date"].max()
-今日 = 指標[指標["date"] == 最新日]
+今日 = engine.加基本面(指標[指標["date"] == 最新日], engine.讀取基本面())
+市場對照 = dict(zip(今日["代號"], 今日["市場"]))
+有籌碼 = "法人買超" in 指標.columns
 
 # ---------- 側邊欄：選股條件（選股與回測共用） ----------
 st.sidebar.markdown(f'<div class="sec">SCREEN RULES</div>', unsafe_allow_html=True)
 條件 = {}
+條件["市場"] = st.sidebar.multiselect("市場", ["上市", "上櫃"], default=["上市", "上櫃"])
 with st.sidebar.expander("基本面", expanded=True):
     if st.checkbox("本益比上限", True):
         條件["本益比上限"] = st.number_input("本益比 ≤", value=15.0, step=1.0)
@@ -173,6 +177,24 @@ with st.sidebar.expander("基本面", expanded=True):
         條件["殖利率下限"] = st.number_input("殖利率(%) ≥", value=4.0, step=0.5)
     if st.checkbox("股價淨值比上限"):
         條件["淨值比上限"] = st.number_input("淨值比 ≤", value=2.0, step=0.1)
+    if st.checkbox("月營收年增率下限"):
+        條件["營收年增率下限"] = st.number_input("營收年增率(%) ≥", value=20.0, step=5.0)
+    if st.checkbox("月營收月增率下限"):
+        條件["營收月增率下限"] = st.number_input("營收月增率(%) ≥", value=0.0, step=5.0)
+    if st.checkbox("累計營收年增率下限"):
+        條件["累計營收年增率下限"] = st.number_input("累計營收年增率(%) ≥", value=10.0, step=5.0)
+    if st.checkbox("最新一季 EPS 下限"):
+        條件["EPS下限"] = st.number_input("EPS(元) ≥", value=1.0, step=0.5)
+    st.caption("月營收與 EPS 只有最新一期，組合回測時不會套用。")
+with st.sidebar.expander("籌碼面", expanded=True):
+    if st.checkbox("外資連續買超"):
+        條件["外資連買下限"] = st.number_input("外資連買天數 ≥", value=3, step=1)
+    if st.checkbox("投信連續買超"):
+        條件["投信連買下限"] = st.number_input("投信連買天數 ≥", value=3, step=1)
+    if st.checkbox("三大法人 5 日合計買超"):
+        條件["法人5日買超下限"] = st.number_input("法人 5 日買超(張) ≥", value=1000, step=500)
+    if st.checkbox("融資 5 日增減上限"):
+        條件["融資5日增減上限"] = st.number_input("融資 5 日增減(%) ≤", value=0.0, step=1.0)
 with st.sidebar.expander("技術面", expanded=True):
     if st.checkbox("站上均線"):
         條件["站上均線"] = st.selectbox("收盤價站上", [5, 20, 60], index=1, format_func=lambda n: f"{n} 日均線")
@@ -214,8 +236,22 @@ def 我的庫存():
         return
 
     持股 = pd.read_csv(io.StringIO(str(設定["holdings"]).strip()), dtype={"代號": str})
-    明細, 合計 = engine.計算庫存(持股, 今日, engine.讀取上櫃最新())
+    庫存區(持股)
+
+
+@st.fragment(run_every=30 if engine.盤中時間() else None)
+def 庫存區(持股):
+    """盤中每 30 秒自動抓一次即時報價；收盤後用資料庫的收盤價。"""
+    即時 = None
+    if engine.盤中時間():
+        try:
+            即時 = engine.即時報價(持股["代號"].astype(str).str.strip().tolist(), 市場對照)
+        except Exception:
+            st.caption("即時報價暫時抓不到，先顯示最近收盤價。")
+    明細, 合計 = engine.計算庫存(持股, 今日, engine.讀取上櫃最新(), engine.讀取興櫃最新(), 即時)
     日期 = 合計["日期"].strftime("%Y/%m/%d") if pd.notna(合計["日期"]) else "—"
+    if 即時 is not None and not 即時.empty:
+        日期 += f" {即時['time'].dropna().max()} 即時"
     段落(f"PORTFOLIO // 我的庫存　{日期}")
     卡片列([
         卡片(f"今日損益 · {日期}", f"{合計['今日損益']:+,.0f}", f"{合計['今日損益(%)']:+.2f}%",
@@ -231,7 +267,52 @@ def 我的庫存():
     st.dataframe(上色(明細), hide_index=True, width="stretch", height=35 * (len(明細) + 1) + 3)
     st.caption("也可以直接點表格標題排序。")
     if 合計["缺報價"]:
-        st.caption(f"以下代號暫時沒有報價，未計入合計：{'、'.join(合計['缺報價'])}（上櫃與 ETF 報價從下次每日更新開始提供）")
+        st.caption(f"以下代號暫時沒有報價，未計入合計：{'、'.join(合計['缺報價'])}")
+
+
+@st.fragment(run_every=30 if engine.盤中時間() else None)
+def 加權圖():
+    段落("TAIEX // 加權指數走勢")
+    區間 = st.segmented_control("區間", ["當日", "5日", "1月", "1季", "半年", "1年", "3年", "5年"],
+                              default="1年", key="加權區間", label_visibility="collapsed") or "1年"
+    分時 = engine.讀取分時()
+    即時點 = None
+    if engine.盤中時間():
+        try:
+            即時點 = engine.即時報價(["t00"], {})
+        except Exception:
+            pass
+        if 即時點 is not None and not 即時點.empty:
+            r = 即時點.iloc[0]
+            st.markdown(卡片(f"TAIEX 盤中即時 · {r['time']}", f"{r['close']:,.2f}",
+                           f"{r['change']:+,.2f}（{r['change'] / (r['close'] - r['change']) * 100:+.2f}%）",
+                           漲跌色(r["change"])), unsafe_allow_html=True)
+    if 區間 in ("當日", "5日"):
+        if not 分時:
+            st.info("分時資料會在下次每日更新後提供。")
+            return
+        天們 = list(分時)[-1:] if 區間 == "當日" else list(分時)[-5:]
+        資料 = pd.concat([分時[d] for d in 天們])
+        x, y = 資料["datetime"], 資料["taiex"]
+        基準 = 加權[加權["date"] < pd.Timestamp(天們[0])]["close"]
+        昨收 = 基準.iloc[-1] if len(基準) else y.iloc[0]
+    else:
+        天數 = {"1月": 31, "1季": 92, "半年": 183, "1年": 365, "3年": 365 * 3, "5年": 365 * 5}[區間]
+        資料 = 加權[加權["date"] >= 加權["date"].max() - pd.Timedelta(days=天數)]
+        x, y = 資料["date"], 資料["close"]
+        昨收 = y.iloc[0]
+    色 = 紅 if y.iloc[-1] >= 昨收 else 綠
+    填色 = "rgba(255,59,92,0.08)" if 色 == 紅 else "rgba(0,214,143,0.08)"
+    圖 = go.Figure(go.Scatter(x=x, y=y, line=dict(color=色, width=1.6), fill="tozeroy",
+                              fillcolor=填色, name="加權指數"))
+    圖.add_hline(y=昨收, line=dict(color=灰, width=1, dash="dot"))
+    圖.update_yaxes(range=[min(y.min(), 昨收) * 0.995, max(y.max(), 昨收) * 1.005])
+    if 區間 in ("當日", "5日"):
+        # 跳過收盤後與週末的空白時段
+        圖.update_xaxes(rangebreaks=[dict(bounds=[13.6, 9], pattern="hour"), dict(bounds=["sat", "mon"])])
+    漲跌 = y.iloc[-1] - 昨收
+    st.caption(f"{區間}漲跌：{漲跌:+,.2f}（{漲跌 / 昨收 * 100:+.2f}%）")
+    st.plotly_chart(圖表外觀(圖, 300), width="stretch")
 
 
 with 分頁[0]:
@@ -243,7 +324,7 @@ with 分頁[0]:
     if 加權 is not None and not 加權.empty:
         最後 = 加權.iloc[-1]
         漲幅 = 最後["change"] / (最後["close"] - 最後["change"]) * 100
-        卡們.append(卡片("TAIEX 加權指數", f"{最後['close']:,.0f}",
+        卡們.append(卡片(f"TAIEX 加權指數 · {最後['date']:%m/%d}", f"{最後['close']:,.0f}",
                        f"{最後['change']:+,.2f}  ({漲幅:+.2f}%)", 漲跌色(最後["change"])))
     卡們 += [
         卡片("資料日期", 最新日.strftime("%m/%d"), 最新日.strftime("%Y")),
@@ -263,15 +344,10 @@ with 分頁[0]:
     卡片格(卡們)
 
     if 加權 is not None and len(加權) > 1:
-        段落("TAIEX // 近一年")
-        近一年 = 加權[加權["date"] >= 加權["date"].max() - pd.Timedelta(days=365)]
-        圖 = go.Figure(go.Scatter(x=近一年["date"], y=近一年["close"], line=dict(color=青, width=1.6),
-                                  fill="tozeroy", fillcolor="rgba(0,229,255,0.06)", name="加權指數"))
-        圖.update_yaxes(range=[近一年["close"].min() * 0.97, 近一年["close"].max() * 1.02])
-        st.plotly_chart(圖表外觀(圖, 300), width="stretch")
+        加權圖()
 
     段落("RANKING // 排行（前 20 檔，含上市櫃）")
-    排行 = engine.排行資料(今日, engine.讀取上櫃最新())
+    排行 = engine.排行資料(今日)
     榜 = st.tabs(["漲幅排行", "跌幅排行", "成交量排行", "成交值排行"])
     with 榜[0]:
         排行表(排行.nlargest(20, "幅度"))
@@ -291,8 +367,10 @@ with 分頁[1]:
         卡片("排序", 條件["排序"]),
     ])
     段落("RESULT // 選股結果")
-    顯示欄 = ["代號", "名稱", "收盤", "漲跌幅", "本益比", "殖利率", "淨值比", "成交張數",
-             "20日漲幅", "RSI", "量比", "距52週高點"]
+    顯示欄 = [c for c in ["代號", "名稱", "市場", "收盤", "漲跌幅", "本益比", "殖利率", "淨值比",
+                        "營收年增率", "營收月增率", "累計營收年增率", "EPS", "成交張數",
+                        "外資買超", "投信買超", "法人5日買超", "外資連買", "投信連買", "融資5日增減",
+                        "20日漲幅", "RSI", "量比", "距52週高點"] if c in 結果.columns]
     st.dataframe(上色(結果[顯示欄]), hide_index=True, width="stretch", height=420)
     st.download_button("下載 CSV", 結果[顯示欄].to_csv(index=False).encode("utf-8-sig"),
                        file_name=f"選股_{最新日:%Y%m%d}.csv")
@@ -314,66 +392,122 @@ with 分頁[1]:
     st.plotly_chart(圖表外觀(圖, 420), width="stretch")
 
 # ---------- 03 回測 ----------
+def 績效卡(績, 基準名, 基準鍵):
+    卡們 = [
+        卡片("總報酬", f"{績['總報酬(%)']:+.1f}%", "", 漲跌色(績["總報酬(%)"])),
+        卡片("年化報酬", f"{績['年化報酬(%)']:+.1f}%", "", 漲跌色(績["年化報酬(%)"])),
+        卡片("最大回撤", f"{績['最大回撤(%)']:.1f}%", "", 綠),
+        卡片("勝率", f"{績['勝率(%)']:.0f}%", f"{績['交易次數']} 筆交易"),
+        卡片("夏普值", f"{績['夏普值']:.2f}"),
+    ]
+    if 基準鍵 in 績:
+        卡們.append(卡片(基準名, f"{績[基準鍵]:+.1f}%", "買進持有", 漲跌色(績[基準鍵])))
+    卡片格(卡們)
+
+
 with 分頁[2]:
-    st.caption("規則：每期最後一個交易日收盤後用左側條件選股，隔日收盤價買進前 N 檔，每檔投入總資產 ÷ N；"
-               "沒入選的賣出；觸發停損停利當天收盤賣出。已計入手續費 0.1425% 與證交稅 0.3%。")
-    最早 = 指標["date"].min().date()
-    a, b, c, d, e = st.columns(5)
-    開始 = a.date_input("開始日期", max(最早, 最新日.date() - dt.timedelta(days=730)), min_value=最早,
-                     max_value=最新日.date())
-    結束 = b.date_input("結束日期", 最新日.date(), min_value=最早, max_value=最新日.date())
-    調倉 = c.selectbox("調倉頻率", ["每月", "每週"])
-    檔數 = d.number_input("最多持有檔數", 1, 50, 10)
-    資金 = e.number_input("初始資金", 100_000, 100_000_000, 1_000_000, step=100_000)
-    a, b = st.columns(2)
-    停損 = a.number_input("停損 %（0 代表不設）", 0.0, 50.0, 10.0, step=1.0)
-    停利 = b.number_input("停利 %（0 代表不設）", 0.0, 500.0, 0.0, step=5.0)
+    回測分頁 = st.tabs(["組合回測", "個股回測"])
+    with 回測分頁[0]:
+        st.caption("規則：每期最後一個交易日收盤後用左側條件選股，隔日收盤價買進前 N 檔，每檔投入總資產 ÷ N；"
+                   "沒入選的賣出；觸發停損停利當天收盤賣出。已計入手續費 0.1425% 與證交稅 0.3%。"
+                   "月營收與 EPS 條件只有最新一期，回測時不套用。")
+        最早 = 指標["date"].min().date()
+        a, b, c, d, e = st.columns(5)
+        開始 = a.date_input("開始日期", max(最早, 最新日.date() - dt.timedelta(days=730)), min_value=最早,
+                         max_value=最新日.date())
+        結束 = b.date_input("結束日期", 最新日.date(), min_value=最早, max_value=最新日.date())
+        調倉 = c.selectbox("調倉頻率", ["每月", "每週"])
+        檔數 = d.number_input("最多持有檔數", 1, 50, 10)
+        資金 = e.number_input("初始資金", 100_000, 100_000_000, 1_000_000, step=100_000)
+        a, b = st.columns(2)
+        停損 = a.number_input("停損 %（0 代表不設）", 0.0, 50.0, 10.0, step=1.0)
+        停利 = b.number_input("停利 %（0 代表不設）", 0.0, 500.0, 0.0, step=5.0)
 
-    if st.button("▶ 開始回測"):
-        with st.spinner("回測計算中…"):
-            st.session_state["回測"] = engine.回測(
-                指標, 條件, pd.Timestamp(開始), pd.Timestamp(結束), 檔數, 調倉,
-                停損 or None, 停利 or None, 資金)
+        if st.button("▶ 開始回測"):
+            with st.spinner("回測計算中…"):
+                st.session_state["回測"] = engine.回測(
+                    指標, 條件, pd.Timestamp(開始), pd.Timestamp(結束), 檔數, 調倉,
+                    停損 or None, 停利 or None, 資金)
 
-    報告 = st.session_state.get("回測")
-    if 報告 is None:
-        st.info("設定好左側選股條件與上方參數後，按「開始回測」。")
-    else:
-        績 = 報告["績效"]
-        卡們 = [
-            卡片("總報酬", f"{績['總報酬(%)']:+.1f}%", "", 漲跌色(績["總報酬(%)"])),
-            卡片("年化報酬", f"{績['年化報酬(%)']:+.1f}%", "", 漲跌色(績["年化報酬(%)"])),
-            卡片("最大回撤", f"{績['最大回撤(%)']:.1f}%", "", 綠),
-            卡片("勝率", f"{績['勝率(%)']:.0f}%", f"{績['交易次數']} 筆交易"),
-            卡片("夏普值", f"{績['夏普值']:.2f}"),
-        ]
-        if "0050 同期報酬(%)" in 績:
-            卡們.append(卡片("0050 同期", f"{績['0050 同期報酬(%)']:+.1f}%", "買進持有",
-                           漲跌色(績["0050 同期報酬(%)"])))
-        卡片列(卡們)
-
-        段落("EQUITY // 資產曲線")
-        曲線 = 報告["曲線"]
-        圖 = go.Figure(go.Scatter(x=曲線.index, y=(曲線 - 1) * 100, name="我的策略",
-                                  line=dict(color=青, width=2)))
-        if 報告["基準"] is not None:
-            圖.add_trace(go.Scatter(x=報告["基準"].index, y=(報告["基準"] - 1) * 100, name="0050",
-                                    line=dict(color=灰, width=1, dash="dot")))
-        圖.update_yaxes(ticksuffix="%")
-        st.plotly_chart(圖表外觀(圖), width="stretch")
-
-        段落("DRAWDOWN // 回撤")
-        回撤 = (曲線 / 曲線.cummax() - 1) * 100
-        圖 = go.Figure(go.Scatter(x=回撤.index, y=回撤, fill="tozeroy", line=dict(color=綠, width=1),
-                                  fillcolor="rgba(0,214,143,0.15)", name="回撤"))
-        圖.update_yaxes(ticksuffix="%")
-        st.plotly_chart(圖表外觀(圖, 200), width="stretch")
-
-        段落("TRADES // 交易明細")
-        if 報告["交易"].empty:
-            st.write("這段期間沒有任何股票符合條件。")
+        報告 = st.session_state.get("回測")
+        if 報告 is None:
+            st.info("設定好左側選股條件與上方參數後，按「開始回測」。")
         else:
-            st.dataframe(上色(報告["交易"]), hide_index=True, width="stretch", height=360)
+            績效卡(報告["績效"], "0050 同期", "0050 同期報酬(%)")
+
+            段落("EQUITY // 資產曲線")
+            曲線 = 報告["曲線"]
+            圖 = go.Figure(go.Scatter(x=曲線.index, y=(曲線 - 1) * 100, name="我的策略",
+                                      line=dict(color=青, width=2)))
+            if 報告["基準"] is not None:
+                圖.add_trace(go.Scatter(x=報告["基準"].index, y=(報告["基準"] - 1) * 100, name="0050",
+                                        line=dict(color=灰, width=1, dash="dot")))
+            圖.update_yaxes(ticksuffix="%")
+            st.plotly_chart(圖表外觀(圖), width="stretch")
+
+            段落("DRAWDOWN // 回撤")
+            回撤 = (曲線 / 曲線.cummax() - 1) * 100
+            圖 = go.Figure(go.Scatter(x=回撤.index, y=回撤, fill="tozeroy", line=dict(color=綠, width=1),
+                                      fillcolor="rgba(0,214,143,0.15)", name="回撤"))
+            圖.update_yaxes(ticksuffix="%")
+            st.plotly_chart(圖表外觀(圖, 200), width="stretch")
+
+            段落("TRADES // 交易明細")
+            if 報告["交易"].empty:
+                st.write("這段期間沒有任何股票符合條件。")
+            else:
+                st.dataframe(上色(報告["交易"]), hide_index=True, width="stretch", height=360)
+
+    with 回測分頁[1]:
+        st.caption("訊號在收盤後產生，隔一個交易日以收盤價成交；已計入手續費與證交稅，價格使用還原股價。")
+        全部選項 = (今日["代號"] + " " + 今日["名稱"]).tolist()
+        預設 = next((i for i, v in enumerate(全部選項) if v.startswith("2330 ")), 0)
+        a, b = st.columns([2, 1])
+        標的 = a.selectbox("股票", 全部選項, index=預設, key="個股標的")
+        策略 = b.selectbox("策略", list(engine.個股策略), index=1, key="個股策略")
+        st.caption(engine.個股策略[策略])
+        a, b, c, d = st.columns(4)
+        開始2 = a.date_input("開始日期", max(最早, 最新日.date() - dt.timedelta(days=730)), min_value=最早,
+                          max_value=最新日.date(), key="個股開始")
+        結束2 = b.date_input("結束日期", 最新日.date(), min_value=最早, max_value=最新日.date(), key="個股結束")
+        短 = c.number_input("短均線（日）", 2, 60, 5, key="短均線")
+        長 = d.number_input("長均線（日）", 5, 240, 20, key="長均線")
+        a, b, c, d = st.columns(4)
+        RSI下 = a.number_input("RSI 買進（低於）", 5, 50, 30, key="RSI下")
+        RSI上 = b.number_input("RSI 賣出（高於）", 50, 95, 70, key="RSI上")
+        停損2 = c.number_input("停損 %（0 不設）", 0.0, 50.0, 0.0, step=1.0, key="個股停損")
+        停利2 = d.number_input("停利 %（0 不設）", 0.0, 500.0, 0.0, step=5.0, key="個股停利")
+        if st.button("▶ 開始個股回測"):
+            st.session_state["個股回測"] = engine.個股回測(
+                指標, 標的.split()[0], pd.Timestamp(開始2), pd.Timestamp(結束2), 策略, 短, 長, RSI下, RSI上,
+                停損2 or None, 停利2 or None)
+        報告 = st.session_state.get("個股回測")
+        if 報告 is None:
+            st.info("選好股票和策略後，按「開始個股回測」。")
+        else:
+            績效卡(報告["績效"], "買進持有", "買進持有(%)")
+            段落("EQUITY // 資產曲線與買賣點")
+            價 = 報告["價格"]
+            圖 = go.Figure(go.Scatter(x=報告["曲線"].index, y=(報告["曲線"] - 1) * 100, name="策略",
+                                      line=dict(color=青, width=2)))
+            圖.add_trace(go.Scatter(x=報告["基準"].index, y=(報告["基準"] - 1) * 100, name="買進持有",
+                                    line=dict(color=灰, width=1, dash="dot")))
+            交易 = 報告["交易"]
+            if not 交易.empty:
+                對照 = (報告["曲線"] - 1) * 100
+                進 = pd.to_datetime(交易["進場日"])
+                出 = pd.to_datetime(交易["出場日"].dropna())
+                圖.add_trace(go.Scatter(x=進, y=對照.reindex(進).values, mode="markers", name="買進",
+                                        marker=dict(color=紅, size=9, symbol="triangle-up")))
+                圖.add_trace(go.Scatter(x=出, y=對照.reindex(出).values, mode="markers", name="賣出",
+                                        marker=dict(color=綠, size=9, symbol="triangle-down")))
+            圖.update_yaxes(ticksuffix="%")
+            st.plotly_chart(圖表外觀(圖), width="stretch")
+            段落("TRADES // 交易明細")
+            if 交易.empty:
+                st.write("這段期間沒有產生任何交易。")
+            else:
+                st.dataframe(上色(交易), hide_index=True, width="stretch")
 
 st.markdown(f'<div class="sub" style="color:{灰};font-family:JetBrains Mono;font-size:11px;margin-top:30px">'
-            '僅供個人研究，不構成投資建議 // DATA: TWSE</div>', unsafe_allow_html=True)
+            '僅供個人研究，不構成投資建議 // DATA: TWSE · TPEx</div>', unsafe_allow_html=True)

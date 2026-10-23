@@ -1,26 +1,36 @@
-# 自動更新資料庫：從臺灣證券交易所下載每日收盤行情，存進 data/ 資料夾
+# 自動更新資料庫：從臺灣證券交易所（上市）與櫃買中心（上櫃、興櫃）下載資料，存進 data/ 資料夾
 # 由 GitHub Actions 每天收盤後自動執行，也可以手動執行：
-#   python update_data.py            （補到最新）
-#   python update_data.py --years 3  （第一次建立資料庫，抓近 3 年）
+#   python update_data.py                              （補到最新，近 5 年內缺的都會補）
+#   python update_data.py --start 2022-01-01 --end 2022-12-31   （只抓某段期間，給分段下載用）
+#
+# 資料夾結構
+#   data/prices/2026-10/20261022.csv.gz   每日行情（上市＋上櫃，含 ETF）、本益比、殖利率、淨值比
+#   data/chips/2026-10/20261022.csv.gz    每日籌碼：外資、投信、自營商買賣超，融資融券餘額
+#   data/index/2026-10.csv                加權指數每日收盤
+#   data/status/2026-10.txt               哪些日期已經抓過（ok / closed）
+#   data/intraday/20261022.csv            加權指數當日分時（保留最近 5 天）
+#   data/esb/20261022.csv.gz              興櫃行情（櫃買只提供最新一天，每天累積）
+#   data/fundamental/revenue.csv, eps.csv 最新月營收、最新一季 EPS
+#   data/fx.csv                           美元兌台幣匯率
 
 import argparse
 import datetime as dt
 import json
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pandas as pd
 import requests
 
 資料夾 = Path(__file__).parent / "data"
-行情資料夾 = 資料夾 / "prices"
-日期紀錄 = 資料夾 / "dates.txt"
-指數檔 = 資料夾 / "index.csv"
 台北時區 = dt.timezone(dt.timedelta(hours=8))
 標頭 = {"User-Agent": "Mozilla/5.0 (personal stock dashboard)"}
+代號格式 = r"\d{4}|00\d{2,4}[A-Z]?"  # 一般股票與 ETF，不含權證
 
 
+# ---------- 共用工具 ----------
 def 轉數字(值):
     文字 = re.sub(r"<[^>]+>", "", str(值)).replace(",", "").strip()
     try:
@@ -43,193 +53,328 @@ def 漲跌正負(值):
 def 取得表格(回應):
     """交易所的 JSON 有新舊兩種格式，統一整理成 [(標題, 欄位, 資料)]。"""
     表格們 = []
-    for 表 in 回應.get("tables", []):
+    for 表 in 回應.get("tables", []) or []:
         if 表.get("fields") and 表.get("data"):
-            表格們.append((表.get("title", ""), 表["fields"], 表["data"]))
+            表格們.append((表.get("title", ""), [str(f).strip() for f in 表["fields"]], 表["data"]))
     for 鍵 in 回應:
         if 鍵.startswith("fields"):
             編號 = 鍵[len("fields"):]
             資料 = 回應.get("data" + 編號)
             if 資料:
-                表格們.append((回應.get("subtitle" + 編號, ""), 回應[鍵], 資料))
+                表格們.append((回應.get("subtitle" + 編號, ""), [str(f).strip() for f in 回應[鍵]], 資料))
     return 表格們
 
 
-def 下載(網址):
-    for 第幾次 in range(4):
-        try:
-            r = requests.get(網址, headers=標頭, timeout=30)
-            r.raise_for_status()
-            return r.json()
-        except (requests.RequestException, json.JSONDecodeError) as 錯誤:
-            print(f"  下載失敗（第 {第幾次 + 1} 次）：{錯誤}")
-            time.sleep(10 * (第幾次 + 1))
-    return None
+class 下載器:
+    """同一個網站的下載間隔至少 3 秒，避免被暫時封鎖。"""
+
+    def __init__(self, 間隔=3.0):
+        self.間隔, self.上次 = 間隔, 0.0
+
+    def __call__(self, 網址):
+        for 第幾次 in range(4):
+            等待 = self.間隔 - (time.time() - self.上次)
+            if 等待 > 0:
+                time.sleep(等待)
+            self.上次 = time.time()
+            try:
+                r = requests.get(網址, headers=標頭, timeout=30)
+                r.raise_for_status()
+                return r.json()
+            except (requests.RequestException, json.JSONDecodeError) as 錯誤:
+                print(f"  下載失敗（第 {第幾次 + 1} 次）：{網址[:80]} {錯誤}")
+                time.sleep(15 * (第幾次 + 1))
+        return None
 
 
-def 抓一天(日期):
-    """回傳 (個股 DataFrame, 加權指數 dict)；休市回傳 (None, None)。"""
+證交所 = 下載器()
+櫃買 = 下載器()
+
+
+def 存壓縮檔(表, 檔案):
+    檔案.parent.mkdir(parents=True, exist_ok=True)
+    表 = 表.copy()
+    for 欄 in 表.columns:
+        if 欄 in ("volume", "value", "foreign", "trust", "dealer", "total", "margin", "short"):
+            表[欄] = 表[欄].round().astype("Int64")
+    表.round(2).to_csv(檔案, index=False, compression="gzip")
+
+
+def 民國轉西元(文字):
+    文字 = str(文字).strip()
+    return f"{int(文字[:-4]) + 1911}-{文字[-4:-2]}-{文字[-2:]}"
+
+
+# ---------- 上市（證交所） ----------
+def 上市一天(日期):
     字串 = 日期.strftime("%Y%m%d")
-    行情 = 下載("https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX"
-             f"?date={字串}&type=ALLBUT0999&response=json")
+    行情 = 證交所(f"https://www.twse.com.tw/rwd/zh/afterTrading/MI_INDEX?date={字串}&type=ALLBUT0999&response=json")
     if 行情 is None:
-        raise RuntimeError("交易所連線失敗")
+        raise RuntimeError("證交所連線失敗")
     if 行情.get("stat") != "OK":
-        return None, None
-
-    個股 = None
-    指數 = None
-    for 標題, 欄位, 資料 in 取得表格(行情):
+        return None, None, None
+    個股, 指數 = None, None
+    for _, 欄位, 資料 in 取得表格(行情):
         if "證券代號" in 欄位 and "收盤價" in 欄位:
             表 = pd.DataFrame(資料, columns=欄位)
             個股 = pd.DataFrame({
-                "date": 日期.strftime("%Y-%m-%d"),
-                "code": 表["證券代號"].str.strip(),
-                "name": 表["證券名稱"].str.strip(),
-                "open": 表["開盤價"].map(轉數字),
-                "high": 表["最高價"].map(轉數字),
-                "low": 表["最低價"].map(轉數字),
-                "close": 表["收盤價"].map(轉數字),
+                "market": "上市",
+                "code": 表["證券代號"].str.strip(), "name": 表["證券名稱"].str.strip(),
+                "open": 表["開盤價"].map(轉數字), "high": 表["最高價"].map(轉數字),
+                "low": 表["最低價"].map(轉數字), "close": 表["收盤價"].map(轉數字),
                 "change": 表["漲跌(+/-)"].map(漲跌正負) * 表["漲跌價差"].map(轉數字),
-                "volume": 表["成交股數"].map(轉數字),
-                "value": 表["成交金額"].map(轉數字),
+                "volume": 表["成交股數"].map(轉數字), "value": 表["成交金額"].map(轉數字),
             })
         if "指數" in 欄位 and "收盤指數" in 欄位:
             for 列 in 資料:
                 紀錄 = dict(zip(欄位, 列))
                 if 紀錄["指數"].strip() == "發行量加權股價指數":
-                    指數 = {
-                        "date": 日期.strftime("%Y-%m-%d"),
-                        "close": 轉數字(紀錄["收盤指數"]),
-                        "change": 漲跌正負(紀錄["漲跌(+/-)"]) * 轉數字(紀錄["漲跌點數"]),
-                    }
+                    指數 = {"date": 日期.isoformat(), "close": 轉數字(紀錄["收盤指數"]),
+                          "change": 漲跌正負(紀錄["漲跌(+/-)"]) * 轉數字(紀錄["漲跌點數"])}
     if 個股 is None:
-        return None, None
-    # 只留一般股票（4 位數）與 ETF（00 開頭，例如 0050、00878、00981A），不含權證
-    個股 = 個股[個股["code"].str.fullmatch(r"\d{4}|00\d{2,4}[A-Z]?")].copy()
+        return None, None, None
+    個股 = 個股[個股["code"].str.fullmatch(代號格式)].copy()
 
-    time.sleep(3)  # 交易所限制下載頻率，太快會被暫時封鎖
-    估值 = 下載("https://www.twse.com.tw/rwd/zh/afterTrading/BWIBBU_d"
-             f"?date={字串}&selectType=ALL&response=json")
-    個股["pe"] = 個股["dy"] = 個股["pb"] = float("nan")
-    if 估值 and 估值.get("stat") == "OK":
+    估值 = 證交所(f"https://www.twse.com.tw/rwd/zh/afterTrading/BWIBBU_d?date={字串}&selectType=ALL&response=json")
+    個股 = 加估值(個股, 估值, "證券代號", {"本益比": "pe", "殖利率(%)": "dy", "股價淨值比": "pb"})
+
+    籌碼 = []
+    法人 = 證交所(f"https://www.twse.com.tw/rwd/zh/fund/T86?date={字串}&selectType=ALLBUT0999&response=json")
+    for _, 欄位, 資料 in 取得表格(法人 or {}):
+        if "證券代號" in 欄位 and "投信買賣超股數" in 欄位:
+            表 = pd.DataFrame(資料, columns=欄位)
+            外資 = 表["外陸資買賣超股數(不含外資自營商)"].map(轉數字)
+            if "外資自營商買賣超股數" in 表.columns:
+                外資 = 外資 + 表["外資自營商買賣超股數"].map(轉數字).fillna(0)
+            籌碼.append(pd.DataFrame({
+                "code": 表["證券代號"].str.strip(), "foreign": 外資,
+                "trust": 表["投信買賣超股數"].map(轉數字), "dealer": 表["自營商買賣超股數"].map(轉數字),
+                "total": 表["三大法人買賣超股數"].map(轉數字),
+            }))
+    融資 = 證交所(f"https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN?date={字串}&selectType=ALL&response=json")
+    融資表 = None
+    for _, 欄位, 資料 in 取得表格(融資 or {}):
+        if 欄位[:2] == ["代號", "名稱"] and len(欄位) >= 13:
+            # 欄位名稱重複（融資、融券都叫「今日餘額」），用位置取：第 7 欄融資餘額、第 13 欄融券餘額
+            融資表 = pd.DataFrame({"code": [str(r[0]).strip() for r in 資料],
+                                "margin": [轉數字(r[6]) for r in 資料],
+                                "short": [轉數字(r[12]) for r in 資料]})
+    return 個股, 指數, 合併籌碼(籌碼, 融資表)
+
+
+def 加估值(個股, 估值, 代號欄, 對照):
+    for 英文 in 對照.values():
+        個股[英文] = float("nan")
+    if 估值 and str(估值.get("stat", "")).upper() == "OK":
         for _, 欄位, 資料 in 取得表格(估值):
-            if "證券代號" not in 欄位:
+            if 代號欄 not in 欄位:
                 continue
             表 = pd.DataFrame(資料, columns=欄位)
-            表["code"] = 表["證券代號"].str.strip()
-            對照 = {"本益比": "pe", "殖利率(%)": "dy", "股價淨值比": "pb"}
+            表["code"] = 表[代號欄].astype(str).str.strip()
+            表 = 表.drop_duplicates("code").set_index("code")
             for 中文, 英文 in 對照.items():
                 if 中文 in 表.columns:
-                    個股[英文] = 個股["code"].map(表.set_index("code")[中文].map(轉數字))
-    return 個股, 指數
+                    個股[英文] = 個股["code"].map(表[中文].map(轉數字))
+    return 個股
 
 
-def 讀日期紀錄():
-    if not 日期紀錄.exists():
-        return {}
+def 合併籌碼(籌碼們, 融資表):
+    if not 籌碼們 and 融資表 is None:
+        return None
+    表 = pd.concat(籌碼們) if 籌碼們 else pd.DataFrame(columns=["code"])
+    if 融資表 is not None:
+        表 = 表.merge(融資表, on="code", how="outer")
+    return 表[表["code"].str.fullmatch(代號格式)]
+
+
+# ---------- 上櫃（櫃買中心） ----------
+def 上櫃一天(日期):
+    斜線 = 日期.strftime("%Y/%m/%d")
+    行情 = 櫃買(f"https://www.tpex.org.tw/www/zh-tw/afterTrading/otc?date={斜線}&type=EW&id=&response=json")
+    if 行情 is None:
+        raise RuntimeError("櫃買中心連線失敗")
+    if str(行情.get("stat", "")).lower() != "ok" or str(行情.get("date")) != 日期.strftime("%Y%m%d"):
+        return None, None
+    個股 = None
+    for _, 欄位, 資料 in 取得表格(行情):
+        if "代號" in 欄位 and "收盤" in 欄位:
+            表 = pd.DataFrame(資料, columns=欄位)
+            個股 = pd.DataFrame({
+                "market": "上櫃",
+                "code": 表["代號"].str.strip(), "name": 表["名稱"].str.strip(),
+                "open": 表["開盤"].map(轉數字), "high": 表["最高"].map(轉數字),
+                "low": 表["最低"].map(轉數字), "close": 表["收盤"].map(轉數字),
+                "change": 表["漲跌"].map(轉數字),
+                "volume": 表["成交股數"].map(轉數字), "value": 表["成交金額(元)"].map(轉數字),
+            })
+            break
+    if 個股 is None or 個股.empty:
+        return None, None
+    個股 = 個股[個股["code"].str.fullmatch(代號格式)].copy()
+
+    估值 = 櫃買(f"https://www.tpex.org.tw/www/zh-tw/afterTrading/peQryDate?date={斜線}&id=&response=json")
+    個股 = 加估值(個股, 估值, "股票代號", {"本益比": "pe", "殖利率(%)": "dy", "股價淨值比": "pb"})
+
+    籌碼 = []
+    法人 = 櫃買(f"https://www.tpex.org.tw/www/zh-tw/insti/dailyTrade?type=Daily&sect=EW&date={斜線}&id=&response=json")
+    for _, 欄位, 資料 in 取得表格(法人 or {}):
+        if 欄位[:1] == ["代號"] and len(欄位) >= 24:
+            # 欄位名稱重複，用位置取：外資合計、投信、自營商合計、三大法人合計
+            籌碼.append(pd.DataFrame({
+                "code": [str(r[0]).strip() for r in 資料],
+                "foreign": [轉數字(r[10]) for r in 資料], "trust": [轉數字(r[13]) for r in 資料],
+                "dealer": [轉數字(r[22]) for r in 資料], "total": [轉數字(r[23]) for r in 資料],
+            }))
+    融資 = 櫃買(f"https://www.tpex.org.tw/www/zh-tw/margin/balance?date={斜線}&id=&response=json")
+    融資表 = None
+    for _, 欄位, 資料 in 取得表格(融資 or {}):
+        if "資餘額" in 欄位 and "券餘額" in 欄位:
+            表 = pd.DataFrame(資料, columns=欄位)
+            融資表 = pd.DataFrame({"code": 表["代號"].str.strip(), "margin": 表["資餘額"].map(轉數字),
+                                "short": 表["券餘額"].map(轉數字)})
+    return 個股, 合併籌碼(籌碼, 融資表)
+
+
+# ---------- 紀錄 ----------
+def 讀狀態():
     紀錄 = {}
-    for 行 in 日期紀錄.read_text().split():
-        日, 狀態 = 行.split(",")
-        紀錄[日] = 狀態
+    for 檔案 in (資料夾 / "status").glob("*.txt"):
+        for 行 in 檔案.read_text().split():
+            日, 狀態 = 行.split(",")
+            紀錄[日] = 狀態
     return 紀錄
 
 
-def 寫入一天(這天):
-    """每天存成一個檔案：data/prices/2026-10/20261023.csv.gz
-    （GitHub 會保留每次修改的舊版本，一天一檔可以讓歷史紀錄長得最慢）"""
-    日 = 這天["date"].iloc[0]
-    檔案 = 行情資料夾 / 日[:7] / f"{日.replace('-', '')}.csv.gz"
+def 寫狀態(日期, 狀態):
+    檔案 = 資料夾 / "status" / f"{日期:%Y-%m}.txt"
     檔案.parent.mkdir(parents=True, exist_ok=True)
-    這天 = 這天.drop_duplicates("code", keep="last").sort_values("code").copy()
-    這天[["volume", "value"]] = 這天[["volume", "value"]].round().astype("Int64")
-    這天.round(2).to_csv(檔案, index=False, compression="gzip")
+    舊 = dict(行.split(",") for 行 in 檔案.read_text().split()) if 檔案.exists() else {}
+    舊[日期.strftime("%Y%m%d")] = 狀態
+    檔案.write_text("\n".join(f"{k},{v}" for k, v in sorted(舊.items())) + "\n")
 
 
-def 轉換舊格式():
-    """舊版是一個月一個檔，拆成一天一檔。"""
-    for 檔案 in 行情資料夾.glob("*.csv.gz"):
-        表 = pd.read_csv(檔案, dtype={"code": str})
-        for _, 這天 in 表.groupby("date"):
-            寫入一天(這天)
+def 寫指數(指數):
+    檔案 = 資料夾 / "index" / f"{指數['date'][:7]}.csv"
+    檔案.parent.mkdir(parents=True, exist_ok=True)
+    表 = pd.DataFrame([指數])
+    if 檔案.exists():
+        表 = pd.concat([pd.read_csv(檔案), 表])
+    表.drop_duplicates("date", keep="last").sort_values("date").to_csv(檔案, index=False)
+
+
+def 抓一天(日期):
+    with ThreadPoolExecutor(2) as 池:  # 證交所與櫃買是不同網站，可以同時抓
+        上市工作 = 池.submit(上市一天, 日期)
+        上櫃工作 = 池.submit(上櫃一天, 日期)
+        上市, 指數, 上市籌碼 = 上市工作.result()
+        上櫃, 上櫃籌碼 = 上櫃工作.result()
+    if 上市 is None:
+        return False
+    月 = f"{日期:%Y-%m}"
+    名 = f"{日期:%Y%m%d}.csv.gz"
+    行情 = pd.concat([上市, 上櫃]) if 上櫃 is not None else 上市
+    存壓縮檔(行情.drop_duplicates("code").sort_values("code"), 資料夾 / "prices" / 月 / 名)
+    籌碼 = [t for t in (上市籌碼, 上櫃籌碼) if t is not None]
+    if 籌碼:
+        存壓縮檔(pd.concat(籌碼).drop_duplicates("code").sort_values("code"), 資料夾 / "chips" / 月 / 名)
+    if 指數:
+        寫指數(指數)
+    return True
+
+
+# ---------- 只有最新一天的資料 ----------
+def 抓分時():
+    """加權指數當日走勢（證交所每 5 秒一筆，存成每分鐘一筆），保留最近 5 個交易日。"""
+    今天 = dt.datetime.now(台北時區).date()
+    資料夾.joinpath("intraday").mkdir(parents=True, exist_ok=True)
+    已有 = {f.stem for f in (資料夾 / "intraday").glob("*.csv")}
+    日 = 今天
+    for _ in range(10):
+        字串 = 日.strftime("%Y%m%d")
+        if 日.weekday() < 5 and 字串 not in 已有:
+            資料 = 證交所(f"https://www.twse.com.tw/rwd/zh/TAIEX/MI_5MINS_INDEX?date={字串}&response=json")
+            if 資料 and 資料.get("stat") == "OK" and 資料.get("data"):
+                表 = pd.DataFrame([[r[0], 轉數字(r[1])] for r in 資料["data"]], columns=["time", "taiex"])
+                表 = 表[表["time"].str.endswith(":00")]
+                表.to_csv(資料夾 / "intraday" / f"{字串}.csv", index=False)
+                print(f"分時 {字串} 完成，{len(表)} 筆")
+        日 -= dt.timedelta(days=1)
+    for 檔案 in sorted((資料夾 / "intraday").glob("*.csv"))[:-5]:
         檔案.unlink()
-        print(f"已轉換 {檔案.name}")
 
 
-def 存檔(暫存, 指數們, 紀錄):
-    行情資料夾.mkdir(parents=True, exist_ok=True)
-    for 這天 in 暫存:
-        寫入一天(這天)
-    if 指數們:
-        新指數 = pd.DataFrame(指數們)
-        if 指數檔.exists():
-            新指數 = pd.concat([pd.read_csv(指數檔), 新指數])
-        新指數.drop_duplicates("date", keep="last").sort_values("date").to_csv(指數檔, index=False)
-    日期紀錄.write_text("\n".join(f"{日},{狀態}" for 日, 狀態 in sorted(紀錄.items())) + "\n")
-
-
-上櫃資料夾 = 資料夾 / "otc"
-
-
-def 抓上櫃():
-    """櫃買中心 OpenAPI：只提供最新一個交易日，每天抓一次就會慢慢累積。"""
-    資料 = 下載("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes")
+def 抓興櫃():
+    資料 = 櫃買("https://www.tpex.org.tw/openapi/v1/tpex_esb_latest_statistics")
     if not 資料:
-        print("上櫃資料下載失敗，略過")
         return
     表 = pd.DataFrame(資料)
-    print("上櫃欄位：", list(表.columns))
-
-    def 欄(*候選):
-        for 名 in 候選:
-            if 名 in 表.columns:
-                return 表[名]
-        return pd.Series([float("nan")] * len(表))
-
-    民國 = 欄("Date").astype(str).str.strip()
-    日期 = 民國.map(lambda d: f"{int(d[:-4]) + 1911}-{d[-4:-2]}-{d[-2:]}" if d[:-4].isdigit() else None)
-    上櫃 = pd.DataFrame({
-        "date": 日期,
-        "code": 欄("SecuritiesCompanyCode", "Code").astype(str).str.strip(),
-        "name": 欄("CompanyName", "Name").astype(str).str.strip(),
-        "open": 欄("Open").map(轉數字),
-        "high": 欄("High").map(轉數字),
-        "low": 欄("Low").map(轉數字),
-        "close": 欄("Close").map(轉數字),
-        "change": 欄("Change").map(轉數字),
-        "volume": 欄("TradingShares", "TradeVolume").map(轉數字),
-        "value": 欄("TransactionAmount", "TradeValue").map(轉數字),
-    }).dropna(subset=["date"])
-    上櫃 = 上櫃[上櫃["code"].str.fullmatch(r"\d{4}|00\d{2,4}[A-Z]?")]
-    if 上櫃.empty:
-        print("上櫃資料是空的，略過")
-        return
-    for 日, 這天 in 上櫃.groupby("date"):
-        檔案 = 上櫃資料夾 / f"{日.replace('-', '')}.csv.gz"
-        檔案.parent.mkdir(parents=True, exist_ok=True)
-        這天 = 這天.drop_duplicates("code").sort_values("code").copy()
-        這天[["volume", "value"]] = 這天[["volume", "value"]].round().astype("Int64")
-        這天.round(2).to_csv(檔案, index=False, compression="gzip")
-        print(f"上櫃 {日} 完成，{len(這天)} 檔")
+    興櫃 = pd.DataFrame({
+        "date": 表["Date"].map(民國轉西元), "market": "興櫃",
+        "code": 表["SecuritiesCompanyCode"].str.strip(), "name": 表["CompanyName"].str.strip(),
+        "high": 表["Highest"].map(轉數字), "low": 表["Lowest"].map(轉數字),
+        "close": 表["LatestPrice"].map(轉數字), "average": 表["Average"].map(轉數字),
+        "prev_average": 表["PreviousAveragePrice"].map(轉數字),
+        "volume": 表["TransactionVolume"].map(轉數字),
+    })
+    # 興櫃沒有漲跌幅限制，漲跌以「最後成交價 − 前一日均價」計算
+    興櫃["change"] = 興櫃["close"] - 興櫃["prev_average"]
+    for 日, 這天 in 興櫃.groupby("date"):
+        存壓縮檔(這天, 資料夾 / "esb" / f"{日.replace('-', '')}.csv.gz")
+        print(f"興櫃 {日} 完成，{len(這天)} 檔")
 
 
-匯率檔 = 資料夾 / "fx.csv"
+def 抓基本面():
+    資料夾.joinpath("fundamental").mkdir(parents=True, exist_ok=True)
+    營收們 = []
+    for 網址, 市場 in (("https://openapi.twse.com.tw/v1/opendata/t187ap05_L", "上市"),
+                     ("https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap05_O", "上櫃")):
+        資料 = (證交所 if 市場 == "上市" else 櫃買)(網址)
+        if not 資料:
+            continue
+        表 = pd.DataFrame(資料)
+        營收們.append(pd.DataFrame({
+            "code": 表["公司代號"].str.strip(), "month": 表["資料年月"].map(lambda s: f"{int(s[:-2]) + 1911}-{s[-2:]}"),
+            "revenue": 表["營業收入-當月營收"].map(轉數字),
+            "rev_yoy": 表["營業收入-去年同月增減(%)"].map(轉數字),
+            "rev_mom": 表["營業收入-上月比較增減(%)"].map(轉數字),
+            "rev_cum_yoy": 表["累計營業收入-前期比較增減(%)"].map(轉數字),
+        }))
+    if 營收們:
+        pd.concat(營收們).round(2).to_csv(資料夾 / "fundamental" / "revenue.csv", index=False)
+        print("月營收完成")
+    EPS們 = []
+    for 網址, 市場 in (("https://openapi.twse.com.tw/v1/opendata/t187ap14_L", "上市"),
+                     ("https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap14_O", "上櫃")):
+        資料 = (證交所 if 市場 == "上市" else 櫃買)(網址)
+        if not 資料:
+            continue
+        表 = pd.DataFrame(資料)
+        代號 = 表.get("公司代號", 表.get("SecuritiesCompanyCode"))
+        年度 = 表.get("年度", 表.get("Year"))
+        EPS = 表.get("基本每股盈餘(元)", 表.get("基本每股盈餘"))
+        EPS們.append(pd.DataFrame({
+            "code": 代號.str.strip(), "quarter": (年度.astype(int) + 1911).astype(str) + "Q" + 表["季別"].astype(str),
+            "eps": EPS.map(轉數字),
+        }))
+    if EPS們:
+        pd.concat(EPS們).to_csv(資料夾 / "fundamental" / "eps.csv", index=False)
+        print("EPS 完成")
 
 
 def 抓匯率():
     """美元兌台幣每日收盤匯率（數字變小代表台幣升值）。"""
     新資料 = []
-    資料 = 下載("https://query1.finance.yahoo.com/v8/finance/chart/TWD=X?range=3mo&interval=1d")
     try:
-        結果 = 資料["chart"]["result"][0]
+        r = requests.get("https://query1.finance.yahoo.com/v8/finance/chart/TWD=X?range=3mo&interval=1d",
+                         headers=標頭, timeout=30)
+        結果 = r.json()["chart"]["result"][0]
         for 時間, 收盤 in zip(結果["timestamp"], 結果["indicators"]["quote"][0]["close"]):
             if 收盤:
                 日 = dt.datetime.fromtimestamp(時間, 台北時區).strftime("%Y-%m-%d")
                 新資料.append({"date": 日, "usdtwd": round(收盤, 4)})
-    except (TypeError, KeyError, IndexError):
-        print("Yahoo 匯率格式不符，改用臺灣銀行")
+    except Exception as 錯誤:
+        print(f"Yahoo 匯率失敗（{錯誤}），改用臺灣銀行")
     if not 新資料:
-        # 備用：臺灣銀行近 3 個月牌告（即期買入、賣出取中間價）
         r = requests.get("https://rate.bot.com.tw/xrt/flcsv/0/L3M/USD", headers=標頭, timeout=30)
         r.encoding = "utf-8-sig"
         for 行 in r.text.splitlines()[1:]:
@@ -242,75 +387,72 @@ def 抓匯率():
     if not 新資料:
         print("匯率下載失敗，略過")
         return
+    檔案 = 資料夾 / "fx.csv"
     表 = pd.DataFrame(新資料)
-    if 匯率檔.exists():
-        表 = pd.concat([pd.read_csv(匯率檔), 表])
-    表 = 表.drop_duplicates("date", keep="last").sort_values("date")
-    表.to_csv(匯率檔, index=False)
-    print(f"匯率完成，最新 {表.iloc[-1].to_dict()}")
+    if 檔案.exists():
+        表 = pd.concat([pd.read_csv(檔案), 表])
+    表.drop_duplicates("date", keep="last").sort_values("date").to_csv(檔案, index=False)
+    print("匯率完成")
 
 
+# ---------- 主程式 ----------
 def main():
     參數 = argparse.ArgumentParser()
-    參數.add_argument("--years", type=float, default=3, help="資料庫保留幾年")
-    參數.add_argument("--max-minutes", type=float, default=300, help="最多執行幾分鐘")
+    參數.add_argument("--years", type=float, default=5, help="資料庫保留幾年")
+    參數.add_argument("--start", help="只抓這天之後（YYYY-MM-DD）")
+    參數.add_argument("--end", help="只抓這天之前（YYYY-MM-DD）")
+    參數.add_argument("--max-minutes", type=float, default=320, help="最多執行幾分鐘")
+    參數.add_argument("--skip-latest", action="store_true", help="不抓只有最新一天的資料（分段下載用）")
     參數 = 參數.parse_args()
 
     現在 = dt.datetime.now(台北時區)
     今天 = 現在.date()
-    # 交易所大約下午 3 點後才有當天資料
     最後一天 = 今天 if 現在.hour >= 15 else 今天 - dt.timedelta(days=1)
     第一天 = 今天 - dt.timedelta(days=int(參數.years * 365))
-    紀錄 = 讀日期紀錄()
-    轉換舊格式()
-    開始時間 = time.time()
+    if 參數.start:
+        第一天 = max(第一天, dt.date.fromisoformat(參數.start))
+    if 參數.end:
+        最後一天 = min(最後一天, dt.date.fromisoformat(參數.end))
 
+    紀錄 = 讀狀態()
     待抓 = []
     日 = 最後一天
     while 日 >= 第一天:  # 從最新往回抓，先有近期資料可以用
         if 日.weekday() < 5 and 日.strftime("%Y%m%d") not in 紀錄:
             待抓.append(日)
         日 -= dt.timedelta(days=1)
-    print(f"需要下載 {len(待抓)} 天")
+    print(f"需要下載 {len(待抓)} 天（{第一天} ~ {最後一天}）")
 
-    暫存, 指數們 = [], []
+    開始時間 = time.time()
     for 序號, 日 in enumerate(待抓, 1):
         if time.time() - 開始時間 > 參數.max_minutes * 60:
             print("已達執行時間上限，下次會接著抓")
             break
         try:
-            個股, 指數 = 抓一天(日)
+            有資料 = 抓一天(日)
         except RuntimeError as 錯誤:
             print(f"{日} 失敗：{錯誤}，先停止")
             break
-        字串 = 日.strftime("%Y%m%d")
-        if 個股 is None:
-            # 今天、昨天沒資料可能只是還沒公布，不要記成休市
-            if (今天 - 日).days > 1:
-                紀錄[字串] = "closed"
-            print(f"{日} 休市")
+        if 有資料:
+            寫狀態(日, "ok")
+            print(f"{日} 完成（{序號}/{len(待抓)}）")
         else:
-            暫存.append(個股)
-            if 指數:
-                指數們.append(指數)
-            紀錄[字串] = "ok"
-            print(f"{日} 完成，{len(個股)} 檔（{序號}/{len(待抓)}）")
-        if 序號 % 20 == 0:
-            存檔(暫存, 指數們, 紀錄)
-            暫存, 指數們 = [], []
-        time.sleep(3)
-    存檔(暫存, 指數們, 紀錄)
+            if (今天 - 日).days > 1:  # 今天、昨天沒資料可能只是還沒公布
+                寫狀態(日, "closed")
+            print(f"{日} 休市")
 
-    for 工作 in (抓上櫃, 抓匯率):  # 這兩項出問題不影響上市資料庫
-        try:
-            工作()
-        except Exception as 錯誤:
-            print(f"{工作.__name__} 失敗：{錯誤}")
+    if not 參數.skip_latest:
+        for 工作 in (抓分時, 抓興櫃, 抓基本面, 抓匯率):  # 這些出問題不影響主資料庫
+            try:
+                工作()
+            except Exception as 錯誤:
+                print(f"{工作.__name__} 失敗：{錯誤}")
 
     # 刪掉超過保留年限的舊資料
-    for 檔案 in 行情資料夾.glob("*/*.csv.gz"):
-        if 檔案.name[:8] < 第一天.strftime("%Y%m%d"):
-            檔案.unlink()
+    for 子 in ("prices", "chips"):
+        for 檔案 in (資料夾 / 子).glob("*/*.csv.gz"):
+            if 檔案.name[:8] < 第一天.strftime("%Y%m%d") and not 參數.start:
+                檔案.unlink()
 
 
 if __name__ == "__main__":
