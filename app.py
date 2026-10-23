@@ -132,7 +132,7 @@ def 上色(表):
 
 
 # ---------- 讀資料 ----------
-@st.cache_data(ttl=3600, show_spinner="讀取資料庫中…")
+@st.cache_resource(max_entries=1, show_spinner="讀取資料庫中…")  # 不複製資料，省一半記憶體
 def 載入(資料版本):
     # 資料版本變了（每天更新後）就會重新讀取，不會一直用舊的暫存
     原始 = engine.讀取資料庫()

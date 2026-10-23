@@ -31,15 +31,27 @@ def _讀每日檔(子資料夾):
     檔案們 = sorted((資料夾 / 子資料夾).glob("**/*.csv.gz"))
     if not 檔案們:
         return None
-    表們 = []
+    表們, 名稱們 = [], {}
     for f in 檔案們:
         t = pd.read_csv(f, dtype={"code": str})
-        if "date" not in t.columns:  # 籌碼檔沒有日期欄，從檔名取
-            t["date"] = f"{f.name[:4]}-{f.name[4:6]}-{f.name[6:8]}"
+        if "name" in t.columns:  # 名稱另外存一份對照表，不必每天每檔都存一個字串（很佔記憶體）
+            名稱們.update(zip(t["code"], t["name"]))
+            t = t.drop(columns="name")
+        t["date"] = pd.Timestamp(f"{f.name[:4]}-{f.name[4:6]}-{f.name[6:8]}")  # 日期從檔名取
+        數字 = t.select_dtypes("number").columns
+        t[數字] = t[數字].astype("float32")
         表們.append(t)
     表 = pd.concat(表們, ignore_index=True)
-    表["date"] = pd.to_datetime(表["date"])
-    return 表.drop_duplicates(["date", "code"], keep="last")
+    del 表們
+    表 = 表.drop_duplicates(["date", "code"], keep="last")
+    # 同樣的文字共用同一個物件，例如「2330」「上市」，省下幾百 MB 記憶體
+    for 欄 in ("code", "market"):
+        if 欄 in 表.columns:
+            共用 = {v: v for v in 表[欄].dropna().unique()}
+            表[欄] = 表[欄].map(共用)
+    if 名稱們:
+        表["name"] = 表["code"].map(名稱們)
+    return 表
 
 
 def 讀取資料庫():
@@ -54,7 +66,7 @@ def 讀取資料庫():
         表 = 表.merge(籌碼, on=["date", "code"], how="left")
     數字 = 表.select_dtypes("float64").columns
     表[數字] = 表[數字].astype("float32")  # 省記憶體
-    return 表.sort_values(["code", "date"]).reset_index(drop=True)
+    return 表.sort_values(["code", "date"], ignore_index=True)
 
 
 def 讀取加權指數():
