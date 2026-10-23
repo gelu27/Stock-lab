@@ -23,10 +23,11 @@ import pandas as pd
 
 # ---------- 1. 讀資料 ----------
 def 讀取資料庫():
-    檔案們 = sorted((資料夾 / "prices").glob("*.csv.gz"))
+    檔案們 = sorted((資料夾 / "prices").glob("**/*.csv.gz"))
     if not 檔案們:
         return None
     表 = pd.concat([pd.read_csv(f, dtype={"code": str}) for f in 檔案們], ignore_index=True)
+    表 = 表.drop_duplicates(["date", "code"], keep="last")
     表["date"] = pd.to_datetime(表["date"])
     return 表.sort_values(["code", "date"]).reset_index(drop=True)
 
