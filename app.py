@@ -2,6 +2,8 @@
 # 執行方式：streamlit run app.py
 
 import datetime as dt
+import hmac
+import io
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -83,9 +85,10 @@ def 圖表外觀(圖, 高=380):
 
 
 def 上色(表):
-    欄們 = [c for c in ["漲跌幅", "20日漲幅", "報酬率(%)"] if c in 表.columns]
-    整數欄 = {c: "{:,.0f}" for c in ["成交張數"] if c in 表.columns}
-    return 表.style.map(lambda v: f"color:{漲跌色(v)}", subset=欄們).format(precision=2).format(整數欄)
+    欄們 = [c for c in ["漲跌幅", "20日漲幅", "報酬率(%)", "今日損益", "總損益"] if c in 表.columns]
+    整數 = {"成交張數", "今日損益", "總損益", "股數", "總成本"}
+    格式 = {c: ("{:,.0f}" if c in 整數 else "{:,.2f}") for c in 表.select_dtypes("number").columns}
+    return 表.style.map(lambda v: f"color:{漲跌色(v)}", subset=欄們).format(格式, na_rep="—")
 
 
 # ---------- 讀資料 ----------
@@ -149,7 +152,45 @@ with st.sidebar.expander("流動性與價格", expanded=True):
 分頁 = st.tabs(["01 / 市場總覽", "02 / 選股", "03 / 回測"])
 
 # ---------- 01 市場總覽 ----------
+def 我的庫存():
+    """庫存放在 Streamlit 的 Secrets（不會出現在公開的 GitHub）。"""
+    try:
+        設定 = dict(st.secrets)
+    except Exception:
+        設定 = {}
+    if "holdings" not in 設定:
+        段落("PORTFOLIO // 我的庫存")
+        st.info("尚未設定庫存。到 Streamlit 的 App settings →「Secrets」貼上庫存清單即可顯示。")
+        return
+    密碼 = str(設定.get("password", ""))
+    if 密碼 and not st.session_state.get("已解鎖"):
+        段落("PORTFOLIO // 我的庫存")
+        輸入 = st.text_input("輸入密碼查看庫存", type="password")
+        if 輸入 and hmac.compare_digest(輸入, 密碼):
+            st.session_state["已解鎖"] = True
+            st.rerun()
+        elif 輸入:
+            st.error("密碼不正確")
+        return
+
+    持股 = pd.read_csv(io.StringIO(str(設定["holdings"]).strip()), dtype={"代號": str})
+    明細, 合計 = engine.計算庫存(持股, 今日, engine.讀取上櫃最新())
+    日期 = 合計["日期"].strftime("%Y/%m/%d") if pd.notna(合計["日期"]) else "—"
+    段落(f"PORTFOLIO // 我的庫存　{日期}")
+    卡片列([
+        卡片(f"今日損益 · {日期}", f"{合計['今日損益']:+,.0f}", f"{合計['今日損益(%)']:+.2f}%",
+           漲跌色(合計["今日損益"])),
+        卡片("累積損益", f"{合計['累積損益']:+,.0f}", f"{合計['累積損益(%)']:+.2f}%", 漲跌色(合計["累積損益"])),
+        卡片("股票市值", f"{合計['股票市值']:,.0f}", f"成本 {合計['總成本']:,.0f}"),
+    ])
+    st.dataframe(上色(明細), hide_index=True, width="stretch", height=35 * (len(明細) + 1) + 3)
+    if 合計["缺報價"]:
+        st.caption(f"以下代號暫時沒有報價，未計入合計：{'、'.join(合計['缺報價'])}（上櫃與 ETF 報價從下次每日更新開始提供）")
+
+
 with 分頁[0]:
+    我的庫存()
+    段落("MARKET // 市場")
     上漲 = (今日["漲跌"] > 0).sum()
     下跌 = (今日["漲跌"] < 0).sum()
     卡們 = []

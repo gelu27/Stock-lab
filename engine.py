@@ -217,3 +217,50 @@ def 計算績效(曲線, 交易表, 基準):
     if 基準 is not None:
         績效["0050 同期報酬(%)"] = (基準.iloc[-1] - 1) * 100
     return 績效
+
+
+# ---------- 5. 我的庫存 ----------
+def 讀取上櫃最新():
+    檔案們 = sorted((資料夾 / "otc").glob("*.csv.gz"))
+    if not 檔案們:
+        return None
+    表 = pd.read_csv(檔案們[-1], dtype={"code": str})
+    表["date"] = pd.to_datetime(表["date"])
+    return 表
+
+
+def 計算庫存(持股, 上市最新, 上櫃最新=None):
+    """持股：DataFrame（代號、股數、總成本）。回傳每檔明細與合計。"""
+    上市最新 = 上市最新.rename(columns={"名稱": "name", "收盤": "close", "漲跌": "change"})
+    報價 = 上市最新[["code", "name", "date", "close", "change"]]
+    if 上櫃最新 is not None:
+        報價 = pd.concat([報價, 上櫃最新[["code", "name", "date", "close", "change"]]])
+    報價 = 報價.sort_values("date").drop_duplicates("code", keep="last").set_index("code")
+
+    表 = 持股.copy()
+    表["代號"] = 表["代號"].astype(str).str.strip()
+    表 = 表.join(報價, on="代號")
+    表["名稱"] = 表["name"].fillna(表["代號"] + "（待報價）")
+    表["股價"] = 表["close"]
+    表["漲跌幅"] = (表["change"] / (表["close"] - 表["change"]) * 100).round(2)
+    表["今日損益"] = (表["change"] * 表["股數"]).round()
+    表["股票市值"] = (表["close"] * 表["股數"]).round()
+    表["總損益"] = 表["股票市值"] - 表["總成本"]
+    表["報酬率(%)"] = (表["總損益"] / 表["總成本"] * 100).round(2)
+    表["均價"] = (表["總成本"] / 表["股數"]).round(2)
+    表["報價日期"] = 表["date"].dt.strftime("%m/%d")
+
+    有報價 = 表[表["股價"].notna()]
+    昨日市值 = ((有報價["close"] - 有報價["change"]) * 有報價["股數"]).sum()
+    合計 = {
+        "今日損益": 有報價["今日損益"].sum(),
+        "今日損益(%)": 有報價["今日損益"].sum() / 昨日市值 * 100 if 昨日市值 else 0.0,
+        "累積損益": 有報價["總損益"].sum(),
+        "累積損益(%)": 有報價["總損益"].sum() / 有報價["總成本"].sum() * 100 if len(有報價) else 0.0,
+        "股票市值": 有報價["股票市值"].sum(),
+        "總成本": 表["總成本"].sum(),
+        "日期": 有報價["date"].max(),
+        "缺報價": 表.loc[表["股價"].isna(), "代號"].tolist(),
+    }
+    欄 = ["名稱", "今日損益", "股價", "漲跌幅", "總損益", "報酬率(%)", "股數", "均價", "總成本", "代號", "報價日期"]
+    return 表.sort_values("今日損益", ascending=False, na_position="last")[欄], 合計

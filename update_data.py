@@ -105,8 +105,8 @@ def 抓一天(日期):
                     }
     if 個股 is None:
         return None, None
-    # 只留 4 位數代號（一般股票與 0050、0056 等），資料庫比較小
-    個股 = 個股[個股["code"].str.fullmatch(r"\d{4}")].copy()
+    # 只留一般股票（4 位數）與 ETF（00 開頭，例如 0050、00878、00981A），不含權證
+    個股 = 個股[個股["code"].str.fullmatch(r"\d{4}|00\d{2,4}[A-Z]?")].copy()
 
     time.sleep(3)  # 交易所限制下載頻率，太快會被暫時封鎖
     估值 = 下載("https://www.twse.com.tw/rwd/zh/afterTrading/BWIBBU_d"
@@ -168,6 +168,51 @@ def 存檔(暫存, 指數們, 紀錄):
     日期紀錄.write_text("\n".join(f"{日},{狀態}" for 日, 狀態 in sorted(紀錄.items())) + "\n")
 
 
+上櫃資料夾 = 資料夾 / "otc"
+
+
+def 抓上櫃():
+    """櫃買中心 OpenAPI：只提供最新一個交易日，每天抓一次就會慢慢累積。"""
+    資料 = 下載("https://www.tpex.org.tw/openapi/v1/tpex_mainboard_daily_close_quotes")
+    if not 資料:
+        print("上櫃資料下載失敗，略過")
+        return
+    表 = pd.DataFrame(資料)
+    print("上櫃欄位：", list(表.columns))
+
+    def 欄(*候選):
+        for 名 in 候選:
+            if 名 in 表.columns:
+                return 表[名]
+        return pd.Series([float("nan")] * len(表))
+
+    民國 = 欄("Date").astype(str).str.strip()
+    日期 = 民國.map(lambda d: f"{int(d[:-4]) + 1911}-{d[-4:-2]}-{d[-2:]}" if d[:-4].isdigit() else None)
+    上櫃 = pd.DataFrame({
+        "date": 日期,
+        "code": 欄("SecuritiesCompanyCode", "Code").astype(str).str.strip(),
+        "name": 欄("CompanyName", "Name").astype(str).str.strip(),
+        "open": 欄("Open").map(轉數字),
+        "high": 欄("High").map(轉數字),
+        "low": 欄("Low").map(轉數字),
+        "close": 欄("Close").map(轉數字),
+        "change": 欄("Change").map(轉數字),
+        "volume": 欄("TradingShares", "TradeVolume").map(轉數字),
+        "value": 欄("TransactionAmount", "TradeValue").map(轉數字),
+    }).dropna(subset=["date"])
+    上櫃 = 上櫃[上櫃["code"].str.fullmatch(r"\d{4}|00\d{2,4}[A-Z]?")]
+    if 上櫃.empty:
+        print("上櫃資料是空的，略過")
+        return
+    for 日, 這天 in 上櫃.groupby("date"):
+        檔案 = 上櫃資料夾 / f"{日.replace('-', '')}.csv.gz"
+        檔案.parent.mkdir(parents=True, exist_ok=True)
+        這天 = 這天.drop_duplicates("code").sort_values("code").copy()
+        這天[["volume", "value"]] = 這天[["volume", "value"]].round().astype("Int64")
+        這天.round(2).to_csv(檔案, index=False, compression="gzip")
+        print(f"上櫃 {日} 完成，{len(這天)} 檔")
+
+
 def main():
     參數 = argparse.ArgumentParser()
     參數.add_argument("--years", type=float, default=3, help="資料庫保留幾年")
@@ -218,6 +263,11 @@ def main():
             暫存, 指數們 = [], []
         time.sleep(3)
     存檔(暫存, 指數們, 紀錄)
+
+    try:
+        抓上櫃()
+    except Exception as 錯誤:  # 上櫃資料出問題不影響上市資料庫
+        print(f"上櫃資料處理失敗：{錯誤}")
 
     # 刪掉超過保留年限的舊資料
     for 檔案 in 行情資料夾.glob("*/*.csv.gz"):
