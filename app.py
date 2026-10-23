@@ -50,6 +50,22 @@ h1, h2, h3 {{ font-family: 'Space Grotesk', 'Noto Sans TC', sans-serif !importan
 .stButton > button, .stDownloadButton > button {{ border-radius: 0; border: 1px solid {青}; color: {青};
     background: transparent; font-family: 'JetBrains Mono'; letter-spacing: .15em; }}
 .stButton > button:hover {{ background: {青}; color: #000; }}
+.grid3 {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }}
+.grid3 .card .v {{ font-size: clamp(17px, 4.6vw, 28px); }}
+.grid3 .card .k {{ font-size: clamp(9px, 2.4vw, 11px); letter-spacing: .1em; }}
+.grid3 .card .d {{ font-size: clamp(10px, 2.6vw, 12px); }}
+.grid3 .card {{ padding: 10px 10px; }}
+.rankwrap {{ overflow-x: auto; }}
+@media (max-width: 480px) {{ .rank td, .rank td.n {{ font-size: 14px; padding: 8px 6px; }} .rank th {{ padding: 8px 6px; }}
+    .rank td.n small, .rank td:nth-child(5), .rank th:nth-child(5) {{ display: none; }} }}
+.rank {{ width: 100%; border-collapse: collapse; font-family: 'Noto Sans TC', sans-serif; }}
+.rank th {{ background: #141414; color: #9A9A9A; font-weight: 400; padding: 8px 10px; text-align: right;
+    font-size: 14px; }}
+.rank th:first-child, .rank td:first-child {{ text-align: center; }}
+.rank td {{ padding: 9px 10px; border-bottom: 1px solid #1E1E1E; text-align: right;
+    font-family: 'JetBrains Mono', monospace; font-size: 16px; }}
+.rank td.n {{ font-family: 'Noto Sans TC', sans-serif; color: #EDEDED; font-size: 16px; white-space: nowrap; }}
+.rank td.n small {{ color: {灰}; font-size: 11px; margin-left: 4px; font-family: 'JetBrains Mono'; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -62,6 +78,30 @@ def 卡片(標題, 數值, 小字="", 顏色="#EDEDED"):
 def 卡片列(卡們):
     for 欄, 卡 in zip(st.columns(len(卡們)), 卡們):
         欄.markdown(卡, unsafe_allow_html=True)
+
+
+def 卡片格(卡們):
+    """固定一排三格，手機上也維持兩排三欄。"""
+    st.markdown(f'<div class="grid3">{"".join(卡們)}</div>', unsafe_allow_html=True)
+
+
+def 排行表(表):
+    列們 = []
+    for _, r in 表.iterrows():
+        色 = 漲跌色(r["change"])
+        底 = ""
+        if r["幅度"] >= 9.5:
+            底 = f"background:#9B0000;color:#FFF"
+        elif r["幅度"] <= -9.5:
+            底 = f"background:#006B3C;color:#FFF"
+        列們.append(
+            f'<tr><td class="n">{r["name"]}<small>{r["code"]}</small></td>'
+            f'<td style="{底 or "color:" + 色}">{r["close"]:,.2f}</td>'
+            f'<td style="color:{色}">{r["change"]:+,.2f}</td>'
+            f'<td style="color:{色}">{r["幅度"]:+.2f}%</td>'
+            f'<td style="color:#BDBDBD">{r["張數"]:,.0f}</td></tr>')
+    st.markdown('<div class="rankwrap"><table class="rank"><tr><th>商品</th><th>成交</th><th>漲跌</th><th>幅度</th><th>張數</th></tr>'
+                + "".join(列們) + "</table></div>", unsafe_allow_html=True)
 
 
 def 漲跌色(值):
@@ -183,7 +223,13 @@ def 我的庫存():
         卡片("累積損益", f"{合計['累積損益']:+,.0f}", f"{合計['累積損益(%)']:+.2f}%", 漲跌色(合計["累積損益"])),
         卡片("股票市值", f"{合計['股票市值']:,.0f}", f"成本 {合計['總成本']:,.0f}"),
     ])
+    a, b = st.columns([4, 1])
+    依據 = a.segmented_control("排序", ["今日損益", "漲跌幅", "總損益", "報酬率(%)", "股價", "總成本"],
+                              default="今日損益", key="庫存排序")
+    方向 = b.segmented_control("順序", ["大→小", "小→大"], default="大→小", key="庫存順序")
+    明細 = 明細.sort_values(依據 or "今日損益", ascending=(方向 == "小→大"), na_position="last")
     st.dataframe(上色(明細), hide_index=True, width="stretch", height=35 * (len(明細) + 1) + 3)
+    st.caption("也可以直接點表格標題排序。")
     if 合計["缺報價"]:
         st.caption(f"以下代號暫時沒有報價，未計入合計：{'、'.join(合計['缺報價'])}（上櫃與 ETF 報價從下次每日更新開始提供）")
 
@@ -201,11 +247,20 @@ with 分頁[0]:
                        f"{最後['change']:+,.2f}  ({漲幅:+.2f}%)", 漲跌色(最後["change"])))
     卡們 += [
         卡片("資料日期", 最新日.strftime("%m/%d"), 最新日.strftime("%Y")),
+        卡片("成交金額", f"{今日['成交值億'].sum():,.0f}", "億元"),
         卡片("上漲家數", f"{上漲}", "▲", 紅),
         卡片("下跌家數", f"{下跌}", "▼", 綠),
-        卡片("成交金額", f"{今日['成交值億'].sum():,.0f}", "億元"),
     ]
-    卡片列(卡們)
+    匯率 = engine.讀取匯率()
+    if 匯率 is not None and len(匯率) >= 2:
+        今, 昨 = 匯率["usdtwd"].iloc[-1], 匯率["usdtwd"].iloc[-2]
+        差 = 今 - 昨
+        # 美元兌台幣數字變小 = 台幣升值（紅），變大 = 台幣貶值（綠）
+        狀態, 色 = ("台幣升值 ▲", 紅) if 差 < 0 else (("台幣貶值 ▼", 綠) if 差 > 0 else ("持平", "#EDEDED"))
+        卡們.append(卡片(f"美元/台幣 · {匯率['date'].iloc[-1]:%m/%d}", f"{今:.3f}", f"{差:+.3f} {狀態}", 色))
+    else:
+        卡們.append(卡片("美元/台幣", "—", "下次更新後提供"))
+    卡片格(卡們)
 
     if 加權 is not None and len(加權) > 1:
         段落("TAIEX // 近一年")
@@ -215,18 +270,17 @@ with 分頁[0]:
         圖.update_yaxes(range=[近一年["close"].min() * 0.97, 近一年["close"].max() * 1.02])
         st.plotly_chart(圖表外觀(圖, 300), width="stretch")
 
-    欄 = ["代號", "名稱", "收盤", "漲跌幅", "成交值億"]
-    股票 = 今日[~今日["代號"].str.startswith("00")]
-    a, b, c = st.columns(3)
-    with a:
-        段落("TOP GAINERS // 漲幅前十")
-        st.dataframe(上色(股票.nlargest(10, "漲跌幅")[欄]), hide_index=True, width="stretch")
-    with b:
-        段落("TOP LOSERS // 跌幅前十")
-        st.dataframe(上色(股票.nsmallest(10, "漲跌幅")[欄]), hide_index=True, width="stretch")
-    with c:
-        段落("MOST ACTIVE // 成交值前十")
-        st.dataframe(上色(股票.nlargest(10, "成交值億")[欄]), hide_index=True, width="stretch")
+    段落("RANKING // 排行（前 20 檔，含上市櫃）")
+    排行 = engine.排行資料(今日, engine.讀取上櫃最新())
+    榜 = st.tabs(["漲幅排行", "跌幅排行", "成交量排行", "成交值排行"])
+    with 榜[0]:
+        排行表(排行.nlargest(20, "幅度"))
+    with 榜[1]:
+        排行表(排行.nsmallest(20, "幅度"))
+    with 榜[2]:
+        排行表(排行.nlargest(20, "張數"))
+    with 榜[3]:
+        排行表(排行.nlargest(20, "value"))
 
 # ---------- 02 選股 ----------
 with 分頁[1]:

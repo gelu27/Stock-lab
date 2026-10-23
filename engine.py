@@ -220,6 +220,25 @@ def 計算績效(曲線, 交易表, 基準):
 
 
 # ---------- 5. 我的庫存 ----------
+def 讀取匯率():
+    檔案 = 資料夾 / "fx.csv"
+    if not 檔案.exists():
+        return None
+    return pd.read_csv(檔案, parse_dates=["date"]).sort_values("date")
+
+
+def 排行資料(上市今日, 上櫃最新=None):
+    """合併上市與同一天的上櫃股票（不含 ETF），給排行榜用。"""
+    表 = 上市今日.rename(columns={"名稱": "name", "收盤": "close", "漲跌": "change"})
+    表 = 表[["date", "code", "name", "close", "change", "volume", "value"]].assign(市場="上市")
+    if 上櫃最新 is not None and 上櫃最新["date"].max() == 表["date"].max():
+        表 = pd.concat([表, 上櫃最新[表.columns.drop("市場")].assign(市場="上櫃")])
+    表 = 表[~表["code"].str.startswith("00") & (表["close"] > 0)].copy()
+    表["幅度"] = 表["change"] / (表["close"] - 表["change"]) * 100
+    表["張數"] = 表["volume"] / 1000
+    return 表
+
+
 def 讀取上櫃最新():
     檔案們 = sorted((資料夾 / "otc").glob("*.csv.gz"))
     if not 檔案們:

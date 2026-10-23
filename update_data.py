@@ -213,6 +213,43 @@ def 抓上櫃():
         print(f"上櫃 {日} 完成，{len(這天)} 檔")
 
 
+匯率檔 = 資料夾 / "fx.csv"
+
+
+def 抓匯率():
+    """美元兌台幣每日收盤匯率（數字變小代表台幣升值）。"""
+    新資料 = []
+    資料 = 下載("https://query1.finance.yahoo.com/v8/finance/chart/TWD=X?range=3mo&interval=1d")
+    try:
+        結果 = 資料["chart"]["result"][0]
+        for 時間, 收盤 in zip(結果["timestamp"], 結果["indicators"]["quote"][0]["close"]):
+            if 收盤:
+                日 = dt.datetime.fromtimestamp(時間, 台北時區).strftime("%Y-%m-%d")
+                新資料.append({"date": 日, "usdtwd": round(收盤, 4)})
+    except (TypeError, KeyError, IndexError):
+        print("Yahoo 匯率格式不符，改用臺灣銀行")
+    if not 新資料:
+        # 備用：臺灣銀行近 3 個月牌告（即期買入、賣出取中間價）
+        r = requests.get("https://rate.bot.com.tw/xrt/flcsv/0/L3M/USD", headers=標頭, timeout=30)
+        r.encoding = "utf-8-sig"
+        for 行 in r.text.splitlines()[1:]:
+            欄 = 行.split(",")
+            try:
+                新資料.append({"date": f"{欄[0][:4]}-{欄[0][4:6]}-{欄[0][6:8]}",
+                            "usdtwd": round((float(欄[4]) + float(欄[14])) / 2, 4)})
+            except (ValueError, IndexError):
+                continue
+    if not 新資料:
+        print("匯率下載失敗，略過")
+        return
+    表 = pd.DataFrame(新資料)
+    if 匯率檔.exists():
+        表 = pd.concat([pd.read_csv(匯率檔), 表])
+    表 = 表.drop_duplicates("date", keep="last").sort_values("date")
+    表.to_csv(匯率檔, index=False)
+    print(f"匯率完成，最新 {表.iloc[-1].to_dict()}")
+
+
 def main():
     參數 = argparse.ArgumentParser()
     參數.add_argument("--years", type=float, default=3, help="資料庫保留幾年")
@@ -264,10 +301,11 @@ def main():
         time.sleep(3)
     存檔(暫存, 指數們, 紀錄)
 
-    try:
-        抓上櫃()
-    except Exception as 錯誤:  # 上櫃資料出問題不影響上市資料庫
-        print(f"上櫃資料處理失敗：{錯誤}")
+    for 工作 in (抓上櫃, 抓匯率):  # 這兩項出問題不影響上市資料庫
+        try:
+            工作()
+        except Exception as 錯誤:
+            print(f"{工作.__name__} 失敗：{錯誤}")
 
     # 刪掉超過保留年限的舊資料
     for 檔案 in 行情資料夾.glob("*/*.csv.gz"):
