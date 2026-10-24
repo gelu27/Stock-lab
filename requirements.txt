@@ -5,3 +5,5 @@ plotly
 requests
 jinja2
 anthropic
+fpdf2
+matplotlib

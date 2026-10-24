@@ -122,6 +122,20 @@ def 讀取基本面():
     return 表
 
 
+def 讀取營收歷史(代號):
+    """這檔的月營收歷史（month、revenue 千元）。"""
+    表們 = []
+    for 名 in ("revenue_history.csv", "revenue.csv"):
+        f = 資料夾 / "fundamental" / 名
+        if f.exists():
+            t = pd.read_csv(f, dtype={"code": str})
+            if {"month", "revenue"} <= set(t.columns):
+                表們.append(t.loc[t["code"] == str(代號), ["month", "revenue"]])
+    if not 表們:
+        return None
+    return pd.concat(表們).dropna().drop_duplicates("month", keep="last").sort_values("month")
+
+
 def 單季損益(代號=None):
     """損益表是「今年累計」，換成單季的營收、毛利、營業利益與毛利率、營益率。"""
     f = 資料夾 / "fundamental" / "income.csv"
