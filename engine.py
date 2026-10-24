@@ -185,15 +185,17 @@ def 毛利率表():
     """每檔最新一季的單季毛利率，和上一季、去年同季比較（百分點）。"""
     t = 單季損益().dropna(subset=["毛利率"])
     if t.empty:
-        return pd.DataFrame(columns=["毛利率", "毛利率季度", "毛利率季增", "毛利率年增", "營益率"])
+        return pd.DataFrame(columns=["毛利率", "毛利率季度", "毛利率季增", "毛利率年增", "營益率", "營益率季增", "營益率年增"])
     t["序"] = t["年"].astype(int) * 4 + t["季"]
-    鍵 = t.set_index(["code", "序"])["毛利率"]
     最新 = t.groupby("code").tail(1).set_index("code")
-    上季 = 鍵.reindex(list(zip(最新.index, 最新["序"] - 1))).values
-    去年 = 鍵.reindex(list(zip(最新.index, 最新["序"] - 4))).values
-    return pd.DataFrame({"毛利率": 最新["毛利率"], "毛利率季度": 最新["quarter"],
-                         "毛利率季增": (最新["毛利率"] - 上季).round(2), "毛利率年增": (最新["毛利率"] - 去年).round(2),
-                         "營益率": 最新["營益率"]}, index=最新.index)
+    結果 = {"毛利率": 最新["毛利率"], "毛利率季度": 最新["quarter"], "營益率": 最新["營益率"]}
+    for 欄 in ("毛利率", "營益率"):
+        鍵 = t.set_index(["code", "序"])[欄]
+        上季 = 鍵.reindex(list(zip(最新.index, 最新["序"] - 1))).values
+        去年 = 鍵.reindex(list(zip(最新.index, 最新["序"] - 4))).values
+        結果[欄 + "季增"] = (最新[欄] - 上季).round(2)
+        結果[欄 + "年增"] = (最新[欄] - 去年).round(2)
+    return pd.DataFrame(結果, index=最新.index)
 
 
 def _近三季EPS(e):
