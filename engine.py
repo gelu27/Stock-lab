@@ -939,13 +939,20 @@ def AI分析Gemini(代號, 名稱, 數據摘要, api_key, 模型="gemini-flash-l
             "請用 Google 搜尋近六個月的新聞與法人報告後，依照指定格式彙整並給出投資建議。")}]}],
         "tools": [{"google_search": {}}],
     }
-    回應 = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{模型}:generateContent",
-                         headers={"x-goog-api-key": api_key}, json=內容, timeout=300)
+    網址 = f"https://generativelanguage.googleapis.com/v1beta/models/{模型}:generateContent"
+    回應 = requests.post(網址, headers={"x-goog-api-key": api_key}, json=內容, timeout=300)
+    if 回應.status_code == 429:
+        # 免費額度不含 Google 搜尋：改成只根據我們抓到的新聞標題彙整
+        內容.pop("tools")
+        內容["contents"][0]["parts"][0]["text"] += "\n\n（這次無法上網搜尋，請只根據上面提供的新聞標題與數據分析，並在結論註明。）"
+        回應 = requests.post(網址, headers={"x-goog-api-key": api_key}, json=內容, timeout=300)
     if 回應.status_code != 200:
         try:
             訊息 = 回應.json()["error"]["message"]
         except Exception:
             訊息 = 回應.text[:200]
+        if 回應.status_code == 429:
+            訊息 = "今天的 Gemini 免費額度用完了，明天再試。"
         raise RuntimeError(f"Gemini 回應錯誤（{回應.status_code}）：{訊息}")
     候選 = (回應.json().get("candidates") or [{}])[0]
     文字 = "".join(p.get("text", "") for p in (候選.get("content") or {}).get("parts", [])).strip()
