@@ -252,6 +252,11 @@ def 點選表(表, 樣式, key, **參數):
             前往(表.iloc[列們[0]]["代號"])
     st.dataframe(樣式, key=key, on_select=點了, selection_mode="single-row", hide_index=True, width="stretch", **參數)
 
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=100)
+def 抓新聞(代號, 名稱):
+    return engine.個股新聞(代號, 名稱)
+
+
 @st.cache_resource
 def AI用量():
     """全站每日 AI 分析次數（避免網站公開時被一直按）。"""
@@ -259,8 +264,9 @@ def AI用量():
 
 
 @st.cache_data(ttl=12 * 3600, show_spinner=False, max_entries=50)
-def AI分析快取(代號, 名稱, 日期, 摘要, _金鑰, 模型):
-    return engine.AI分析(代號, 名稱, 摘要, _金鑰, 模型)
+def AI分析快取(代號, 名稱, 日期, 摘要, _金鑰, 引擎, 模型):
+    函式 = engine.AI分析Gemini if 引擎 == "Gemini" else engine.AI分析
+    return 函式(代號, 名稱, 摘要, _金鑰, 模型)
 
 
 # ---------- 01 市場總覽 ----------
@@ -788,19 +794,52 @@ if 頁面 == 頁面們[1]:
     圖.update_annotations(font=dict(size=11, color=灰), x=0, xanchor="left")
     st.plotly_chart(圖表外觀(圖, 380 + 150 * len(指標們)), width="stretch")
 
+    段落("OUTLOOK // 綜合判讀（依數據規則，免費）")
+    判 = engine.規則判讀(r)
+    卡片格([卡片("綜合分數", f"{判['分數']:+d}", 判["看法"], 紅 if 判["分數"] >= 30 else (綠 if 判["分數"] <= -30 else 灰)),
+           卡片("利多因素", f"{len(判['利多'])} 項", "", 紅), 卡片("利空因素", f"{len(判['利空'])} 項", "", 綠)])
+    a, b = st.columns(2)
+    a.markdown("**🔴 利多**\n" + ("".join(f"\n- {x}" for x in 判["利多"]) or "\n- 無"))
+    b.markdown("**🟢 利空**\n" + ("".join(f"\n- {x}" for x in 判["利空"]) or "\n- 無"))
+    st.caption("分數 = 利多權重 − 利空權重，換算成 −100 ~ +100；+30 以上偏多、−30 以下偏空。只看數據，不含新聞內容。")
+
+    段落("NEWS // 近半年新聞")
+    try:
+        新聞 = 抓新聞(代號, r["名稱"])
+    except Exception:
+        新聞 = None
+    if 新聞 is None:
+        st.caption("暫時抓不到新聞，稍後再試。")
+    elif 新聞.empty:
+        st.caption("近半年沒有找到相關新聞。")
+    else:
+        新聞["情緒"] = 新聞["標題"].map(engine.新聞情緒)
+        計 = 新聞["情緒"].value_counts()
+        st.caption(f"共 {len(新聞)} 則：標題偏多 {計.get('利多', 0)}、偏空 {計.get('利空', 0)}、中性 {計.get('中性', 0)}"
+                   "（依標題關鍵字粗略判斷，請點開原文確認）")
+        圖示 = {"利多": "🔴", "利空": "🟢", "中性": "⚪"}
+        列 = lambda x: f"- `{x['日期']:%m/%d}` {圖示[x['情緒']]} [{x['標題']}]({x['連結']}) · {x['來源']}"
+        st.markdown("\n".join(列(x) for _, x in 新聞.head(15).iterrows()))
+        if len(新聞) > 15:
+            with st.expander(f"更多新聞（{len(新聞) - 15}）"):
+                st.markdown("\n".join(列(x) for _, x in 新聞.iloc[15:].iterrows()))
+
     段落("AI // 新聞彙整與投資觀點")
     try:
         設定 = dict(st.secrets)
     except Exception:
         設定 = {}
-    金鑰 = str(設定.get("ANTHROPIC_API_KEY", "")).strip()
+    if str(設定.get("GEMINI_API_KEY", "")).strip():
+        引擎, 金鑰, 模型 = "Gemini", str(設定["GEMINI_API_KEY"]).strip(), str(設定.get("GEMINI_MODEL", "gemini-flash-latest"))
+    else:
+        引擎, 金鑰, 模型 = "Claude", str(設定.get("ANTHROPIC_API_KEY", "")).strip(), str(設定.get("AI_MODEL", "claude-opus-5-5"))
     密碼 = str(設定.get("password", ""))
     if not 金鑰:
         st.info("AI 會上網搜尋這檔股票近半年的新聞與法人報告，彙整後給出短、中期看法。"
-                "要啟用，請到 console.anthropic.com 申請 API 金鑰，貼到 Streamlit 的 App settings →「Secrets」："
-                '`ANTHROPIC_API_KEY = "sk-ant-..."`')
+                "要啟用，請到 aistudio.google.com 申請 Gemini API 金鑰（有免費額度），"
+                "貼到 Streamlit 的 App settings →「Secrets」：`GEMINI_API_KEY = \"你的金鑰\"`")
     elif 密碼 and not st.session_state.get("已解鎖"):
-        st.caption("AI 分析會花費 API 費用，請先在 01 市場總覽的庫存區輸入密碼解鎖。")
+        st.caption("AI 分析會用到你的 API 額度，請先在 01 市場總覽的庫存區輸入密碼解鎖。")
     else:
         今天 = 最新日.strftime("%Y-%m-%d")
         摘要 = "\n".join([
@@ -817,8 +856,8 @@ if 頁面 == 頁面們[1]:
             f"20 日漲幅 {數(r['20日漲幅'], '{:+.2f}', '%')}，距 52 週高點 {數(r['距52週高點'], '{:+.1f}', '%')}",
             f"- 符合的烏賊策略：{'、'.join(符合) or '無'}",
         ])
-        st.caption("AI 會搜尋近半年新聞與券商報告摘要（完整報告多需付費，只能看到新聞引述），"
-                   "每次約需 1–2 分鐘、API 費用約新台幣 10–20 元；同一檔同一天只算一次。")
+        st.caption(f"使用 {引擎}。AI 會搜尋近半年新聞與券商報告摘要（完整報告多需付費，只能看到新聞引述），"
+                   "每次約需 1 分鐘；同一檔同一天只跑一次。")
         鍵 = (代號, 今天)
         已做 = st.session_state.setdefault("AI結果", {})
         if 鍵 not in 已做 and st.button(f"✨ 產生 {代號} {r['名稱']} 的 AI 分析", key="AI按鈕"):
@@ -828,8 +867,7 @@ if 頁面 == 頁面們[1]:
             else:
                 with st.spinner("AI 搜尋與整理中，約 1–2 分鐘…"):
                     try:
-                        已做[鍵] = AI分析快取(代號, r["名稱"], 今天, 摘要, 金鑰,
-                                         str(設定.get("AI_MODEL", "claude-opus-5-5")))
+                        已做[鍵] = AI分析快取(代號, r["名稱"], 今天, 摘要, 金鑰, 引擎, 模型)
                         用量[今天] = 用量.get(今天, 0) + 1
                     except Exception as 錯:
                         st.error(f"AI 分析失敗：{錯}")

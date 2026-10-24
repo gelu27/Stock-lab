@@ -831,3 +831,129 @@ def AI分析(代號, 名稱, 數據摘要, api_key, 模型="claude-opus-5-5", �
     if not 文字:
         raise RuntimeError("AI 沒有產生內容，請稍後再試。")
     return 文字, list(來源.items())
+
+
+# ========== 10. 免費版：新聞清單與規則判讀 ==========
+def 個股新聞(代號, 名稱, 天數=180, 筆數=60):
+    """從 Google 新聞 RSS 抓近半年新聞（標題、來源、日期、連結），新到舊排序。"""
+    import requests
+    import xml.etree.ElementTree as ET
+
+    回應 = requests.get("https://news.google.com/rss/search", timeout=20, headers={"User-Agent": "Mozilla/5.0"},
+                        params={"q": f"{名稱} {代號} when:{天數}d", "hl": "zh-TW", "gl": "TW", "ceid": "TW:zh-Hant"})
+    回應.raise_for_status()
+    列們 = []
+    for 項 in ET.fromstring(回應.content).iter("item"):
+        標題 = 項.findtext("title") or ""
+        來源 = 項.findtext("source") or ""
+        if 來源 and 標題.endswith(" - " + 來源):
+            標題 = 標題[: -len(來源) - 3]
+        列們.append({"日期": pd.to_datetime(項.findtext("pubDate"), errors="coerce", utc=True),
+                    "標題": 標題, "來源": 來源, "連結": 項.findtext("link") or ""})
+    表 = pd.DataFrame(列們, columns=["日期", "標題", "來源", "連結"])
+    if 表.empty:
+        return 表
+    表["日期"] = 表["日期"].dt.tz_convert("Asia/Taipei").dt.tz_localize(None)
+    return 表.drop_duplicates("標題").sort_values("日期", ascending=False).head(筆數).reset_index(drop=True)
+
+
+新聞關鍵字 = {
+    "利多": ["創新高", "新高", "成長", "大增", "看好", "調升", "上修", "買進", "優於預期", "超預期", "接單", "擴產",
+            "漲停", "轉盈", "獲利", "加碼", "目標價上調", "強勁", "旺"],
+    "利空": ["衰退", "下滑", "大減", "看淡", "調降", "下修", "賣出", "低於預期", "虧損", "轉虧", "跌停", "減碼",
+            "目標價下調", "疲弱", "砍單", "利空", "裁員", "違約", "淡"],
+}
+
+
+def 新聞情緒(標題):
+    多 = sum(k in 標題 for k in 新聞關鍵字["利多"])
+    空 = sum(k in 標題 for k in 新聞關鍵字["利空"])
+    return "利多" if 多 > 空 else ("利空" if 空 > 多 else "中性")
+
+
+def 規則判讀(r):
+    """用資料庫數據列出利多、利空因素與綜合分數（-100 ~ +100）。r 是今日表的一列。"""
+    多, 空 = [], []
+
+    def 看(條件, 分, 文字, 清單):
+        if 條件:
+            清單.append((分, 文字))
+
+    def g(k):
+        v = r.get(k, np.nan)
+        return np.nan if v is None or isinstance(v, str) else v
+    有 = lambda v: pd.notna(v)
+    收 = g("收盤")
+    比 = 收 / g("還原價") if g("還原價") else 1
+    # 技術面
+    for n, 分 in ((20, 10), (60, 10)):
+        線 = g(f"MA{n}") * 比
+        if 有(線):
+            看(收 >= 線, 分, f"站上 {n} 日線（{線:.2f}）", 多)
+            看(收 < 線, 分, f"跌破 {n} 日線（{線:.2f}）", 空)
+    看(有(g("MA5")) and 有(g("MA20")) and 有(g("MA60")) and g("MA5") > g("MA20") > g("MA60"), 10, "均線多頭排列", 多)
+    看(有(g("MA5")) and 有(g("MA20")) and 有(g("MA60")) and g("MA5") < g("MA20") < g("MA60"), 10, "均線空頭排列", 空)
+    看(g("RSI") > 80, 5, f"RSI {g('RSI'):.0f} 過熱，留意拉回", 空)
+    看(g("RSI") < 25, 5, f"RSI {g('RSI'):.0f} 超賣，可能反彈", 多)
+    看(g("距52週高點") > -5, 5, "接近 52 週高點，股價強勢", 多)
+    看(g("距52週高點") < -35, 5, f"距 52 週高點 {g('距52週高點'):.0f}%，仍在弱勢區", 空)
+    看(g("量比") >= 2 and g("漲跌幅") > 0, 5, f"價漲量增（量為 20 日均量 {g('量比'):.1f} 倍）", 多)
+    看(g("量比") >= 2 and g("漲跌幅") < 0, 5, f"價跌量增（量為 20 日均量 {g('量比'):.1f} 倍）", 空)
+    # 基本面
+    營 = g("營收年增率")
+    看(營 >= 20, 10, f"月營收年增 {營:.1f}%", 多)
+    看(營 <= -10, 10, f"月營收年減 {abs(營):.1f}%", 空)
+    看(g("累計營收年增率") >= 10, 5, f"今年累計營收年增 {g('累計營收年增率'):.1f}%", 多)
+    看(g("累計營收年增率") <= -10, 5, f"今年累計營收年減 {abs(g('累計營收年增率')):.1f}%", 空)
+    看(r.get("營收創新高") == True, 10, "月營收創歷史新高", 多)
+    看(g("近三季EPS") < 0, 10, "近三季 EPS 合計虧損", 空)
+    看(0 < g("本益比") <= 12, 5, f"本益比 {g('本益比'):.1f} 偏低", 多)
+    看(g("本益比") >= 40, 5, f"本益比 {g('本益比'):.1f} 偏高", 空)
+    看(g("殖利率") >= 5, 5, f"殖利率 {g('殖利率'):.1f}%", 多)
+    # 籌碼面
+    看(g("外資連買") >= 3, 10, f"外資連買 {g('外資連買'):.0f} 天", 多)
+    看(g("投信連買") >= 3, 10, f"投信連買 {g('投信連買'):.0f} 天", 多)
+    法 = g("法人10日買超")
+    if 有(法) and 有(g("5日均量")) and g("5日均量") > 0:
+        佔 = 法 / g("5日均量")  # 法人 10 日買超相當於幾天的成交量
+        看(佔 >= 1, 10, f"法人 10 日買超 {法:,.0f} 張", 多)
+        看(佔 <= -1, 10, f"法人 10 日賣超 {abs(法):,.0f} 張", 空)
+    看(g("融資5日增減") >= 10 and g("20日漲幅") < 0, 5, f"股價跌但融資 5 日增 {g('融資5日增減'):.0f}%，籌碼凌亂", 空)
+
+    分數 = sum(s for s, _ in 多) - sum(s for s, _ in 空)
+    總 = sum(s for s, _ in 多) + sum(s for s, _ in 空)
+    分數 = round(分數 / 總 * 100) if 總 else 0
+    看法 = "偏多" if 分數 >= 30 else ("偏空" if 分數 <= -30 else "中性")
+    return {"分數": 分數, "看法": 看法, "利多": [t for _, t in 多], "利空": [t for _, t in 空]}
+
+
+def AI分析Gemini(代號, 名稱, 數據摘要, api_key, 模型="gemini-flash-latest"):
+    """改用 Google Gemini（Google 搜尋）做同樣的彙整。回傳 (Markdown 內文, 來源清單)。"""
+    import requests
+
+    今天 = pd.Timestamp.now(tz="Asia/Taipei").strftime("%Y-%m-%d")
+    內容 = {
+        "systemInstruction": {"parts": [{"text": AI系統提示}]},
+        "contents": [{"role": "user", "parts": [{"text": (
+            f"今天是 {今天}。請分析台股 {代號} {名稱}。\n\n以下是我資料庫裡的最新數據：\n{數據摘要}\n\n"
+            "請用 Google 搜尋近六個月的新聞與法人報告後，依照指定格式彙整並給出投資建議。")}]}],
+        "tools": [{"google_search": {}}],
+    }
+    回應 = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{模型}:generateContent",
+                         headers={"x-goog-api-key": api_key}, json=內容, timeout=300)
+    if 回應.status_code != 200:
+        try:
+            訊息 = 回應.json()["error"]["message"]
+        except Exception:
+            訊息 = 回應.text[:200]
+        raise RuntimeError(f"Gemini 回應錯誤（{回應.status_code}）：{訊息}")
+    候選 = (回應.json().get("candidates") or [{}])[0]
+    文字 = "".join(p.get("text", "") for p in (候選.get("content") or {}).get("parts", [])).strip()
+    if not 文字:
+        raise RuntimeError(f"Gemini 沒有產生內容（{候選.get('finishReason', '未知原因')}），請稍後再試。")
+    來源 = {}
+    for 塊 in (候選.get("groundingMetadata") or {}).get("groundingChunks", []):
+        網 = 塊.get("web") or {}
+        if 網.get("uri") and 網["uri"] not in 來源:
+            來源[網["uri"]] = 網.get("title") or 網["uri"]
+    return 文字, list(來源.items())
