@@ -770,3 +770,64 @@ def 讀取內部人(代號):
     表 = pd.read_csv(f, dtype={"code": str})
     表 = 表[表["code"] == str(代號)].sort_values("month")
     return 表 if len(表) else None
+
+
+# ========== 9. AI 新聞彙整與投資觀點 ==========
+AI系統提示 = """你是台灣股市的研究助理，替一位個人投資者整理單一個股的市場資訊。
+請一律使用繁體中文（台灣用語）。
+
+工作方式：
+1. 用網路搜尋找這家公司近六個月的資訊：新聞、月營收與財報、法說會重點、
+   券商或投顧的研究報告與目標價（多半只能看到新聞引述的摘要）、產業動態、重大訊息。
+   優先採用鉅亨網、經濟日報、工商時報、MoneyDJ、公開資訊觀測站等可靠來源，並注意日期，舊聞不要當新聞。
+2. 結合使用者提供的最新股價、基本面、籌碼與技術面數據（這些數據是正確的，以它為準）。
+3. 輸出 Markdown，依序包含以下段落（用 ### 標題）：
+   ### 一句話結論
+   ### 近半年重要消息（依時間由新到舊，條列，每條註明月份）
+   ### 法人與券商觀點（目標價、評等；找不到就說找不到，不要編造）
+   ### 利多因素
+   ### 利空與風險
+   ### 數據面解讀（基本面、籌碼、技術面）
+   ### 投資建議（短線 1 個月內、中期 3–6 個月各一段，給出偏多/中性/偏空的看法，
+       以及可參考的支撐、壓力或停損價位，說明理由）
+4. 不確定的事要說不確定；沒有來源支持的數字不要寫。
+5. 最後一行寫：「以上為 AI 彙整的公開資訊，僅供參考，不構成投資建議。」"""
+
+
+def AI分析(代號, 名稱, 數據摘要, api_key, 模型="claude-opus-5-5", 搜尋次數=8):
+    """請 Claude 上網搜尋近半年新聞與法人報告，彙整後給出觀點。回傳 (Markdown 內文, 來源清單)。"""
+    import anthropic
+
+    客戶端 = anthropic.Anthropic(api_key=api_key)
+    今天 = (pd.Timestamp.now(tz="Asia/Taipei")).strftime("%Y-%m-%d")
+    訊息們 = [{"role": "user", "content": (
+        f"今天是 {今天}。請分析台股 {代號} {名稱}。\n\n"
+        f"以下是我資料庫裡的最新數據：\n{數據摘要}\n\n"
+        "請搜尋近六個月的新聞與法人報告後，依照指定格式彙整並給出投資建議。")}]
+    參數 = dict(
+        model=模型, max_tokens=16000, system=AI系統提示,
+        betas=["server-side-fallback-2026-07-01"], fallbacks="default",
+        thinking={"type": "adaptive"}, output_config={"effort": "medium"},
+        tools=[{"type": "web_search_20260209", "name": "web_search", "max_uses": 搜尋次數,
+                "user_location": {"type": "approximate", "country": "TW", "timezone": "Asia/Taipei"}}],
+    )
+    for _ in range(5):
+        回應 = 客戶端.beta.messages.create(messages=訊息們, **參數)
+        if 回應.stop_reason != "pause_turn":  # 搜尋太久會暫停，接著送回去讓它繼續
+            break
+        訊息們 = 訊息們 + [{"role": "assistant", "content": 回應.content}]
+    if 回應.stop_reason == "refusal":
+        raise RuntimeError("AI 拒絕回答這個請求，請換一檔或稍後再試。")
+
+    內文, 來源 = [], {}
+    for 區塊 in 回應.content:
+        if 區塊.type == "text":
+            內文.append(區塊.text)
+            for 引用 in getattr(區塊, "citations", None) or []:
+                網址 = getattr(引用, "url", None)
+                if 網址 and 網址 not in 來源:
+                    來源[網址] = getattr(引用, "title", None) or 網址
+    文字 = "".join(內文).strip()
+    if not 文字:
+        raise RuntimeError("AI 沒有產生內容，請稍後再試。")
+    return 文字, list(來源.items())

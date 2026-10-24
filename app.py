@@ -252,6 +252,17 @@ def 點選表(表, 樣式, key, **參數):
             前往(表.iloc[列們[0]]["代號"])
     st.dataframe(樣式, key=key, on_select=點了, selection_mode="single-row", hide_index=True, width="stretch", **參數)
 
+@st.cache_resource
+def AI用量():
+    """全站每日 AI 分析次數（避免網站公開時被一直按）。"""
+    return {}
+
+
+@st.cache_data(ttl=12 * 3600, show_spinner=False, max_entries=50)
+def AI分析快取(代號, 名稱, 日期, 摘要, _金鑰, 模型):
+    return engine.AI分析(代號, 名稱, 摘要, _金鑰, 模型)
+
+
 # ---------- 01 市場總覽 ----------
 def 我的庫存():
     """庫存放在 Streamlit 的 Secrets（不會出現在公開的 GitHub）。"""
@@ -776,6 +787,58 @@ if 頁面 == 頁面們[1]:
         圖.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
     圖.update_annotations(font=dict(size=11, color=灰), x=0, xanchor="left")
     st.plotly_chart(圖表外觀(圖, 380 + 150 * len(指標們)), width="stretch")
+
+    段落("AI // 新聞彙整與投資觀點")
+    try:
+        設定 = dict(st.secrets)
+    except Exception:
+        設定 = {}
+    金鑰 = str(設定.get("ANTHROPIC_API_KEY", "")).strip()
+    密碼 = str(設定.get("password", ""))
+    if not 金鑰:
+        st.info("AI 會上網搜尋這檔股票近半年的新聞與法人報告，彙整後給出短、中期看法。"
+                "要啟用，請到 console.anthropic.com 申請 API 金鑰，貼到 Streamlit 的 App settings →「Secrets」："
+                '`ANTHROPIC_API_KEY = "sk-ant-..."`')
+    elif 密碼 and not st.session_state.get("已解鎖"):
+        st.caption("AI 分析會花費 API 費用，請先在 01 市場總覽的庫存區輸入密碼解鎖。")
+    else:
+        今天 = 最新日.strftime("%Y-%m-%d")
+        摘要 = "\n".join([
+            f"- 資料日期 {今天}，收盤 {數(r['收盤'])}，漲跌 {r['漲跌幅']:+.2f}%，產業 {r.get('產業') or '—'}，"
+            f"股本 {數(r.get('股本億'), '{:,.1f}', ' 億')}，市值 {數(股數 * r['收盤'] / 1e8 if pd.notna(股數) else np.nan, '{:,.0f}', ' 億')}",
+            f"- 本益比 {數(r['本益比'])}，殖利率 {數(r['殖利率'], 尾='%')}，股價淨值比 {數(r['淨值比'])}，"
+            f"今年累計 EPS {數(r.get('EPS'))}（{r.get('EPS季度') or ''}），近三季 EPS {數(r.get('近三季EPS'))}",
+            f"- 月營收（{r.get('營收月份') or ''}）年增 {數(營收, 尾='%')}，月增 {數(r.get('營收月增率'), 尾='%')}，"
+            f"累計年增 {數(r.get('累計營收年增率'), 尾='%')}" + ("，創歷史新高" if r.get("營收創新高") == True else ""),
+            (f"- 外資 {數(r['外資買超'], '{:+,.0f}')} 張、投信 {數(r['投信買超'], '{:+,.0f}')} 張、"
+             f"法人 10 日合計 {數(r['法人10日買超'], '{:+,.0f}')} 張，融資 5 日 {數(r['融資5日增減'], '{:+.1f}', '%')}"
+             if 有籌碼 else "- 無籌碼資料"),
+            f"- 5/10/20/60 日線 {' / '.join(數(v) for v in 均線.values())}，RSI {數(r['RSI'], '{:.1f}')}，"
+            f"20 日漲幅 {數(r['20日漲幅'], '{:+.2f}', '%')}，距 52 週高點 {數(r['距52週高點'], '{:+.1f}', '%')}",
+            f"- 符合的烏賊策略：{'、'.join(符合) or '無'}",
+        ])
+        st.caption("AI 會搜尋近半年新聞與券商報告摘要（完整報告多需付費，只能看到新聞引述），"
+                   "每次約需 1–2 分鐘、API 費用約新台幣 10–20 元；同一檔同一天只算一次。")
+        鍵 = (代號, 今天)
+        已做 = st.session_state.setdefault("AI結果", {})
+        if 鍵 not in 已做 and st.button(f"✨ 產生 {代號} {r['名稱']} 的 AI 分析", key="AI按鈕"):
+            用量 = AI用量()
+            if 用量.get(今天, 0) >= int(設定.get("AI_DAILY_LIMIT", 20)):
+                st.warning("今天的 AI 分析次數已達上限，明天再試。")
+            else:
+                with st.spinner("AI 搜尋與整理中，約 1–2 分鐘…"):
+                    try:
+                        已做[鍵] = AI分析快取(代號, r["名稱"], 今天, 摘要, 金鑰,
+                                         str(設定.get("AI_MODEL", "claude-opus-5-5")))
+                        用量[今天] = 用量.get(今天, 0) + 1
+                    except Exception as 錯:
+                        st.error(f"AI 分析失敗：{錯}")
+        if 鍵 in 已做:
+            文字, 來源 = 已做[鍵]
+            st.markdown(文字)
+            if 來源:
+                with st.expander(f"參考來源（{len(來源)}）"):
+                    st.markdown("\n".join(f"- [{標題}]({網址})" for 網址, 標題 in 來源))
 
 st.markdown(f'<div class="sub" style="color:{灰};font-family:JetBrains Mono;font-size:11px;margin-top:30px">'
             '僅供個人研究，不構成投資建議 // DATA: TWSE · TPEx</div>', unsafe_allow_html=True)
