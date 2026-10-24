@@ -115,7 +115,46 @@ def 讀取基本面():
     if f.exists():
         c = pd.read_csv(f, dtype={"code": str}).drop_duplicates("code", keep="last").set_index("code")
         表 = _股本表() if 表 is None else 表.join(_股本表(), how="outer")
+    f = 資料夾 / "fundamental" / "income.csv"
+    if f.exists():
+        m = 毛利率表()
+        表 = m if 表 is None else 表.join(m, how="outer")
     return 表
+
+
+def 單季損益(代號=None):
+    """損益表是「今年累計」，換成單季的營收、毛利、營業利益與毛利率、營益率。"""
+    f = 資料夾 / "fundamental" / "income.csv"
+    if not f.exists():
+        return pd.DataFrame()
+    t = pd.read_csv(f, dtype={"code": str})
+    if 代號 is not None:
+        t = t[t["code"] == str(代號)]
+    t = t.dropna(subset=["revenue", "gross"]).sort_values(["code", "quarter"]).copy()
+    t["年"], t["季"] = t["quarter"].str[:4], t["quarter"].str[-1].astype(int)
+    前季號 = t.groupby(["code", "年"])["季"].shift()
+    for k in ("revenue", "gross", "opinc"):
+        前 = t.groupby(["code", "年"])[k].shift()
+        t[k + "_q"] = np.where(t["季"] == 1, t[k], np.where(前季號 == t["季"] - 1, t[k] - 前, np.nan))
+    有效 = t["revenue_q"] > 0
+    t["毛利率"] = np.where(有效, t["gross_q"] / t["revenue_q"] * 100, np.nan).round(2)
+    t["營益率"] = np.where(有效, t["opinc_q"] / t["revenue_q"] * 100, np.nan).round(2)
+    return t
+
+
+def 毛利率表():
+    """每檔最新一季的單季毛利率，和上一季、去年同季比較（百分點）。"""
+    t = 單季損益().dropna(subset=["毛利率"])
+    if t.empty:
+        return pd.DataFrame(columns=["毛利率", "毛利率季度", "毛利率季增", "毛利率年增", "營益率"])
+    t["序"] = t["年"].astype(int) * 4 + t["季"]
+    鍵 = t.set_index(["code", "序"])["毛利率"]
+    最新 = t.groupby("code").tail(1).set_index("code")
+    上季 = 鍵.reindex(list(zip(最新.index, 最新["序"] - 1))).values
+    去年 = 鍵.reindex(list(zip(最新.index, 最新["序"] - 4))).values
+    return pd.DataFrame({"毛利率": 最新["毛利率"], "毛利率季度": 最新["quarter"],
+                         "毛利率季增": (最新["毛利率"] - 上季).round(2), "毛利率年增": (最新["毛利率"] - 去年).round(2),
+                         "營益率": 最新["營益率"]}, index=最新.index)
 
 
 def _近三季EPS(e):
@@ -796,7 +835,11 @@ AI系統提示 = """你是台灣股市的研究助理，替一位個人投資者
    ### 投資建議（短線 1 個月內、中期 3–6 個月各一段，給出偏多/中性/偏空的看法，
        以及可參考的支撐、壓力或停損價位，說明理由）
 4. 不確定的事要說不確定；沒有來源支持的數字不要寫。
-5. 最後一行寫：「以上為 AI 彙整的公開資訊，僅供參考，不構成投資建議。」"""
+5. 報告最後寫：「以上為 AI 彙整的公開資訊，僅供參考，不構成投資建議。」
+6. 在最後面另外附上一個 ```json 程式碼區塊，整理成網站卡片用的資料（數字填純數字，不知道填 null）：
+   {"看法": "偏多/中性/偏空", "一句話": "30 字內結論", "短線": "偏多/中性/偏空", "中期": "偏多/中性/偏空",
+    "券商目標價": 數字, "目標價保守": 數字, "目標價合理": 數字, "目標價樂觀": 數字,
+    "今年EPS": 數字, "明年EPS": 數字, "預估本益比": 數字, "支撐": 數字, "壓力": 數字, "停損": 數字}"""
 
 
 def AI分析(代號, 名稱, 數據摘要, api_key, 模型="claude-opus-5-5", 搜尋次數=8):
@@ -836,6 +879,26 @@ def AI分析(代號, 名稱, 數據摘要, api_key, 模型="claude-opus-5-5", �
     if not 文字:
         raise RuntimeError("AI 沒有產生內容，請稍後再試。")
     return 文字, list(來源.items())
+
+
+def 拆解AI建議(文字):
+    """把報告最後的 json 區塊拆出來做卡片；回傳 (給人看的內文, 建議 dict 或 None)。舊報告沒有 json 就只抓一句話結論。"""
+    import json, re
+    建議 = None
+    配 = re.search(r"```json\s*(\{.*?\})\s*```", 文字, re.S)
+    if 配:
+        try:
+            建議 = json.loads(配.group(1))
+        except Exception:
+            建議 = None
+        文字 = (文字[: 配.start()] + 文字[配.end():]).strip()
+    if 建議 is None:
+        結 = re.search(r"###\s*一句話結論\s*\n+(.+?)(?:\n\s*\n|\n#|$)", 文字, re.S)
+        if 結:
+            一句 = 結.group(1).strip()
+            看法 = next((k for k in ("偏多", "偏空", "中性") if k in 一句), None)
+            建議 = {"一句話": 一句, "看法": 看法}
+    return 文字, 建議
 
 
 # ========== 9-1. AI 報告紀錄（存到 GitHub 的 ai-reports 分支，網站重啟也不會消失） ==========

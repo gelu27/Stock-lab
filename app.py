@@ -98,7 +98,7 @@ def 排行表(表):
         elif r["幅度"] <= -9.5:
             底 = f"background:#006B3C;color:#FFF"
         列們.append(
-            f'<tr><td class="n"><a href="?s={r["code"]}" target="_self">{r["name"]}<small>{r["code"]}</small></a></td>'
+            f'<tr><td class="n"><a href="?s={r["code"]}{登入參數()}" target="_self">{r["name"]}<small>{r["code"]}</small></a></td>'
             f'<td style="{底 or "color:" + 色}">{r["close"]:,.2f}</td>'
             f'<td style="color:{色}">{r["change"]:+,.2f}</td>'
             f'<td style="color:{色}">{r["幅度"]:+.2f}%</td>'
@@ -235,6 +235,44 @@ def 前往(代號):
         st.session_state["要跳轉"] = True
 
 
+def _密碼():
+    try:
+        return str(st.secrets.get("password", ""))
+    except Exception:
+        return ""
+
+
+def 登入憑證(天數=None):
+    """密碼通過後發一張有期限的通行證放在網址（?k=...），重新整理或點排行榜連結都不用再輸入密碼。"""
+    try:
+        天數 = 天數 or int(st.secrets.get("LOGIN_DAYS", 30))
+    except Exception:
+        天數 = 30
+    到期 = int(dt.datetime.now().timestamp()) + 天數 * 86400
+    簽 = hmac.new(_密碼().encode(), str(到期).encode(), "sha256").hexdigest()[:24]
+    return f"{到期}.{簽}"
+
+
+def 憑證有效(k):
+    try:
+        到期, 簽 = str(k).split(".")
+        對 = hmac.new(_密碼().encode(), 到期.encode(), "sha256").hexdigest()[:24]
+        return bool(_密碼()) and hmac.compare_digest(簽, 對) and int(到期) > dt.datetime.now().timestamp()
+    except Exception:
+        return False
+
+
+def 登入參數():
+    k = st.query_params.get("k")
+    return f"&k={k}" if k and st.session_state.get("已解鎖") else ""
+
+
+if "k" in st.query_params:
+    if 憑證有效(st.query_params["k"]):
+        st.session_state["已解鎖"] = True
+    else:
+        del st.query_params["k"]
+
 if "s" in st.query_params:  # 排行榜的連結：?s=2330
     前往(st.query_params["s"])
     del st.query_params["s"]
@@ -272,6 +310,24 @@ def AI紀錄快取(代號, _權杖):
     return engine.讀取AI紀錄(代號, 設定)
 
 
+def 毛利卡片(r):
+    """單季毛利率、營益率，並標出比上一季、去年同季是提升還是降低。"""
+    if pd.isna(r.get("毛利率", np.nan)):
+        return []
+    def 變化(v, 名):
+        if pd.isna(v):
+            return f"{名} —"
+        return f"{名} {'▲ 提升' if v > 0 else ('▼ 降低' if v < 0 else '持平')} {abs(v):.1f} 個百分點"
+    季增, 年增 = r.get("毛利率季增"), r.get("毛利率年增")
+    主 = 季增 if pd.notna(季增) else (年增 if pd.notna(年增) else 0)
+    季度 = str(r.get("毛利率季度") or "")
+    return [
+        卡片(f"毛利率 · {季度[:4]} Q{季度[-1:]}", f"{r['毛利率']:.1f}%",
+             變化(季增, "較上季") + "<br>" + 變化(年增, "較去年同季"), 漲跌色(主)),
+        卡片("營業利益率", f"{r['營益率']:.1f}%" if pd.notna(r.get("營益率")) else "—", "單季"),
+    ]
+
+
 # ---------- 01 市場總覽 ----------
 def 我的庫存():
     """庫存放在 Streamlit 的 Secrets（不會出現在公開的 GitHub）。"""
@@ -289,6 +345,7 @@ def 我的庫存():
         輸入 = st.text_input("輸入密碼查看庫存", type="password")
         if 輸入 and hmac.compare_digest(輸入, 密碼):
             st.session_state["已解鎖"] = True
+            st.query_params["k"] = 登入憑證()
             st.rerun()
         elif 輸入:
             st.error("密碼不正確")
@@ -296,6 +353,13 @@ def 我的庫存():
 
     持股 = pd.read_csv(io.StringIO(str(設定["holdings"]).strip()), dtype={"代號": str})
     庫存區(持股)
+    if 密碼:
+        a, b = st.columns([4, 1])
+        a.caption("已記住登入（網址裡的 k=… 就是通行證，請勿分享登入後的網址）。可把這個網址加入書籤或主畫面。")
+        if b.button("🔒 登出", key="登出"):
+            st.session_state["已解鎖"] = False
+            st.query_params.pop("k", None)
+            st.rerun()
 
 
 @st.fragment(run_every=30 if engine.盤中時間() else None)
@@ -678,7 +742,7 @@ if 頁面 == 頁面們[1]:
         卡片("月營收月增率", 數(r.get("營收月增率"), 尾="%"), "", 漲跌色(r.get("營收月增率") or 0)),
         卡片("累計營收年增率", 數(r.get("累計營收年增率"), 尾="%"), "", 漲跌色(r.get("累計營收年增率") or 0)),
         卡片("距 52 週高點", 數(r["距52週高點"], "{:+.1f}", "%")),
-    ])
+    ] + 毛利卡片(r))
     if 有籌碼:
         段落("CHIPS // 籌碼面（張）")
         卡片格([
@@ -852,6 +916,9 @@ if 頁面 == 頁面們[1]:
             f"今年累計 EPS {數(r.get('EPS'))}（{r.get('EPS季度') or ''}），近三季 EPS {數(r.get('近三季EPS'))}",
             f"- 月營收（{r.get('營收月份') or ''}）年增 {數(營收, 尾='%')}，月增 {數(r.get('營收月增率'), 尾='%')}，"
             f"累計年增 {數(r.get('累計營收年增率'), 尾='%')}" + ("，創歷史新高" if r.get("營收創新高") == True else ""),
+            (f"- 單季毛利率（{r.get('毛利率季度')}）{數(r.get('毛利率'), 尾='%')}，較上季 {數(r.get('毛利率季增'), '{:+.1f}', ' 個百分點')}，"
+             f"較去年同季 {數(r.get('毛利率年增'), '{:+.1f}', ' 個百分點')}，營益率 {數(r.get('營益率'), 尾='%')}"
+             if pd.notna(r.get("毛利率", np.nan)) else "- 無毛利率資料"),
             (f"- 外資 {數(r['外資買超'], '{:+,.0f}')} 張、投信 {數(r['投信買超'], '{:+,.0f}')} 張、"
              f"法人 10 日合計 {數(r['法人10日買超'], '{:+,.0f}')} 張，融資 5 日 {數(r['融資5日增減'], '{:+.1f}', '%')}"
              if 有籌碼 else "- 無籌碼資料"),
@@ -927,7 +994,30 @@ if 頁面 == 頁面們[1]:
                     except Exception as 錯:
                         st.error(f"AI 分析失敗：{錯}")
         if 上次:
-            st.markdown(上次["內容"])
+            內文, 建議 = engine.拆解AI建議(上次["內容"])
+            if 建議:
+                def 價(k):
+                    v = 建議.get(k)
+                    return float(v) if isinstance(v, (int, float)) else np.nan
+                看 = 建議.get("看法") or "—"
+                合理 = 價("目標價合理")
+                空間 = (合理 / r["收盤"] - 1) * 100 if pd.notna(合理) else np.nan
+                色 = {"偏多": 紅, "偏空": 綠}.get(看, 灰)
+                段落(f"AI 建議 // {上次['時間'][:10]}")
+                卡片格([卡片("AI 看法", 看, "舊版報告，重新分析後會有目標價卡片", 色)] if "目標價合理" not in 建議 else [
+                    卡片("AI 看法", 看, f"短線 {建議.get('短線') or '—'} · 中期 {建議.get('中期') or '—'}", 色),
+                    卡片("合理目標價", 數(合理), f"距現價 {數(空間, '{:+.1f}', '%')}", 漲跌色(空間 if pd.notna(空間) else 0)),
+                    卡片("目標價區間", f"{數(價('目標價保守'), '{:,.0f}')} ~ {數(價('目標價樂觀'), '{:,.0f}')}",
+                         f"券商目標價 {數(價('券商目標價'), '{:,.0f}')}"),
+                    卡片("預估本益比", 數(價("預估本益比"), "{:.1f}", " 倍"),
+                         f"EPS 今年 {數(價('今年EPS'))} / 明年 {數(價('明年EPS'))}"),
+                    卡片("支撐 / 壓力", f"{數(價('支撐'), '{:,.0f}')} / {數(價('壓力'), '{:,.0f}')}"),
+                    卡片("停損參考", 數(價("停損"), "{:,.0f}"), "", 綠),
+                ])
+                if 建議.get("一句話"):
+                    st.markdown(f"**AI 結論：** {建議['一句話']}")
+            with st.expander("完整 AI 報告", expanded=not 建議):
+                st.markdown(內文)
             if 上次.get("來源"):
                 with st.expander(f"參考來源（{len(上次['來源'])}）"):
                     st.markdown("\n".join(f"- [{標題}]({網址})" for 網址, 標題 in 上次["來源"]))
@@ -935,7 +1025,7 @@ if 頁面 == 頁面們[1]:
                 with st.expander(f"過去的 AI 報告（{len(紀錄們) - 1}）"):
                     for 舊 in 紀錄們[1:]:
                         st.markdown(f"#### {舊['時間']}（當時收盤 {舊.get('收盤', '—')}，{舊.get('引擎', '')}）")
-                        st.markdown(舊["內容"])
+                        st.markdown(engine.拆解AI建議(舊["內容"])[0])
                         st.divider()
 
 st.markdown(f'<div class="sub" style="color:{灰};font-family:JetBrains Mono;font-size:11px;margin-top:30px">'
