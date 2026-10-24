@@ -69,6 +69,8 @@ h1, h2, h3 {{ font-family: 'Space Grotesk', 'Noto Sans TC', sans-serif !importan
 .rank td.n {{ font-family: 'Noto Sans TC', sans-serif; color: #EDEDED; font-size: 16px; white-space: nowrap; }}
 .rank td.n small {{ color: {灰}; font-size: 11px; margin-left: 4px; font-family: 'JetBrains Mono'; }}
 .rank td.n a {{ color: inherit; text-decoration: none; }}
+.rank td.t {{ color: #EDEDED; white-space: nowrap; font-size: 13px; }}
+.rank td.t small {{ color: {灰}; margin-left: 4px; font-size: 11px; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -88,23 +90,66 @@ def 卡片格(卡們):
     st.markdown(f'<div class="grid3">{"".join(卡們)}</div>', unsafe_allow_html=True)
 
 
-def 排行表(表):
+def 排行表(表, 額外=None):
+    """額外欄位：週轉率、鎖死（漲跌停的首次觸及與鎖死時間）。"""
+    標題額外 = {"週轉率": "週轉率", "鎖死": "觸及 / 鎖死"}.get(額外, "")
+    鎖們 = 鎖死資訊(表) if 額外 == "鎖死" else {}
     列們 = []
     for _, r in 表.iterrows():
         色 = 漲跌色(r["change"])
         底 = ""
-        if r["幅度"] >= 9.5:
+        if r.get("漲停"):
             底 = f"background:#9B0000;color:#FFF"
-        elif r["幅度"] <= -9.5:
+        elif r.get("跌停"):
             底 = f"background:#006B3C;color:#FFF"
+        if 額外 == "週轉率":
+            加 = f'<td style="color:#EDEDED">{r["週轉率"]:.2f}%</td>' if pd.notna(r["週轉率"]) else "<td>—</td>"
+        elif 額外 == "鎖死":
+            鎖 = 鎖們.get(r["code"])
+            if 鎖:
+                字 = f'{鎖["首次"]} / {鎖["鎖死"] or "未鎖住"}' + (f'<small>開{鎖["打開"]}次</small>' if 鎖["打開"] else "")
+            else:
+                字 = "—"
+            加 = f'<td class="t">{字}</td>'
+        else:
+            加 = ""
         列們.append(
             f'<tr><td class="n"><a href="?s={r["code"]}{登入參數()}" target="_self">{r["name"]}<small>{r["code"]}</small></a></td>'
             f'<td style="{底 or "color:" + 色}">{r["close"]:,.2f}</td>'
             f'<td style="color:{色}">{r["change"]:+,.2f}</td>'
             f'<td style="color:{色}">{r["幅度"]:+.2f}%</td>'
-            f'<td style="color:#BDBDBD">{r["張數"]:,.0f}</td></tr>')
-    st.markdown('<div class="rankwrap"><table class="rank"><tr><th>商品</th><th>成交</th><th>漲跌</th><th>幅度</th><th>張數</th></tr>'
+            f'<td style="color:#BDBDBD">{r["張數"]:,.0f}</td>'
+            f'<td style="color:#BDBDBD">{r["成交金額億"]:,.2f}</td>{加}</tr>')
+    if not 列們:
+        st.caption("今天沒有符合的股票。")
+        return
+    st.markdown('<div class="rankwrap"><table class="rank"><tr><th>商品</th><th>成交</th><th>漲跌</th><th>幅度</th>'
+                f'<th>張數</th><th>金額(億)</th>{f"<th>{標題額外}</th>" if 標題額外 else ""}</tr>'
                 + "".join(列們) + "</table></div>", unsafe_allow_html=True)
+
+
+@st.cache_data(ttl=3600, show_spinner="查詢漲跌停鎖死時間…", max_entries=10)
+def _鎖死查詢(清單, 日期):
+    """清單：((代號, 市場, 停價, 方向), ...)。用 Yahoo 1 分鐘線計算，平行查詢。"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def 查(項):
+        代號, 市場, 價, 方向 = 項
+        try:
+            k = engine.盤中K線(代號, 市場, "1m", "5d")
+            k = k[k["datetime"].dt.strftime("%Y-%m-%d") == 日期] if k is not None else None
+            return 代號, engine.鎖死分析(k, 價, 方向)
+        except Exception:
+            return 代號, None
+    with ThreadPoolExecutor(8) as 池:
+        return dict(池.map(查, 清單))
+
+
+def 鎖死資訊(表):
+    停 = 表[表["漲停"] | 表["跌停"]]
+    清單 = tuple((r["code"], r["市場"], float(r["漲停價"] if r["漲停"] else r["跌停價"]), "漲" if r["漲停"] else "跌")
+               for _, r in 停.iterrows())
+    return _鎖死查詢(清單, 最新日.strftime("%Y-%m-%d")) if 清單 else {}
 
 
 def 漲跌色(值):
@@ -488,17 +533,27 @@ if 頁面 == 頁面們[0]:
     if 加權 is not None and len(加權) > 1:
         加權圖()
 
-    段落("RANKING // 排行（前 20 檔，含上市櫃）")
+    段落("RANKING // 排行（前 50 檔，含上市櫃）")
     排行 = engine.排行資料(今日)
-    榜 = st.tabs(["漲幅排行", "跌幅排行", "成交量排行", "成交值排行"])
+    漲停數, 跌停數 = int(排行["漲停"].sum()), int(排行["跌停"].sum())
+    榜 = st.tabs(["漲幅", "跌幅", "成交量", "成交值", "週轉率", f"漲停 {漲停數}", f"跌停 {跌停數}"])
     with 榜[0]:
-        排行表(排行.nlargest(20, "幅度"))
+        排行表(排行.nlargest(50, "幅度"), "鎖死")
     with 榜[1]:
-        排行表(排行.nsmallest(20, "幅度"))
+        排行表(排行.nsmallest(50, "幅度"), "鎖死")
     with 榜[2]:
-        排行表(排行.nlargest(20, "張數"))
+        排行表(排行.nlargest(50, "張數"))
     with 榜[3]:
-        排行表(排行.nlargest(20, "value"))
+        排行表(排行.nlargest(50, "value"))
+    with 榜[4]:
+        排行表(排行.nlargest(50, "週轉率"), "週轉率")
+        st.caption("週轉率 = 今日成交股數 ÷ 發行股數。")
+    with 榜[5]:
+        排行表(排行[排行["漲停"]].sort_values("週轉率", ascending=False), "鎖死")
+    with 榜[6]:
+        排行表(排行[排行["跌停"]].sort_values("週轉率", ascending=False), "鎖死")
+    st.caption("觸及 / 鎖死：第一次碰到漲跌停的時間 / 最後一次鎖住到收盤的時間（「未鎖住」表示收盤前又打開），"
+               "依 Yahoo 1 分鐘線計算，可能有幾分鐘誤差。")
 
 # ---------- 02 選股 ----------
 if 頁面 == 頁面們[2]:
@@ -906,8 +961,9 @@ if 頁面 == 頁面們[1]:
                 "要啟用，請到 aistudio.google.com 申請 Gemini API 金鑰（有免費額度），"
                 "貼到 Streamlit 的 App settings →「Secrets」：`GEMINI_API_KEY = \"你的金鑰\"`")
     elif 密碼 and not st.session_state.get("已解鎖"):
-        st.caption("AI 分析會用到你的 API 額度，請先在 01 市場總覽的庫存區輸入密碼解鎖。")
-    else:
+        st.caption("產生或重新分析會用到你的 API 額度，請先在 01 市場總覽的庫存區輸入密碼解鎖；已有的報告卡片照常顯示。")
+    可執行 = bool(金鑰) and not (密碼 and not st.session_state.get("已解鎖"))
+    if True:  # 過去的報告與卡片不需要金鑰或密碼也能看
         今天 = 最新日.strftime("%Y-%m-%d")
         摘要 = "\n".join([
             f"- 資料日期 {今天}，收盤 {數(r['收盤'])}，漲跌 {r['漲跌幅']:+.2f}%，產業 {r.get('產業') or '—'}，"
@@ -963,12 +1019,11 @@ if 頁面 == 頁面們[1]:
                 st.warning(f"上次分析：{上次['時間']}（{說明}，當時收盤 {上次.get('收盤', '—')}）。已超過 {過久} 天，建議重新分析。")
             else:
                 st.caption(f"上次分析：{上次['時間']}（{說明}，當時收盤 {上次.get('收盤', '—')}，{上次.get('引擎', '')}）")
-        else:
+        elif 可執行:
             st.caption(f"使用 {引擎}。AI 會彙整近半年新聞、法人觀點與網站數據，給出目標價、預估本益比與短中期看法，約需 1 分鐘。")
 
-        按鈕字 = (f"✨ 產生 {代號} {r['名稱']} 的 AI 分析" if not 上次 else
-                 "🔄 重新分析" + ("" if 天數 >= 過久 else "（已有近期報告）"))
-        if (not 上次 or 天數 >= 1) and st.button(按鈕字, key="AI按鈕", type="primary" if not 上次 or 天數 >= 過久 else "secondary"):
+        按鈕字 = f"✨ 產生 {代號} {r['名稱']} 的 AI 分析" if not 上次 else "🔄 重新分析"
+        if 可執行 and st.button(按鈕字, key="AI按鈕", type="primary" if not 上次 or 天數 >= 過久 else "secondary"):
             用量 = AI用量()
             if 用量.get(今天, 0) >= int(設定.get("AI_DAILY_LIMIT", 20)):
                 st.warning("今天的 AI 分析次數已達上限，明天再試。")
@@ -995,6 +1050,20 @@ if 頁面 == 頁面們[1]:
                         st.error(f"AI 分析失敗：{錯}")
         if 上次:
             內文, 建議 = engine.拆解AI建議(上次["內容"])
+            if 上次.get("建議"):
+                建議 = 上次["建議"]
+            elif 可執行 and (not 建議 or "目標價合理" not in 建議):
+                # 舊報告：自動請 AI 從報告整理出卡片資料，存回紀錄，下次就不用再整理
+                try:
+                    with st.spinner("把這份報告整理成卡片…"):
+                        補 = engine.AI補卡片(內文, 引擎, 金鑰, 模型)
+                    if 補:
+                        建議 = 補
+                        上次 = dict(上次, 建議=補)
+                        engine.儲存AI紀錄(代號, 上次, 設定, 取代=True)
+                        AI紀錄快取.clear()
+                except Exception as 錯:
+                    st.caption(f"整理卡片失敗：{錯}")
             if 建議:
                 def 價(k):
                     v = 建議.get(k)

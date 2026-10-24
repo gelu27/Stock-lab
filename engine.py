@@ -566,13 +566,62 @@ def 讀取匯率():
     return pd.read_csv(檔案, parse_dates=["date"]).sort_values("date")
 
 
+def _升降單位(價):
+    return 0.01 if 價 < 10 else 0.05 if 價 < 50 else 0.1 if 價 < 100 else 0.5 if 價 < 500 else 1 if 價 < 1000 else 5
+
+
+def 漲跌停價(昨收):
+    """台股漲跌幅 10%，依升降單位取到有效價位（漲停往下取、跌停往上取）。"""
+    if not 昨收 or pd.isna(昨收) or 昨收 <= 0:
+        return np.nan, np.nan
+    上 = 昨收 * 1.1
+    單位 = _升降單位(上)
+    上 = np.floor(上 / 單位 + 1e-9) * 單位
+    下 = 昨收 * 0.9
+    單位 = _升降單位(下)
+    下 = np.ceil(下 / 單位 - 1e-9) * 單位
+    return round(上, 2), round(下, 2)
+
+
 def 排行資料(今日):
     """今日所有上市櫃股票（不含 ETF），給排行榜用。"""
     表 = 今日.rename(columns={"名稱": "name", "收盤": "close", "漲跌": "change"})
     表 = 表[~表["code"].str.startswith("00") & (表["close"] > 0)].copy()
-    表["幅度"] = 表["change"] / (表["close"] - 表["change"]) * 100
+    表["昨收"] = 表["close"] - 表["change"]
+    表["幅度"] = 表["change"] / 表["昨收"] * 100
     表["張數"] = 表["volume"] / 1000
+    表["成交金額億"] = 表["value"] / 1e8
+    停 = 表["昨收"].map(漲跌停價)
+    表["漲停價"], 表["跌停價"] = 停.str[0], 停.str[1]
+    表["漲停"] = (表["close"] >= 表["漲停價"] - 1e-6) & (表["幅度"] > 9)
+    表["跌停"] = (表["close"] <= 表["跌停價"] + 1e-6) & (表["幅度"] < -9)
+    if "發行股數" not in 表.columns:
+        表 = 表.join(_股本表()[["發行股數"]], on="code")
+    表["週轉率"] = 表["volume"] / 表["發行股數"] * 100
     return 表
+
+
+def 鎖死分析(分K, 停價, 方向="漲"):
+    """用 1 分鐘線找漲跌停的首次觸及時間、最後鎖死時間、中間打開次數。"""
+    if 分K is None or 分K.empty or pd.isna(停價):
+        return None
+    if 方向 == "漲":
+        碰 = 分K["high"] >= 停價 - 1e-6
+        鎖 = 分K["low"] >= 停價 - 1e-6
+    else:
+        碰 = 分K["low"] <= 停價 + 1e-6
+        鎖 = 分K["high"] <= 停價 + 1e-6
+    if not 碰.any():
+        return None
+    首次 = 分K.loc[碰.idxmax(), "datetime"]
+    鎖死 = None
+    if 鎖.iloc[-1]:
+        未鎖 = (~鎖).to_numpy().nonzero()[0]
+        起 = 未鎖[-1] + 1 if len(未鎖) else 0
+        鎖死 = 分K["datetime"].iloc[起]
+    段 = 鎖.astype(int).diff().fillna(鎖.astype(int).iloc[0])
+    打開 = int(max((段 == -1).sum(), 0))
+    return {"首次": 首次.strftime("%H:%M"), "鎖死": 鎖死.strftime("%H:%M") if 鎖死 is not None else None, "打開": 打開}
 
 
 def 讀取上櫃最新():
@@ -892,13 +941,37 @@ def 拆解AI建議(文字):
         except Exception:
             建議 = None
         文字 = (文字[: 配.start()] + 文字[配.end():]).strip()
-    if 建議 is None:
+    if 建議 is None and isinstance(文字, str):
         結 = re.search(r"###\s*一句話結論\s*\n+(.+?)(?:\n\s*\n|\n#|$)", 文字, re.S)
         if 結:
             一句 = 結.group(1).strip()
             看法 = next((k for k in ("偏多", "偏空", "中性") if k in 一句), None)
             建議 = {"一句話": 一句, "看法": 看法}
     return 文字, 建議
+
+
+def AI補卡片(報告, 引擎, 金鑰, 模型):
+    """舊報告沒有卡片資料：請 AI 只從報告內容整理出卡片用的 json（不上網，很快）。"""
+    import json, re
+    提示 = ("以下是一份台股 AI 分析報告。請只根據報告內容，輸出一個 ```json 程式碼區塊，欄位如下"
+           "（數字填純數字，報告沒提到填 null，不要編造）：\n"
+           '{"看法": "偏多/中性/偏空", "一句話": "30 字內結論", "短線": "偏多/中性/偏空", "中期": "偏多/中性/偏空", '
+           '"券商目標價": 數字, "目標價保守": 數字, "目標價合理": 數字, "目標價樂觀": 數字, '
+           '"今年EPS": 數字, "明年EPS": 數字, "預估本益比": 數字, "支撐": 數字, "壓力": 數字, "停損": 數字}\n\n報告：\n' + 報告)
+    if 引擎 == "Gemini":
+        import requests
+        回應 = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{模型}:generateContent",
+                             headers={"x-goog-api-key": 金鑰}, timeout=120,
+                             json={"contents": [{"role": "user", "parts": [{"text": 提示}]}]})
+        回應.raise_for_status()
+        文字 = "".join(p.get("text", "") for p in 回應.json()["candidates"][0]["content"]["parts"])
+    else:
+        import anthropic
+        回應 = anthropic.Anthropic(api_key=金鑰).messages.create(
+            model=模型, max_tokens=2000, messages=[{"role": "user", "content": 提示}])
+        文字 = "".join(b.text for b in 回應.content if b.type == "text")
+    配 = re.search(r"\{.*\}", 文字, re.S)
+    return json.loads(配.group(0)) if 配 else None
 
 
 # ========== 9-1. AI 報告紀錄（存到 GitHub 的 ai-reports 分支，網站重啟也不會消失） ==========
@@ -935,8 +1008,9 @@ def 讀取AI紀錄(代號, 設定):
     return json.loads(f.read_text("utf-8")) if f.exists() else []
 
 
-def 儲存AI紀錄(代號, 紀錄, 設定, 保留=20):
-    """把新報告加到最前面並存檔。回傳是否已永久保存（存到 GitHub）。"""
+def 儲存AI紀錄(代號, 紀錄, 設定, 保留=20, 取代=False):
+    """把新報告加到最前面並存檔（取代=True 則換掉最新一筆）。回傳是否已永久保存（存到 GitHub）。"""
+    略 = 1 if 取代 else 0
     import base64, json, requests
 
     權杖 = 清理金鑰(設定.get("GITHUB_TOKEN"))
@@ -944,7 +1018,7 @@ def 儲存AI紀錄(代號, 紀錄, 設定, 保留=20):
     f.parent.mkdir(exist_ok=True)
     if not 權杖:
         舊 = json.loads(f.read_text("utf-8")) if f.exists() else []
-        f.write_text(json.dumps([紀錄] + 舊[: 保留 - 1], ensure_ascii=False), "utf-8")
+        f.write_text(json.dumps([紀錄] + 舊[略: 保留 - 1 + 略], ensure_ascii=False), "utf-8")
         return False
     分支 = 設定.get("AI_BRANCH", "ai-reports")
     標頭 = {"Authorization": f"Bearer {權杖}", "Accept": "application/vnd.github+json"}
@@ -961,7 +1035,7 @@ def 儲存AI紀錄(代號, 紀錄, 設定, 保留=20):
     if 現有.status_code == 200:
         舊 = json.loads(base64.b64decode(現有.json()["content"]).decode("utf-8"))
         sha = 現有.json()["sha"]
-    內容 = json.dumps([紀錄] + 舊[: 保留 - 1], ensure_ascii=False, indent=1)
+    內容 = json.dumps([紀錄] + 舊[略: 保留 - 1 + 略], ensure_ascii=False, indent=1)
     資料 = {"message": f"AI 報告 {代號} {紀錄['時間']}", "branch": 分支,
             "content": base64.b64encode(內容.encode("utf-8")).decode()}
     if sha:
