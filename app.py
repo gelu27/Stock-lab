@@ -1120,6 +1120,40 @@ if 頁面 == 頁面們[1]:
         elif 可執行:
             st.caption(f"使用 {引擎}。AI 會彙整近半年新聞、法人觀點與網站數據，給出目標價、預估本益比與短中期看法，約需 1 分鐘。")
 
+        可寫 = not (密碼 and not st.session_state.get("已解鎖"))
+        a, b = st.columns(2)
+        if a.button("📋 複製分析指令（Gemini／Claude App）", key="複製指令", width="stretch"):
+            st.session_state["顯示指令"] = not st.session_state.get("顯示指令", False)
+        if b.button("📥 貼上 AI 報告", key="貼上報告", width="stretch", disabled=not 可寫,
+                    help=None if 可寫 else "請先在 01 市場總覽輸入庫存密碼解鎖"):
+            st.session_state["顯示貼上"] = not st.session_state.get("顯示貼上", False)
+        if st.session_state.get("顯示指令"):
+            st.caption("按右上角的複製圖示，貼到 Gemini（建議選 Pro 或「深入研究」）或 Claude App；"
+                       "已設定「台股個股分析師」Gem 或 Claude 技能的話也可以直接貼。")
+            st.code(f"請分析台股 {代號} {r['名稱']}。\n\n以下是「股市觀測網站」資料庫的最新數據（以此為準）：\n{摘要}\n\n"
+                    f"請上網搜尋近六個月的新聞、法說會與券商報告，依照以下要求寫報告：\n\n{engine.AI系統提示}",
+                    language=None, wrap_lines=True)
+        if st.session_state.get("顯示貼上") and 可寫:
+            with st.form("貼上表單", clear_on_submit=True):
+                來源 = st.radio("報告來自", ["Gemini App", "Claude App", "其他"], horizontal=True)
+                內容 = st.text_area("把 AI 的完整回答貼在這裡（最後的 json 區塊也要一起貼，網站才能做卡片）", height=220)
+                if st.form_submit_button("💾 存成這檔的 AI 報告", type="primary"):
+                    if len(內容.strip()) < 50:
+                        st.warning("內容太短，請貼上完整的報告。")
+                    else:
+                        新 = {"時間": pd.Timestamp.now(tz="Asia/Taipei").strftime("%Y-%m-%d %H:%M"),
+                             "資料日期": 今天, "收盤": float(r["收盤"]), "引擎": 來源, "模型": "手動貼上",
+                             "內容": 內容.strip(), "來源": []}
+                        try:
+                            永久 = engine.儲存AI紀錄(代號, 新, 設定)
+                            st.success("已存檔" + ("（GitHub 永久保存）" if 永久 else "（暫存在網站上）") + "，下面的卡片已更新。")
+                        except Exception as 錯:
+                            st.error(f"存檔失敗：{錯}")
+                        AI紀錄快取.clear()
+                        紀錄們 = [新] + 紀錄們
+                        上次, 天數 = 新, 0
+                        st.session_state["顯示貼上"] = False
+
         按鈕字 = f"✨ 產生 {代號} {r['名稱']} 的 AI 分析" if not 上次 else "🔄 重新分析"
         if 可執行 and st.button(按鈕字, key="AI按鈕", type="primary" if not 上次 or 天數 >= 過久 else "secondary"):
             用量 = AI用量()
