@@ -1001,10 +1001,7 @@ def AI補卡片(報告, 引擎, 金鑰, 模型):
            '"今年EPS": 數字, "明年EPS": 數字, "預估本益比": 數字, "支撐": 數字, "壓力": 數字, "停損": 數字}\n\n報告：\n' + 報告)
     if 引擎 == "Gemini":
         import requests
-        回應 = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{模型}:generateContent",
-                             headers={"x-goog-api-key": 金鑰}, timeout=120,
-                             json={"contents": [{"role": "user", "parts": [{"text": 提示}]}]})
-        回應.raise_for_status()
+        回應, _ = Gemini呼叫({"contents": [{"role": "user", "parts": [{"text": 提示}]}]}, 金鑰, 模型)
         文字 = "".join(p.get("text", "") for p in 回應.json()["candidates"][0]["content"]["parts"])
     else:
         import anthropic
@@ -1179,7 +1176,45 @@ def 規則判讀(r):
     return {"分數": 分數, "看法": 看法, "利多": [t for _, t in 多], "利空": [t for _, t in 空]}
 
 
-def AI分析Gemini(代號, 名稱, 數據摘要, api_key, 模型="gemini-flash-latest"):
+Gemini備用模型 = ["gemini-flash-latest", "gemini-3.5-flash", "gemini-flash-lite-latest"]
+
+
+def Gemini呼叫(內容, api_key, 模型="gemini-flash-latest", 每個試幾次=2):
+    """呼叫 Gemini；遇到「忙線」(500/503/504) 或逾時會稍等重試，還是不行就換備用模型。回傳 (回應, 實際模型)。"""
+    import time
+    import requests
+
+    最後錯誤 = None
+    for m in dict.fromkeys([模型] + Gemini備用模型):
+        網址 = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent"
+        for 次 in range(每個試幾次):
+            try:
+                回應 = requests.post(網址, headers={"x-goog-api-key": api_key}, json=內容, timeout=180)
+            except requests.RequestException as 錯:
+                最後錯誤 = f"連線逾時或中斷（{type(錯).__name__}）"
+                time.sleep(3)
+                continue
+            if 回應.status_code == 200:
+                return 回應, m
+            try:
+                訊息 = 回應.json()["error"]["message"]
+            except Exception:
+                訊息 = 回應.text[:200]
+            if 回應.status_code == 429:
+                最後錯誤 = "今天的 Gemini 免費額度用完了，明天再試。"
+                break  # 這個模型額度用完，換下一個
+            if 回應.status_code in (500, 503, 504):
+                最後錯誤 = "Gemini 目前使用的人太多（忙線），已自動重試和換模型仍失敗，請過幾分鐘再按一次。"
+                time.sleep(4 * (次 + 1))
+                continue
+            if 回應.status_code == 404:
+                最後錯誤 = f"模型 {m} 不存在"
+                break
+            raise RuntimeError(f"Gemini 回應錯誤（{回應.status_code}）：{訊息}")
+    raise RuntimeError(最後錯誤 or "Gemini 沒有回應")
+
+
+def AI分析Gemini(代號, 名稱, 數據摘要, api_key, 模型="gemini-flash-latest", 搜尋=False):
     """改用 Google Gemini（Google 搜尋）做同樣的彙整。回傳 (Markdown 內文, 來源清單)。"""
     import requests
 
@@ -1191,21 +1226,11 @@ def AI分析Gemini(代號, 名稱, 數據摘要, api_key, 模型="gemini-flash-l
             "請用 Google 搜尋近六個月的新聞與法人報告後，依照指定格式彙整並給出投資建議。")}]}],
         "tools": [{"google_search": {}}],
     }
-    網址 = f"https://generativelanguage.googleapis.com/v1beta/models/{模型}:generateContent"
-    回應 = requests.post(網址, headers={"x-goog-api-key": api_key}, json=內容, timeout=300)
-    if 回應.status_code == 429:
-        # 免費額度不含 Google 搜尋：改成只根據我們抓到的新聞標題彙整
+    if not 搜尋:
+        # 免費額度不含 Google 搜尋：只根據我們抓到的新聞標題與數據彙整（省一次呼叫）
         內容.pop("tools")
         內容["contents"][0]["parts"][0]["text"] += "\n\n（這次無法上網搜尋，請只根據上面提供的新聞標題與數據分析，並在結論註明。）"
-        回應 = requests.post(網址, headers={"x-goog-api-key": api_key}, json=內容, timeout=300)
-    if 回應.status_code != 200:
-        try:
-            訊息 = 回應.json()["error"]["message"]
-        except Exception:
-            訊息 = 回應.text[:200]
-        if 回應.status_code == 429:
-            訊息 = "今天的 Gemini 免費額度用完了，明天再試。"
-        raise RuntimeError(f"Gemini 回應錯誤（{回應.status_code}）：{訊息}")
+    回應, 模型 = Gemini呼叫(內容, api_key, 模型)
     候選 = (回應.json().get("candidates") or [{}])[0]
     文字 = "".join(p.get("text", "") for p in (候選.get("content") or {}).get("parts", [])).strip()
     if not 文字:

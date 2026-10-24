@@ -414,6 +414,7 @@ def PDF按鈕(代號, r, 建議, 內文, 時間):
 
 def 做PDF(代號, r, 建議, 內文, 時間):
     import report
+    importlib.reload(report)  # 網站更新後確保用的是最新版的報告排版
 
     數 = lambda v, f="{:,.2f}", 尾="": "—" if v is None or pd.isna(v) else f.format(v) + 尾
     g = lambda k: r.get(k, np.nan)
@@ -1127,8 +1128,11 @@ if 頁面 == 頁面們[1]:
             else:
                 with st.spinner("AI 整理中，約 1 分鐘…"):
                     try:
-                        函式 = engine.AI分析Gemini if 引擎 == "Gemini" else engine.AI分析
-                        文字, 來源 = 函式(代號, r["名稱"], 摘要, 金鑰, 模型)
+                        if 引擎 == "Gemini":  # 開了付費才有 Google 搜尋，Secrets 設 GEMINI_SEARCH = true
+                            文字, 來源 = engine.AI分析Gemini(代號, r["名稱"], 摘要, 金鑰, 模型,
+                                                         搜尋=str(設定.get("GEMINI_SEARCH", "")).lower() == "true")
+                        else:
+                            文字, 來源 = engine.AI分析(代號, r["名稱"], 摘要, 金鑰, 模型)
                         用量[今天] = 用量.get(今天, 0) + 1
                         新 = {"時間": pd.Timestamp.now(tz="Asia/Taipei").strftime("%Y-%m-%d %H:%M"),
                              "資料日期": 今天, "收盤": float(r["收盤"]), "引擎": 引擎, "模型": 模型,
