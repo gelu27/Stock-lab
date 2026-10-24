@@ -833,9 +833,9 @@ if 頁面 == 頁面們[1]:
     except Exception:
         設定 = {}
     if str(設定.get("GEMINI_API_KEY", "")).strip():
-        引擎, 金鑰, 模型 = "Gemini", str(設定["GEMINI_API_KEY"]).strip(), str(設定.get("GEMINI_MODEL", "gemini-flash-latest"))
+        引擎, 金鑰, 模型 = "Gemini", engine.清理金鑰(設定["GEMINI_API_KEY"]), str(設定.get("GEMINI_MODEL", "gemini-flash-latest"))
     else:
-        引擎, 金鑰, 模型 = "Claude", str(設定.get("ANTHROPIC_API_KEY", "")).strip(), str(設定.get("AI_MODEL", "claude-opus-5-5"))
+        引擎, 金鑰, 模型 = "Claude", engine.清理金鑰(設定.get("ANTHROPIC_API_KEY")), str(設定.get("AI_MODEL", "claude-opus-5-5"))
     密碼 = str(設定.get("password", ""))
     if not 金鑰:
         st.info("AI 會上網搜尋這檔股票近半年的新聞與法人報告，彙整後給出短、中期看法。"
@@ -875,7 +875,12 @@ if 頁面 == 頁面們[1]:
             紀錄們 = AI紀錄快取(代號, 設定.get("GITHUB_TOKEN", ""))
         except Exception as 錯:
             紀錄們 = []
-            st.caption(f"讀取過去的 AI 報告失敗：{錯}")
+            權杖 = engine.清理金鑰(設定.get("GITHUB_TOKEN"))
+            if "401" in str(錯) or not (權杖.startswith(("github_pat_", "ghp_")) and len(權杖) >= 40):
+                st.warning("Secrets 裡的 GITHUB_TOKEN 看起來不正確（可能貼上時被改到或少了字），"
+                           "請刪掉那一行重新貼上；報告暫時只會存在網站上。")
+            else:
+                st.caption(f"讀取過去的 AI 報告失敗：{錯}")
         上次 = 紀錄們[0] if 紀錄們 else None
         天數 = (pd.Timestamp.now(tz="Asia/Taipei").tz_localize(None).normalize()
                 - pd.Timestamp(上次["時間"][:10])).days if 上次 else None
@@ -909,7 +914,7 @@ if 頁面 == 頁面們[1]:
                         except Exception as 錯:
                             永久 = False
                             st.warning(f"報告已產生，但存到 GitHub 失敗：{錯}")
-                        if not 永久 and not str(設定.get("GITHUB_TOKEN", "")).strip():
+                        if not 永久 and not engine.清理金鑰(設定.get("GITHUB_TOKEN")):
                             st.caption("目前報告只暫存在網站上，網站重新啟動後會消失。設定 GITHUB_TOKEN 後可永久保存。")
                         AI紀錄快取.clear()
                         紀錄們 = [新] + 紀錄們

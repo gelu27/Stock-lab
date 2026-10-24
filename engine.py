@@ -844,6 +844,13 @@ def _AI紀錄網址(設定, 代號):
     return f"https://api.github.com/repos/{倉庫}/contents/reports/{代號}.json"
 
 
+def 清理金鑰(值):
+    """手機複製貼上常夾帶全形字或看不見的字元，轉成半形並只留英數符號。"""
+    import unicodedata
+    值 = unicodedata.normalize("NFKC", str(值 or ""))
+    return "".join(c for c in 值 if 33 <= ord(c) <= 126).strip('"\'')
+
+
 def _本機紀錄(代號):
     return 資料夾.parent / "ai_reports" / f"{代號}.json"
 
@@ -852,7 +859,7 @@ def 讀取AI紀錄(代號, 設定):
     """回傳這檔的歷史報告（新到舊）。有 GITHUB_TOKEN 就從 GitHub 讀，否則讀網站暫存（重啟會消失）。"""
     import base64, json, requests
 
-    權杖 = str(設定.get("GITHUB_TOKEN", "")).strip()
+    權杖 = 清理金鑰(設定.get("GITHUB_TOKEN"))
     if 權杖:
         回應 = requests.get(_AI紀錄網址(設定, 代號), timeout=15,
                             params={"ref": 設定.get("AI_BRANCH", "ai-reports")},
@@ -869,7 +876,7 @@ def 儲存AI紀錄(代號, 紀錄, 設定, 保留=20):
     """把新報告加到最前面並存檔。回傳是否已永久保存（存到 GitHub）。"""
     import base64, json, requests
 
-    權杖 = str(設定.get("GITHUB_TOKEN", "")).strip()
+    權杖 = 清理金鑰(設定.get("GITHUB_TOKEN"))
     f = _本機紀錄(代號)
     f.parent.mkdir(exist_ok=True)
     if not 權杖:
