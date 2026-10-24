@@ -711,3 +711,62 @@ def _數(值):
         return float(值)
     except (TypeError, ValueError):
         return float("nan")
+
+
+# ---------- 8. 個股查詢用：盤中 K 線、週月季 K、MACD、內部人 ----------
+def 盤中K線(代號, 市場="上市", 間隔="1m", 範圍="5d"):
+    """Yahoo 奇摩股市的分鐘線（盤中約延遲數分鐘）。代號 t00 代表加權指數。
+    回傳 DataFrame：datetime（台北時間）、open、high、low、close、volume（股）。"""
+    import requests
+
+    符號 = "%5ETWII" if 代號 == "t00" else f"{代號}.{'TWO' if 市場 == '上櫃' else 'TW'}"
+    r = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{符號}?interval={間隔}&range={範圍}",
+                     headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+    結果 = r.json()["chart"]["result"][0]
+    if not 結果.get("timestamp"):
+        return None
+    報價 = 結果["indicators"]["quote"][0]
+    表 = pd.DataFrame({"datetime": pd.to_datetime(結果["timestamp"], unit="s", utc=True)
+                       .tz_convert("Asia/Taipei").tz_localize(None),
+                       **{k: 報價.get(k) for k in ("open", "high", "low", "close", "volume")}})
+    表 = 表.dropna(subset=["close"])
+    表 = 表[表["datetime"].dt.time <= pd.Timestamp("13:30").time()]  # 去掉收盤後的試撮
+    昨收 = 結果["meta"].get("chartPreviousClose")
+    表.attrs["昨收"] = 昨收
+    return 表
+
+
+def 週期K線(歷史, 週期):
+    """把日 K 合併成週 K、月 K、季 K（籌碼加總、價格用原始股價）。"""
+    規則 = {"週": "W-FRI", "月": "ME", "季": "QE"}[週期]
+    加總 = {c: "sum" for c in ("成交張數", "法人買超", "外資買超", "投信買超", "自營買超") if c in 歷史.columns}
+    其他 = {"open": "first", "high": "max", "low": "min", "收盤": "last", "還原價": "last"}
+    if "融資餘額" in 歷史.columns:
+        其他["融資餘額"] = "last"
+    表 = 歷史.set_index("date").resample(規則).agg({**其他, **加總}).dropna(subset=["收盤"]).reset_index()
+    return 表
+
+
+def MACD(收盤, 快=12, 慢=26, 訊號=9):
+    快線 = 收盤.ewm(span=快, adjust=False).mean()
+    慢線 = 收盤.ewm(span=慢, adjust=False).mean()
+    DIF = 快線 - 慢線
+    DEA = DIF.ewm(span=訊號, adjust=False).mean()
+    return DIF, DEA, DIF - DEA
+
+
+def RSI(收盤, n=14):
+    變動 = 收盤.diff()
+    漲 = 變動.clip(lower=0).ewm(alpha=1 / n, adjust=False).mean()
+    跌 = (-變動).clip(lower=0).ewm(alpha=1 / n, adjust=False).mean()
+    return 100 - 100 / (1 + 漲 / 跌.replace(0, np.nan))
+
+
+def 讀取內部人(代號):
+    """每月董監、經理人、大股東持股合計；回傳這檔的歷史（月份、內部人持股、董監持股、設質）。"""
+    f = 資料夾 / "fundamental" / "insider.csv"
+    if not f.exists():
+        return None
+    表 = pd.read_csv(f, dtype={"code": str})
+    表 = 表[表["code"] == str(代號)].sort_values("month")
+    return 表 if len(表) else None

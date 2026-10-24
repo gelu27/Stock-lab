@@ -12,7 +12,8 @@
 #   data/esb/20261022.csv.gz              興櫃行情（櫃買只提供最新一天，每天累積）
 #   data/fundamental/revenue.csv, eps.csv 最新月營收、最新一季 EPS（eps.csv 每季累積保留）
 #   data/fundamental/revenue_history.csv   近 5 年每月營收（公開資訊觀測站），算「營收創新高」
-#   data/fundamental/capital.csv           股本與發行股數，算「週轉率」
+#   data/fundamental/capital.csv           股本、發行股數、產業，算「週轉率」
+#   data/fundamental/insider.csv           每月內部人（董監經理人、大股東）持股與質押合計，逐月累積
 #   data/fx.csv                           美元兌台幣匯率
 
 import argparse
@@ -367,7 +368,34 @@ def 抓基本面():
         表.drop_duplicates(["code", "quarter"], keep="last").sort_values(["code", "quarter"]).to_csv(檔案, index=False)
         print("EPS 完成")
     抓股本()
+    抓內部人()
     抓歷史營收()
+
+
+def 抓內部人():
+    列們 = []
+    for 網址, 市場 in (("https://openapi.twse.com.tw/v1/opendata/t187ap11_L", "上市"),
+                     ("https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap11_O", "上櫃")):
+        資料 = (證交所 if 市場 == "上市" else 櫃買)(網址)
+        if 資料:
+            列們.append(pd.DataFrame(資料))
+    if not 列們:
+        return
+    表 = pd.concat(列們)
+    表 = pd.DataFrame({
+        "code": 表["公司代號"].str.strip(),
+        "month": 表["資料年月"].map(lambda s: f"{int(s[:-2]) + 1911}-{s[-2:]}"),
+        "董監": 表["職稱"].str.contains("董事|監察人"),
+        "持股": 表["目前持股"].map(轉數字), "設質": 表["設質股數"].map(轉數字),
+    })
+    合計 = 表.groupby(["code", "month"]).agg(insider=("持股", "sum"), pledged=("設質", "sum"))
+    合計["directors"] = 表[表["董監"]].groupby(["code", "month"])["持股"].sum()
+    合計 = 合計.fillna(0).reset_index()
+    檔案 = 資料夾 / "fundamental" / "insider.csv"
+    if 檔案.exists():
+        合計 = pd.concat([pd.read_csv(檔案, dtype={"code": str}), 合計])
+    合計.drop_duplicates(["code", "month"], keep="last").sort_values(["code", "month"]).to_csv(檔案, index=False)
+    print("內部人持股完成")
 
 
 產業別名稱 = {
