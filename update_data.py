@@ -370,6 +370,7 @@ def 抓基本面():
     抓股本()
     抓內部人()
     抓歷史營收()
+    抓損益表()
 
 
 def 抓內部人():
@@ -459,6 +460,62 @@ def 抓歷史營收(月數=60):
         表 = 表.drop_duplicates(["code", "month"], keep="last").sort_values(["code", "month"])
         表.to_csv(檔案, index=False)
         print(f"歷史營收完成，共 {表['month'].nunique()} 個月")
+
+
+def _解析損益(html):
+    """公開資訊觀測站「綜合損益表彙總」HTML → 代號、營收、毛利、營業利益（今年累計，千元）。"""
+    import re
+    去標籤 = lambda t: re.sub(r"<[^>]+>|&nbsp;|\s", "", t)
+    列們 = []
+    for 表 in re.findall(r"<table[^>]*>(.*?)</table>", html, re.S):
+        標題 = [去標籤(t) for t in re.findall(r"<th[^>]*>(.*?)</th>", 表, re.S)]
+        if "公司代號" not in 標題 or "營業收入" not in 標題:
+            continue
+        位 = {k: 標題.index(k) for k in ("公司代號", "營業收入", "營業毛利（毛損）淨額", "營業利益（損失）") if k in 標題}
+        for 列 in re.findall(r"<tr[^>]*>(.*?)</tr>", 表, re.S):
+            格 = [去標籤(t) for t in re.findall(r"<td[^>]*>(.*?)</td>", 列, re.S)]
+            if len(格) != len(標題):
+                continue
+            取 = lambda k: 轉數字(格[位[k]]) if k in 位 else None
+            列們.append({"code": 格[位["公司代號"]], "revenue": 取("營業收入"),
+                        "gross": 取("營業毛利（毛損）淨額"), "opinc": 取("營業利益（損失）")})
+    return pd.DataFrame(列們)
+
+
+def 抓損益表(季數=12):
+    """各季綜合損益表（今年累計數），用來算毛利率；已經有的季度不重抓（最近 2 季會重抓）。"""
+    檔案 = 資料夾 / "fundamental" / "income.csv"
+    舊 = pd.read_csv(檔案, dtype={"code": str}) if 檔案.exists() else pd.DataFrame(
+        columns=["code", "quarter", "revenue", "gross", "opinc"])
+    已有 = set(舊["quarter"])
+    今天 = dt.date.today()
+    年, 季 = 今天.year, (今天.month - 1) // 3 + 1
+    新們 = []
+    for i in range(季數):
+        季 -= 1
+        if 季 == 0:
+            年, 季 = 年 - 1, 4
+        季度 = f"{年}Q{季}"
+        if 季度 in 已有 and i >= 2:
+            continue
+        for 類 in ("sii", "otc"):
+            time.sleep(3)
+            try:
+                r = requests.post("https://mopsov.twse.com.tw/mops/web/ajax_t163sb04", headers=標頭, timeout=60,
+                                  data={"encodeURIComponent": 1, "step": 1, "firstin": 1, "off": 1, "isQuery": "Y",
+                                        "TYPEK": 類, "year": str(年 - 1911), "season": f"{季:02d}"})
+                表 = _解析損益(r.text)
+                if len(表):
+                    表["quarter"] = 季度
+                    新們.append(表)
+                    print(f"  損益表 {季度} {類}：{len(表)} 家")
+            except Exception as 錯誤:
+                print(f"  損益表 {季度} {類} 失敗：{錯誤}")
+    if 新們:
+        表 = pd.concat([舊] + 新們).dropna(subset=["revenue"])
+        表 = 表.drop_duplicates(["code", "quarter"], keep="last").sort_values(["code", "quarter"])
+        表.to_csv(檔案, index=False)
+        print(f"損益表完成，共 {表['quarter'].nunique()} 季")
 
 
 def 抓匯率():

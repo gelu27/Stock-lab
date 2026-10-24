@@ -5,4 +5,4 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: pip install requests && python tools/probe.py
+      - run: pip install requests pandas && python tools/probe.py
