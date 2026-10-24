@@ -263,10 +263,13 @@ def AI用量():
     return {}
 
 
-@st.cache_data(ttl=12 * 3600, show_spinner=False, max_entries=50)
-def AI分析快取(代號, 名稱, 日期, 摘要, _金鑰, 引擎, 模型):
-    函式 = engine.AI分析Gemini if 引擎 == "Gemini" else engine.AI分析
-    return 函式(代號, 名稱, 摘要, _金鑰, 模型)
+@st.cache_data(ttl=600, show_spinner=False, max_entries=50)
+def AI紀錄快取(代號, _權杖):
+    try:
+        設定 = dict(st.secrets)
+    except Exception:
+        設定 = {}
+    return engine.讀取AI紀錄(代號, 設定)
 
 
 # ---------- 01 市場總覽 ----------
@@ -859,27 +862,71 @@ if 頁面 == 頁面們[1]:
         if 新聞 is not None and not 新聞.empty:
             摘要 += "\n\n近半年新聞標題（新到舊）：\n" + "\n".join(
                 f"- {x['日期']:%Y-%m-%d} {x['標題']}（{x['來源']}）" for _, x in 新聞.head(60).iterrows())
-        st.caption(f"使用 {引擎}。AI 會搜尋近半年新聞與券商報告摘要（完整報告多需付費，只能看到新聞引述），"
-                   "每次約需 1 分鐘；同一檔同一天只跑一次。")
-        鍵 = (代號, 今天)
-        已做 = st.session_state.setdefault("AI結果", {})
-        if 鍵 not in 已做 and st.button(f"✨ 產生 {代號} {r['名稱']} 的 AI 分析", key="AI按鈕"):
+        本益 = 指標.loc[(指標["code"] == 代號) & (指標["date"] >= 最新日 - pd.Timedelta(days=3 * 365)), "本益比"]
+        本益 = 本益[本益 > 0]
+        if len(本益) > 60:
+            摘要 += (f"\n- 近三年本益比區間：最低 {本益.min():.1f}、25% {本益.quantile(.25):.1f}、中位數 {本益.median():.1f}、"
+                   f"75% {本益.quantile(.75):.1f}、最高 {本益.max():.1f}")
+        if 新聞 is not None and not 新聞.empty:
+            摘要 += "\n\n近半年新聞標題（新到舊）：\n" + "\n".join(
+                f"- {x['日期']:%Y-%m-%d} {x['標題']}（{x['來源']}）" for _, x in 新聞.head(60).iterrows())
+
+        try:
+            紀錄們 = AI紀錄快取(代號, 設定.get("GITHUB_TOKEN", ""))
+        except Exception as 錯:
+            紀錄們 = []
+            st.caption(f"讀取過去的 AI 報告失敗：{錯}")
+        上次 = 紀錄們[0] if 紀錄們 else None
+        天數 = (pd.Timestamp.now(tz="Asia/Taipei").tz_localize(None).normalize()
+                - pd.Timestamp(上次["時間"][:10])).days if 上次 else None
+        過久 = int(設定.get("AI_STALE_DAYS", 7))
+        if 上次:
+            說明 = "今天" if 天數 == 0 else f"{天數} 天前"
+            if 天數 >= 過久:
+                st.warning(f"上次分析：{上次['時間']}（{說明}，當時收盤 {上次.get('收盤', '—')}）。已超過 {過久} 天，建議重新分析。")
+            else:
+                st.caption(f"上次分析：{上次['時間']}（{說明}，當時收盤 {上次.get('收盤', '—')}，{上次.get('引擎', '')}）")
+        else:
+            st.caption(f"使用 {引擎}。AI 會彙整近半年新聞、法人觀點與網站數據，給出目標價、預估本益比與短中期看法，約需 1 分鐘。")
+
+        按鈕字 = (f"✨ 產生 {代號} {r['名稱']} 的 AI 分析" if not 上次 else
+                 "🔄 重新分析" + ("" if 天數 >= 過久 else "（已有近期報告）"))
+        if (not 上次 or 天數 >= 1) and st.button(按鈕字, key="AI按鈕", type="primary" if not 上次 or 天數 >= 過久 else "secondary"):
             用量 = AI用量()
             if 用量.get(今天, 0) >= int(設定.get("AI_DAILY_LIMIT", 20)):
                 st.warning("今天的 AI 分析次數已達上限，明天再試。")
             else:
-                with st.spinner("AI 搜尋與整理中，約 1–2 分鐘…"):
+                with st.spinner("AI 整理中，約 1 分鐘…"):
                     try:
-                        已做[鍵] = AI分析快取(代號, r["名稱"], 今天, 摘要, 金鑰, 引擎, 模型)
+                        函式 = engine.AI分析Gemini if 引擎 == "Gemini" else engine.AI分析
+                        文字, 來源 = 函式(代號, r["名稱"], 摘要, 金鑰, 模型)
                         用量[今天] = 用量.get(今天, 0) + 1
+                        新 = {"時間": pd.Timestamp.now(tz="Asia/Taipei").strftime("%Y-%m-%d %H:%M"),
+                             "資料日期": 今天, "收盤": float(r["收盤"]), "引擎": 引擎, "模型": 模型,
+                             "內容": 文字, "來源": 來源}
+                        try:
+                            永久 = engine.儲存AI紀錄(代號, 新, 設定)
+                        except Exception as 錯:
+                            永久 = False
+                            st.warning(f"報告已產生，但存到 GitHub 失敗：{錯}")
+                        if not 永久 and not str(設定.get("GITHUB_TOKEN", "")).strip():
+                            st.caption("目前報告只暫存在網站上，網站重新啟動後會消失。設定 GITHUB_TOKEN 後可永久保存。")
+                        AI紀錄快取.clear()
+                        紀錄們 = [新] + 紀錄們
+                        上次 = 新
                     except Exception as 錯:
                         st.error(f"AI 分析失敗：{錯}")
-        if 鍵 in 已做:
-            文字, 來源 = 已做[鍵]
-            st.markdown(文字)
-            if 來源:
-                with st.expander(f"參考來源（{len(來源)}）"):
-                    st.markdown("\n".join(f"- [{標題}]({網址})" for 網址, 標題 in 來源))
+        if 上次:
+            st.markdown(上次["內容"])
+            if 上次.get("來源"):
+                with st.expander(f"參考來源（{len(上次['來源'])}）"):
+                    st.markdown("\n".join(f"- [{標題}]({網址})" for 網址, 標題 in 上次["來源"]))
+            if len(紀錄們) > 1:
+                with st.expander(f"過去的 AI 報告（{len(紀錄們) - 1}）"):
+                    for 舊 in 紀錄們[1:]:
+                        st.markdown(f"#### {舊['時間']}（當時收盤 {舊.get('收盤', '—')}，{舊.get('引擎', '')}）")
+                        st.markdown(舊["內容"])
+                        st.divider()
 
 st.markdown(f'<div class="sub" style="color:{灰};font-family:JetBrains Mono;font-size:11px;margin-top:30px">'
             '僅供個人研究，不構成投資建議 // DATA: TWSE · TPEx</div>', unsafe_allow_html=True)

@@ -785,6 +785,11 @@ AI系統提示 = """你是台灣股市的研究助理，替一位個人投資者
    ### 一句話結論
    ### 近半年重要消息（依時間由新到舊，條列，每條註明月份）
    ### 法人與券商觀點（目標價、評等；找不到就說找不到，不要編造）
+   ### 目標價與預估本益比
+       用表格列出：法人／券商目標價（註明券商與日期，找不到就寫「未找到」）、
+       今年與明年預估 EPS（優先用券商或法說會預估；沒有就依近幾季 EPS 與營收成長自行估算並註明「自行估算」）、
+       以目前股價換算的預估本益比，以及用「預估 EPS × 合理本益比區間」（參考使用者提供的歷史本益比區間）
+       推算的目標價區間（保守／合理／樂觀三檔），並說明假設。
    ### 利多因素
    ### 利空與風險
    ### 數據面解讀（基本面、籌碼、技術面）
@@ -831,6 +836,68 @@ def AI分析(代號, 名稱, 數據摘要, api_key, 模型="claude-opus-5-5", �
     if not 文字:
         raise RuntimeError("AI 沒有產生內容，請稍後再試。")
     return 文字, list(來源.items())
+
+
+# ========== 9-1. AI 報告紀錄（存到 GitHub 的 ai-reports 分支，網站重啟也不會消失） ==========
+def _AI紀錄網址(設定, 代號):
+    倉庫 = 設定.get("AI_REPO", "gelu27/Stock-lab")
+    return f"https://api.github.com/repos/{倉庫}/contents/reports/{代號}.json"
+
+
+def _本機紀錄(代號):
+    return 資料夾.parent / "ai_reports" / f"{代號}.json"
+
+
+def 讀取AI紀錄(代號, 設定):
+    """回傳這檔的歷史報告（新到舊）。有 GITHUB_TOKEN 就從 GitHub 讀，否則讀網站暫存（重啟會消失）。"""
+    import base64, json, requests
+
+    權杖 = str(設定.get("GITHUB_TOKEN", "")).strip()
+    if 權杖:
+        回應 = requests.get(_AI紀錄網址(設定, 代號), timeout=15,
+                            params={"ref": 設定.get("AI_BRANCH", "ai-reports")},
+                            headers={"Authorization": f"Bearer {權杖}", "Accept": "application/vnd.github+json"})
+        if 回應.status_code == 404:
+            return []
+        回應.raise_for_status()
+        return json.loads(base64.b64decode(回應.json()["content"]).decode("utf-8"))
+    f = _本機紀錄(代號)
+    return json.loads(f.read_text("utf-8")) if f.exists() else []
+
+
+def 儲存AI紀錄(代號, 紀錄, 設定, 保留=20):
+    """把新報告加到最前面並存檔。回傳是否已永久保存（存到 GitHub）。"""
+    import base64, json, requests
+
+    權杖 = str(設定.get("GITHUB_TOKEN", "")).strip()
+    f = _本機紀錄(代號)
+    f.parent.mkdir(exist_ok=True)
+    if not 權杖:
+        舊 = json.loads(f.read_text("utf-8")) if f.exists() else []
+        f.write_text(json.dumps([紀錄] + 舊[: 保留 - 1], ensure_ascii=False), "utf-8")
+        return False
+    分支 = 設定.get("AI_BRANCH", "ai-reports")
+    標頭 = {"Authorization": f"Bearer {權杖}", "Accept": "application/vnd.github+json"}
+    倉庫 = 設定.get("AI_REPO", "gelu27/Stock-lab")
+    # 第一次使用：從 main 開一個 ai-reports 分支（不動到網站程式，所以存檔不會讓網站重新部署）
+    if requests.get(f"https://api.github.com/repos/{倉庫}/branches/{分支}", headers=標頭, timeout=15).status_code == 404:
+        主 = requests.get(f"https://api.github.com/repos/{倉庫}/git/ref/heads/main", headers=標頭, timeout=15)
+        主.raise_for_status()
+        requests.post(f"https://api.github.com/repos/{倉庫}/git/refs", headers=標頭, timeout=15,
+                      json={"ref": f"refs/heads/{分支}", "sha": 主.json()["object"]["sha"]}).raise_for_status()
+    網址 = _AI紀錄網址(設定, 代號)
+    現有 = requests.get(網址, params={"ref": 分支}, headers=標頭, timeout=15)
+    舊, sha = [], None
+    if 現有.status_code == 200:
+        舊 = json.loads(base64.b64decode(現有.json()["content"]).decode("utf-8"))
+        sha = 現有.json()["sha"]
+    內容 = json.dumps([紀錄] + 舊[: 保留 - 1], ensure_ascii=False, indent=1)
+    資料 = {"message": f"AI 報告 {代號} {紀錄['時間']}", "branch": 分支,
+            "content": base64.b64encode(內容.encode("utf-8")).decode()}
+    if sha:
+        資料["sha"] = sha
+    requests.put(網址, headers=標頭, json=資料, timeout=30).raise_for_status()
+    return True
 
 
 # ========== 10. 免費版：新聞清單與規則判讀 ==========
