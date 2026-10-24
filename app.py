@@ -173,8 +173,8 @@ def 圖表外觀(圖, 高=380):
 
 
 def 上色(表):
-    欄們 = [c for c in ["漲跌幅", "20日漲幅", "報酬率(%)", "今日損益", "總損益"] if c in 表.columns]
-    整數 = {"成交張數", "今日損益", "總損益", "股數", "總成本"}
+    欄們 = [c for c in ["漲跌幅", "5日漲幅", "20日漲幅", "報酬率(%)", "今日損益", "總損益", "法人(張)"] if c in 表.columns]
+    整數 = {"成交張數", "今日損益", "總損益", "股數", "總成本", "法人(張)"}
     格式 = {c: ("{:,.0f}" if c in 整數 else "{:,.2f}") for c in 表.select_dtypes("number").columns}
     return 表.style.map(lambda v: f"color:{漲跌色(v)}", subset=欄們).format(格式, na_rep="—")
 
@@ -611,8 +611,147 @@ def 加權圖():
     st.plotly_chart(圖表外觀(圖, 300), width="stretch")
 
 
+def _設定():
+    try:
+        return dict(st.secrets)
+    except Exception:
+        return {}
+
+
+def 可編輯():
+    """有設密碼時，要先解鎖才能看/改自選股。"""
+    return not _密碼() or st.session_state.get("已解鎖")
+
+
+def 自選股清單():
+    """{群組名: [代號, ...]}，每個瀏覽階段只從 GitHub 讀一次。"""
+    if "自選股" not in st.session_state:
+        try:
+            st.session_state["自選股"] = engine.讀取自選股(_設定()) or {"自選股": []}
+        except Exception as e:
+            st.caption(f"自選股暫時讀不到（{type(e).__name__}），稍後重新整理再試。")
+            return {"自選股": []}
+    return st.session_state["自選股"]
+
+
+def 存自選股(自選):
+    st.session_state["自選股"] = 自選
+    try:
+        if engine.儲存自選股(自選, _設定()):
+            st.toast("自選股已儲存")
+        else:
+            st.toast("已暫存（網站重新啟動會消失；在 Secrets 設定 GITHUB_TOKEN 就能永久保存）")
+    except Exception as e:
+        st.error(f"自選股存檔失敗：{e}")
+
+
+def 自選股區():
+    段落("WATCHLIST // 自選股")
+    自選 = 自選股清單()
+    群組們 = list(自選) or ["自選股"]
+    if "自選群組_切換" in st.session_state:
+        st.session_state["自選群組"] = st.session_state.pop("自選群組_切換")
+    if st.session_state.get("自選群組") not in 群組們:
+        st.session_state["自選群組"] = 群組們[0]
+    if len(群組們) > 1:
+        群組 = st.segmented_control("群組", 群組們, key="自選群組", label_visibility="collapsed") or 群組們[0]
+    else:
+        群組 = 群組們[0]
+    代號們 = [c for c in 自選.get(群組, []) if c in 市場對照]
+    if 代號們:
+        自選表(tuple(代號們))
+    else:
+        st.info("這個群組還沒有股票。可以在下面「編輯自選股」加入，或在個股查詢頁按「☆ 加入自選股」。")
+    with st.expander("✏️ 編輯自選股"):
+        對照 = {v.split()[0]: v for v in 股票選項}
+        選 = st.multiselect(f"「{群組}」的股票（可打代號或名稱搜尋）", 股票選項,
+                           default=[對照[c] for c in 代號們 if c in 對照], key=f"自選編輯_{群組}")
+        if st.button("💾 儲存", key="自選儲存"):
+            存自選股({**自選, 群組: [v.split()[0] for v in 選]})
+            st.rerun()
+        a, b = st.columns([3, 1])
+        新名 = a.text_input("新增群組", placeholder="例如：觀察中、想買", key="自選新群組").strip()
+        if b.button("＋ 建立", key="自選建立") and 新名 and 新名 not in 自選:
+            存自選股({**自選, 新名: []})
+            st.session_state["自選群組_切換"] = 新名
+            st.rerun()
+        if len(群組們) > 1 and st.button(f"🗑 刪除「{群組}」群組", key="自選刪除"):
+            存自選股({k: v for k, v in 自選.items() if k != 群組})
+            st.rerun()
+
+
+@st.fragment(run_every=30 if engine.盤中時間() else None)
+def 自選表(代號們):
+    """盤中每 30 秒更新即時報價，收盤後用資料庫的收盤價。"""
+    表 = 今日.set_index("代號").reindex(list(代號們)).reset_index()
+    if engine.盤中時間():
+        try:
+            即時 = engine.即時報價(list(代號們), 市場對照).dropna(subset=["close"]).set_index("code")
+            有 = 表["代號"].isin(即時.index)
+            表.loc[有, "收盤"] = 表.loc[有, "代號"].map(即時["close"])
+            表.loc[有, "漲跌"] = 表.loc[有, "代號"].map(即時["change"])
+            表.loc[有, "漲跌幅"] = (表["漲跌"] / (表["收盤"] - 表["漲跌"]) * 100).round(2)
+            st.caption(f"盤中即時 {即時['time'].dropna().max()}（約每 30 秒更新）")
+        except Exception:
+            st.caption("即時報價暫時抓不到，先顯示最近收盤價。")
+    顯示 = 表[["名稱", "收盤", "漲跌幅", "成交張數", "5日漲幅", "20日漲幅", "法人買超", "本益比", "殖利率", "代號"]]
+    顯示 = 顯示.rename(columns={"收盤": "股價", "法人買超": "法人(張)"})
+    點選表(顯示, 上色(顯示), "自選表", height=35 * (len(顯示) + 1) + 3)
+    if st.session_state.get("要跳轉"):
+        st.rerun(scope="app")
+    st.caption("點一下股票可看個股查詢。法人(張) = 三大法人今日買賣超。")
+
+
+def 族群熱力圖():
+    段落("SECTOR // 族群熱力圖")
+    a, b = st.columns(2)
+    期間 = a.segmented_control("漲跌期間", list(engine.族群期間), default="今日", key="族群期間") or "今日"
+    大小 = b.segmented_control("方塊大小", ["市值", "成交值"], default="市值", key="族群大小") or "市值"
+    族群, 個股 = engine.族群資料(今日, 期間, 大小)
+    界 = {"今日": 5, "5 日": 10, "20 日": 20}[期間]
+    名們 = list(族群.index)
+    圖 = go.Figure(go.Treemap(
+        ids=名們 + (個股["產業"] + "/" + 個股["名稱"]).tolist(),
+        labels=名們 + 個股["名稱"].tolist(),
+        parents=[""] * len(名們) + 個股["產業"].tolist(),
+        values=[0] * len(名們) + 個股["權重"].tolist(),
+        branchvalues="remainder",
+        customdata=族群["漲跌幅"].tolist() + 個股["幅度"].tolist(),
+        marker=dict(colors=族群["漲跌幅"].tolist() + 個股["幅度"].tolist(), cmin=-界, cmid=0, cmax=界,
+                    colorscale=[[0, "#00A86B"], [0.5, "#262626"], [1, "#E0244A"]],
+                    line=dict(color="#000", width=1)),
+        texttemplate="<b>%{label}</b><br>%{customdata:+.2f}%",
+        hovertemplate="<b>%{label}</b><br>漲跌 %{customdata:+.2f}%<extra></extra>",
+        textfont=dict(color="#FFF", family="Noto Sans TC"), maxdepth=2, pathbar=dict(visible=True),
+        tiling=dict(pad=1),
+    ))
+    圖.update_layout(height=560, margin=dict(l=0, r=0, t=24, b=0), paper_bgcolor="rgba(0,0,0,0)")
+    st.plotly_chart(圖, width="stretch", config={"displayModeBar": False})
+    st.caption(f"方塊越大代表{大小}越大；紅漲綠跌，顏色越深漲跌越多（±{界}% 以上最深）。"
+               "點一下族群可放大看裡面的股票，點上方路徑可返回。族群漲跌是依" + 大小 + "加權平均。")
+
+    表 = 族群.reset_index().rename(columns={"產業": "族群"})[
+        ["族群", "漲跌幅", "上漲", "下跌", "成交值億", "領漲股"]]
+    st.markdown("**族群排行**　點一下族群，下方會列出成分股")
+    選 = st.dataframe(表.style.map(lambda v: f"color:{漲跌色(v)}", subset=["漲跌幅"])
+                     .format({"漲跌幅": "{:+.2f}%", "成交值億": "{:,.1f}"}),
+                     key="族群表", on_select="rerun", selection_mode="single-row", hide_index=True,
+                     width="stretch", height=300)
+    列們 = 選.selection.rows
+    if 列們:
+        族 = 表.iloc[列們[0]]["族群"]
+        欄 = engine.族群期間[期間]
+        成分 = 今日[(今日["產業"] == 族) & (今日["收盤"] > 0)].sort_values(欄, ascending=False)
+        成分 = 成分[["名稱", "收盤", "漲跌幅", "5日漲幅", "20日漲幅", "成交張數", "本益比", "代號"]].rename(
+            columns={"收盤": "股價"})
+        st.markdown(f"**{族}**　{len(成分)} 檔，依{期間}漲跌排序，點股票可看個股查詢")
+        點選表(成分, 上色(成分), "族群成分", height=min(35 * (len(成分) + 1) + 3, 420))
+
+
 if 頁面 == 頁面們[0]:
     我的庫存()
+    if 可編輯():
+        自選股區()
     段落("MARKET // 市場")
     上漲 = (今日["漲跌"] > 0).sum()
     下跌 = (今日["漲跌"] < 0).sum()
@@ -641,6 +780,8 @@ if 頁面 == 頁面們[0]:
 
     if 加權 is not None and len(加權) > 1:
         加權圖()
+
+    族群熱力圖()
 
     段落("RANKING // 排行（前 50 檔，含上市櫃）")
     排行 = engine.排行資料(今日)
@@ -886,6 +1027,20 @@ if 頁面 == 頁面們[1]:
     色 = 漲跌色(r["漲跌"])
 
     段落(f"PROFILE // {代號} {r['名稱']}")
+    if 可編輯():
+        自選 = 自選股清單()
+        在 = [g for g, v in 自選.items() if 代號 in v]
+        if 在:
+            if st.button(f"★ 已在自選股「{'、'.join(在)}」· 點此移除", key="移除自選"):
+                存自選股({g: [c for c in v if c != 代號] for g, v in 自選.items()})
+                st.rerun()
+        else:
+            群組們 = list(自選) or ["自選股"]
+            a, b = st.columns([1, 1]) if len(群組們) > 1 else (st, None)
+            加到 = b.selectbox("加到群組", 群組們, label_visibility="collapsed", key="加到群組") if b else 群組們[0]
+            if a.button("☆ 加入自選股", key="加入自選"):
+                存自選股({**自選, 加到: 自選.get(加到, []) + [代號]})
+                st.rerun()
     股數 = r.get("發行股數")
     卡片格([
         卡片("收盤 · " + 最新日.strftime("%m/%d"), 數(r["收盤"]), f"{r['漲跌']:+.2f}（{r['漲跌幅']:+.2f}%）", 色),

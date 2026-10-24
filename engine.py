@@ -1255,3 +1255,94 @@ def AI分析Gemini(代號, 名稱, 數據摘要, api_key, 模型="gemini-flash-l
         if 網.get("uri") and 網["uri"] not in 來源:
             來源[網["uri"]] = 網.get("title") or 網["uri"]
     return 文字, list(來源.items())
+
+
+# ========== 11. 族群熱力圖 ==========
+族群期間 = {"今日": "漲跌幅", "5 日": "5日漲幅", "20 日": "20日漲幅"}
+
+
+def 族群資料(今日, 期間="今日", 大小="市值", 每族群=15):
+    """回傳 (族群表, 個股表)。族群漲跌幅用市值（或成交值）加權平均，大型股影響較大。
+    個股表只留每個族群最大的幾檔，熱力圖在手機上才看得清楚。"""
+    欄 = 族群期間[期間]
+    表 = 今日[(今日["收盤"] > 0) & ~今日["代號"].str.startswith("00")
+            & (今日["產業"].fillna("") != "") & 今日[欄].notna()].copy()
+    表["市值億"] = 表["收盤"] * 表["發行股數"] / 1e8
+    表["權重"] = 表["市值億"] if 大小 == "市值" else 表["成交值億"]
+    表 = 表[表["權重"] > 0]
+    表["幅度"] = 表[欄]
+    表["加權"] = 表["幅度"] * 表["權重"]
+    群 = 表.groupby("產業")
+    族群 = pd.DataFrame({
+        "漲跌幅": 群["加權"].sum() / 群["權重"].sum(),
+        "上漲": 群["幅度"].apply(lambda s: int((s > 0).sum())),
+        "下跌": 群["幅度"].apply(lambda s: int((s < 0).sum())),
+        "家數": 群.size(),
+        "成交值億": 群["成交值億"].sum(),
+        "市值億": 群["市值億"].sum(),
+        "權重": 群["權重"].sum(),
+    })
+    領 = 表.loc[群["幅度"].idxmax()].set_index("產業")
+    族群["領漲股"] = 領["名稱"] + " " + 領["幅度"].map("{:+.1f}%".format)
+    族群 = 族群.astype({"漲跌幅": float, "成交值億": float, "市值億": float}).round({"漲跌幅": 2, "成交值億": 1, "市值億": 0}).sort_values("漲跌幅", ascending=False)
+    表 = 表.sort_values("權重", ascending=False)
+    前段 = 表.groupby("產業").head(每族群)
+    其餘 = 表.drop(前段.index).groupby("產業")
+    其他 = pd.DataFrame({"代號": "", "權重": 其餘["權重"].sum(), "加權": 其餘["加權"].sum(),
+                       "名稱": 其餘.size().map("其他 {} 檔".format)}).reset_index()
+    其他["幅度"] = 其他["加權"] / 其他["權重"]
+    個股 = pd.concat([前段, 其他], ignore_index=True)
+    return 族群, 個股[["產業", "代號", "名稱", "幅度", "權重"]]
+
+
+# ========== 12. 自選股（存到 GitHub 的 ai-reports 分支 watchlist.json，跟 AI 報告放一起） ==========
+def _GitHub設定(設定):
+    權杖 = 清理金鑰(設定.get("GITHUB_TOKEN"))
+    倉庫 = 設定.get("AI_REPO", "gelu27/Stock-lab")
+    分支 = 設定.get("AI_BRANCH", "ai-reports")
+    標頭 = {"Authorization": f"Bearer {權杖}", "Accept": "application/vnd.github+json"}
+    return 權杖, f"https://api.github.com/repos/{倉庫}/contents/watchlist.json", 分支, 標頭
+
+
+def _本機自選股():
+    return 資料夾.parent / "ai_reports" / "watchlist.json"
+
+
+def 讀取自選股(設定):
+    """回傳 {群組名: [代號, ...]}。沒有 GITHUB_TOKEN 時讀網站暫存（重啟會消失）。"""
+    import base64, json, requests
+
+    權杖, 網址, 分支, 標頭 = _GitHub設定(設定)
+    if 權杖:
+        回應 = requests.get(網址, params={"ref": 分支}, headers=標頭, timeout=15)
+        if 回應.status_code == 404:
+            return {}
+        回應.raise_for_status()
+        return json.loads(base64.b64decode(回應.json()["content"]).decode("utf-8"))
+    f = _本機自選股()
+    return json.loads(f.read_text("utf-8")) if f.exists() else {}
+
+
+def 儲存自選股(自選, 設定):
+    """回傳是否已永久保存（存到 GitHub）。"""
+    import base64, json, requests
+
+    內容 = json.dumps(自選, ensure_ascii=False, indent=1)
+    權杖, 網址, 分支, 標頭 = _GitHub設定(設定)
+    if not 權杖:
+        f = _本機自選股()
+        f.parent.mkdir(exist_ok=True)
+        f.write_text(內容, "utf-8")
+        return False
+    倉庫網址 = 網址.split("/contents/")[0]
+    if requests.get(f"{倉庫網址}/branches/{分支}", headers=標頭, timeout=15).status_code == 404:
+        主 = requests.get(f"{倉庫網址}/git/ref/heads/main", headers=標頭, timeout=15)
+        主.raise_for_status()
+        requests.post(f"{倉庫網址}/git/refs", headers=標頭, timeout=15,
+                      json={"ref": f"refs/heads/{分支}", "sha": 主.json()["object"]["sha"]}).raise_for_status()
+    現有 = requests.get(網址, params={"ref": 分支}, headers=標頭, timeout=15)
+    資料 = {"message": "更新自選股", "branch": 分支, "content": base64.b64encode(內容.encode("utf-8")).decode()}
+    if 現有.status_code == 200:
+        資料["sha"] = 現有.json()["sha"]
+    requests.put(網址, headers=標頭, json=資料, timeout=30).raise_for_status()
+    return True
