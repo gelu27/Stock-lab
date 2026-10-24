@@ -27,6 +27,17 @@ import pandas as pd
 
 
 # ---------- 1. 讀資料 ----------
+def 釋放記憶體():
+    """把 pandas 用完的暫存記憶體真正還給系統（Linux 預設會一直佔著，雲端容易超過上限而當機）"""
+    import gc
+    gc.collect()
+    try:
+        import ctypes
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
+
+
 def _讀每日檔(子資料夾):
     檔案們 = sorted((資料夾 / 子資料夾).glob("**/*.csv.gz"))
     if not 檔案們:
@@ -61,9 +72,12 @@ def 讀取資料庫():
     if "market" not in 表.columns:
         表["market"] = "上市"
     表["market"] = 表["market"].fillna("上市")
+    釋放記憶體()
     籌碼 = _讀每日檔("chips")
     if 籌碼 is not None:
         表 = 表.merge(籌碼, on=["date", "code"], how="left")
+        del 籌碼
+        釋放記憶體()
     數字 = 表.select_dtypes("float64").columns
     表[數字] = 表[數字].astype("float32")  # 省記憶體
     return 表.sort_values(["code", "date"], ignore_index=True)

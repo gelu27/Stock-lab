@@ -186,7 +186,10 @@ def 載入(資料版本):
     原始 = engine.讀取資料庫()
     if 原始 is None:
         return None, None
-    return engine.計算指標(原始), engine.讀取加權指數()
+    指標 = engine.計算指標(原始)
+    del 原始
+    engine.釋放記憶體()
+    return 指標, engine.讀取加權指數()
 
 
 def 資料版本():
@@ -196,7 +199,18 @@ def 資料版本():
     return f"{最新}-{檔數}"
 
 
-指標, 加權 = 載入(資料版本())
+@st.cache_resource
+def _目前版本():
+    return {"版本": None}
+
+
+_版本 = 資料版本()
+if _目前版本()["版本"] not in (None, _版本):
+    # 資料更新了：先丟掉舊資料再讀新的，避免新舊兩份同時佔記憶體
+    載入.clear()
+    engine.釋放記憶體()
+_目前版本()["版本"] = _版本
+指標, 加權 = 載入(_版本)
 
 st.markdown("""<div class="hero"><div class="kicker">TAIWAN STOCK EXCHANGE // PERSONAL LAB</div>
 <div class="title">台股<span>觀測</span>實驗室</div>
