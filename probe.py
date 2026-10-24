@@ -8,11 +8,11 @@ def show(name, r, n=600):
         except Exception: print(t.decode("big5", "replace")[:n])
     except Exception as e:
         print(name, "ERR", e)
-def get(name, url, **kw):
-    try: show(name, requests.get(url, headers=H, timeout=30, **kw))
+def get(name, url, n=600, **kw):
+    try: show(name, requests.get(url, headers=H, timeout=30, **kw), n)
     except Exception as e: print(f"===== {name} EXC {e}")
-def post(name, url, **kw):
-    try: show(name, requests.post(url, headers=H, timeout=30, **kw))
+def post(name, url, n=600, **kw):
+    try: show(name, requests.post(url, headers=H, timeout=30, **kw), n)
     except Exception as e: print(f"===== {name} EXC {e}")
 
 get("TWT49U range", "https://www.twse.com.tw/rwd/zh/exRight/TWT49U?startDate=20250101&endDate=20251231&response=json", n=1500)
