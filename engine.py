@@ -131,6 +131,8 @@ def 單季損益(代號=None):
     if 代號 is not None:
         t = t[t["code"] == str(代號)]
     t = t.dropna(subset=["revenue", "gross"]).sort_values(["code", "quarter"]).copy()
+    if "opinc" not in t.columns:
+        t["opinc"] = np.nan
     t["年"], t["季"] = t["quarter"].str[:4], t["quarter"].str[-1].astype(int)
     前季號 = t.groupby(["code", "年"])["季"].shift()
     for k in ("revenue", "gross", "opinc"):
@@ -140,6 +142,29 @@ def 單季損益(代號=None):
     t["毛利率"] = np.where(有效, t["gross_q"] / t["revenue_q"] * 100, np.nan).round(2)
     t["營益率"] = np.where(有效, t["opinc_q"] / t["revenue_q"] * 100, np.nan).round(2)
     return t
+
+
+def 近四季EPS(代號):
+    """用各季累計 EPS 換成單季，加總最近連續四季；也算去年同期的近四季。回傳 (近四季, 截至季度, 去年同期近四季)。"""
+    f = 資料夾 / "fundamental" / "income.csv"
+    if not f.exists():
+        return np.nan, None, np.nan
+    t = pd.read_csv(f, dtype={"code": str})
+    if "eps" not in t.columns:
+        return np.nan, None, np.nan
+    t = t[t["code"] == str(代號)].dropna(subset=["eps"]).sort_values("quarter")
+    if t.empty:
+        return np.nan, None, np.nan
+    t["年"], t["季"] = t["quarter"].str[:4].astype(int), t["quarter"].str[-1].astype(int)
+    t["序"] = t["年"] * 4 + t["季"]
+    累計 = t.set_index("序")["eps"]
+    單季 = {序: (累計[序] if 季 == 1 else 累計[序] - 累計[序 - 1] if 序 - 1 in 累計.index else np.nan)
+            for 序, 季 in zip(t["序"], t["季"])}
+    def 四季(末):
+        值 = [單季.get(末 - i, np.nan) for i in range(4)]
+        return float(np.sum(值)) if not np.isnan(值).any() else np.nan
+    末 = int(t["序"].iloc[-1])
+    return 四季(末), t["quarter"].iloc[-1], 四季(末 - 4)
 
 
 def 毛利率表():

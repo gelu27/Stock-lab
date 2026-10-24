@@ -469,16 +469,22 @@ def _解析損益(html):
     列們 = []
     for 表 in re.findall(r"<table[^>]*>(.*?)</table>", html, re.S):
         標題 = [去標籤(t) for t in re.findall(r"<th[^>]*>(.*?)</th>", 表, re.S)]
-        if "公司代號" not in 標題 or "營業收入" not in 標題:
+        if "公司代號" not in 標題 or "基本每股盈餘（元）" not in 標題:
             continue
-        位 = {k: 標題.index(k) for k in ("公司代號", "營業收入", "營業毛利（毛損）淨額", "營業利益（損失）") if k in 標題}
+        # 金融業的表沒有營收、毛利，但有 EPS 和歸屬母公司淨利（ROE 會用到）
+        淨利欄 = next((k for k in 標題 if k.startswith("淨利") and "母公司業主" in k), None)
+        位 = {k: 標題.index(k) for k in ("公司代號", "營業收入", "營業毛利（毛損）淨額", "營業利益（損失）",
+                                        "基本每股盈餘（元）") if k in 標題}
+        if 淨利欄:
+            位["淨利"] = 標題.index(淨利欄)
         for 列 in re.findall(r"<tr[^>]*>(.*?)</tr>", 表, re.S):
             格 = [去標籤(t) for t in re.findall(r"<td[^>]*>(.*?)</td>", 列, re.S)]
             if len(格) != len(標題):
                 continue
             取 = lambda k: 轉數字(格[位[k]]) if k in 位 else None
             列們.append({"code": 格[位["公司代號"]], "revenue": 取("營業收入"),
-                        "gross": 取("營業毛利（毛損）淨額"), "opinc": 取("營業利益（損失）")})
+                        "gross": 取("營業毛利（毛損）淨額"), "opinc": 取("營業利益（損失）"),
+                        "netinc": 取("淨利"), "eps": 取("基本每股盈餘（元）")})
     return pd.DataFrame(列們)
 
 
@@ -486,8 +492,8 @@ def 抓損益表(季數=12):
     """各季綜合損益表（今年累計數），用來算毛利率；已經有的季度不重抓（最近 2 季會重抓）。"""
     檔案 = 資料夾 / "fundamental" / "income.csv"
     舊 = pd.read_csv(檔案, dtype={"code": str}) if 檔案.exists() else pd.DataFrame(
-        columns=["code", "quarter", "revenue", "gross", "opinc"])
-    已有 = set(舊["quarter"])
+        columns=["code", "quarter", "revenue", "gross", "opinc", "netinc", "eps"])
+    已有 = set(舊["quarter"]) if "eps" in 舊.columns else set()  # 舊檔沒有 EPS 欄位就全部重抓
     今天 = dt.date.today()
     年, 季 = 今天.year, (今天.month - 1) // 3 + 1
     新們 = []
@@ -512,7 +518,7 @@ def 抓損益表(季數=12):
             except Exception as 錯誤:
                 print(f"  損益表 {季度} {類} 失敗：{錯誤}")
     if 新們:
-        表 = pd.concat([舊] + 新們).dropna(subset=["revenue"])
+        表 = pd.concat([舊] + 新們).dropna(subset=["revenue", "eps"], how="all")
         表 = 表.drop_duplicates(["code", "quarter"], keep="last").sort_values(["code", "quarter"])
         表.to_csv(檔案, index=False)
         print(f"損益表完成，共 {表['quarter'].nunique()} 季")
