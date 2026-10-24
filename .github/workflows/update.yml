@@ -30,3 +30,11 @@ jobs:
           git diff --cached --quiet || git commit -m "更新資料庫 $(date +%F)"
           git pull --rebase origin main
           git push
+      - name: LINE 收盤摘要
+        continue-on-error: true
+        run: python notify.py daily
+        env:
+          LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          HOLDINGS: ${{ secrets.HOLDINGS }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

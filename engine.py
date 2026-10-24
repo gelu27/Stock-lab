@@ -39,21 +39,40 @@ def 釋放記憶體():
 
 
 def _讀每日檔(子資料夾):
+    """用 pyarrow 多執行緒一次讀完每天的小檔（比一檔一檔用 pandas 讀快兩三倍，網站開啟等比較久的就是這步）。"""
+    from concurrent.futures import ThreadPoolExecutor
+    import pyarrow as pa
+    import pyarrow.csv as pc
+
     檔案們 = sorted((資料夾 / 子資料夾).glob("**/*.csv.gz"))
     if not 檔案們:
         return None
-    表們, 名稱們 = [], {}
-    for f in 檔案們:
-        t = pd.read_csv(f, dtype={"code": str})
-        if "name" in t.columns:  # 名稱另外存一份對照表，不必每天每檔都存一個字串（很佔記憶體）
-            名稱們.update(zip(t["code"], t["name"]))
-            t = t.drop(columns="name")
-        t["date"] = pd.Timestamp(f"{f.name[:4]}-{f.name[4:6]}-{f.name[6:8]}")  # 日期從檔名取
-        數字 = t.select_dtypes("number").columns
-        t[數字] = t[數字].astype("float32")
-        表們.append(t)
-    表 = pd.concat(表們, ignore_index=True)
+    選項 = pc.ConvertOptions(column_types={"code": pa.string(), "market": pa.string(), "name": pa.string()})
+
+    def 讀(f):
+        t = pc.read_csv(f, convert_options=選項)
+        欄們 = {}
+        for 名 in t.column_names:
+            c = t[名]
+            if pa.types.is_integer(c.type) or pa.types.is_floating(c.type) or pa.types.is_null(c.type):
+                c = c.cast(pa.float32(), safe=False)  # 省記憶體
+            欄們[名] = c
+        日 = np.datetime64(f"{f.name[:4]}-{f.name[4:6]}-{f.name[6:8]}", "us")  # 日期從檔名取
+        欄們["date"] = pa.array(np.full(t.num_rows, 日))
+        return pa.table(欄們)
+
+    with ThreadPoolExecutor(4) as 工人:
+        表們 = list(工人.map(讀, 檔案們))
+    合併 = pa.concat_tables(表們, promote_options="permissive")
     del 表們
+    名稱們 = {}
+    if "name" in 合併.column_names:  # 名稱另外存一份對照表，不必每天每檔都存一個字串（很佔記憶體）
+        名 = 合併.select(["code", "name"]).to_pandas()
+        名稱們 = dict(zip(名["code"], 名["name"]))  # 後面（較新）的名稱蓋過前面的
+        del 名
+        合併 = 合併.drop_columns(["name"])
+    表 = 合併.to_pandas(self_destruct=True)
+    del 合併
     表 = 表.drop_duplicates(["date", "code"], keep="last")
     # 同樣的文字共用同一個物件，例如「2330」「上市」，省下幾百 MB 記憶體
     for 欄 in ("code", "market"):
@@ -1295,42 +1314,38 @@ def 族群資料(今日, 期間="今日", 大小="市值", 每族群=15):
     return 族群, 個股[["產業", "代號", "名稱", "幅度", "權重"]]
 
 
-# ========== 12. 自選股（存到 GitHub 的 ai-reports 分支 watchlist.json，跟 AI 報告放一起） ==========
-def _GitHub設定(設定):
+# ========== 12. 自選股、到價提醒（存到 GitHub 的 ai-reports 分支，跟 AI 報告放一起） ==========
+def _GitHub設定(設定, 檔名):
     權杖 = 清理金鑰(設定.get("GITHUB_TOKEN"))
     倉庫 = 設定.get("AI_REPO", "gelu27/Stock-lab")
     分支 = 設定.get("AI_BRANCH", "ai-reports")
     標頭 = {"Authorization": f"Bearer {權杖}", "Accept": "application/vnd.github+json"}
-    return 權杖, f"https://api.github.com/repos/{倉庫}/contents/watchlist.json", 分支, 標頭
+    return 權杖, f"https://api.github.com/repos/{倉庫}/contents/{檔名}", 分支, 標頭
 
 
-def _本機自選股():
-    return 資料夾.parent / "ai_reports" / "watchlist.json"
-
-
-def 讀取自選股(設定):
-    """回傳 {群組名: [代號, ...]}。沒有 GITHUB_TOKEN 時讀網站暫存（重啟會消失）。"""
+def 讀取設定檔(設定, 檔名):
+    """讀 ai-reports 分支上的 JSON 檔（watchlist.json、alerts.json）。沒有 GITHUB_TOKEN 時讀網站暫存（重啟會消失）。"""
     import base64, json, requests
 
-    權杖, 網址, 分支, 標頭 = _GitHub設定(設定)
+    權杖, 網址, 分支, 標頭 = _GitHub設定(設定, 檔名)
     if 權杖:
         回應 = requests.get(網址, params={"ref": 分支}, headers=標頭, timeout=15)
         if 回應.status_code == 404:
             return {}
         回應.raise_for_status()
         return json.loads(base64.b64decode(回應.json()["content"]).decode("utf-8"))
-    f = _本機自選股()
+    f = 資料夾.parent / "ai_reports" / 檔名
     return json.loads(f.read_text("utf-8")) if f.exists() else {}
 
 
-def 儲存自選股(自選, 設定):
+def 儲存設定檔(設定, 檔名, 內容物, 訊息="更新設定"):
     """回傳是否已永久保存（存到 GitHub）。"""
     import base64, json, requests
 
-    內容 = json.dumps(自選, ensure_ascii=False, indent=1)
-    權杖, 網址, 分支, 標頭 = _GitHub設定(設定)
+    內容 = json.dumps(內容物, ensure_ascii=False, indent=1)
+    權杖, 網址, 分支, 標頭 = _GitHub設定(設定, 檔名)
     if not 權杖:
-        f = _本機自選股()
+        f = 資料夾.parent / "ai_reports" / 檔名
         f.parent.mkdir(exist_ok=True)
         f.write_text(內容, "utf-8")
         return False
@@ -1341,8 +1356,151 @@ def 儲存自選股(自選, 設定):
         requests.post(f"{倉庫網址}/git/refs", headers=標頭, timeout=15,
                       json={"ref": f"refs/heads/{分支}", "sha": 主.json()["object"]["sha"]}).raise_for_status()
     現有 = requests.get(網址, params={"ref": 分支}, headers=標頭, timeout=15)
-    資料 = {"message": "更新自選股", "branch": 分支, "content": base64.b64encode(內容.encode("utf-8")).decode()}
+    資料 = {"message": 訊息, "branch": 分支, "content": base64.b64encode(內容.encode("utf-8")).decode()}
     if 現有.status_code == 200:
         資料["sha"] = 現有.json()["sha"]
     requests.put(網址, headers=標頭, json=資料, timeout=30).raise_for_status()
     return True
+
+
+def 讀取自選股(設定):
+    """回傳 {群組名: [代號, ...]}。"""
+    return 讀取設定檔(設定, "watchlist.json")
+
+
+def 儲存自選股(自選, 設定):
+    return 儲存設定檔(設定, "watchlist.json", 自選, "更新自選股")
+
+
+def 讀取提醒(設定):
+    """回傳 {代號: {"上": 價格或 None, "下": 價格或 None}}。"""
+    return 讀取設定檔(設定, "alerts.json")
+
+
+def 儲存提醒(提醒, 設定):
+    return 儲存設定檔(設定, "alerts.json", 提醒, "更新到價提醒")
+
+
+# ========== 13. 本益比河流圖、同族群比較 ==========
+def 本益比河流(歷史, 倍數個數=5):
+    """歷史：某檔的每日資料（date、收盤、本益比）。交易所的本益比 = 收盤 ÷ 近四季 EPS，
+    反推每天的近四季 EPS，再乘上幾個本益比倍數畫成河流。回傳 (表, 倍數們, 目前百分位) 或 None。"""
+    h = 歷史[(歷史["本益比"] > 0) & (歷史["收盤"] > 0)][["date", "收盤", "本益比"]].copy()
+    if len(h) < 60:
+        return None
+    h["EPS"] = h["收盤"] / h["本益比"]
+    低, 高 = h["本益比"].quantile([0.1, 0.9])
+    倍數們 = sorted({round(x) for x in np.linspace(低, 高, 倍數個數)})
+    if len(倍數們) < 3:
+        倍數們 = [round(低 * 0.8), round(低), round((低 + 高) / 2), round(高), round(高 * 1.2)]
+    for 倍 in 倍數們:
+        h[f"{倍}倍"] = h["EPS"] * 倍
+    目前 = h["本益比"].iloc[-1]
+    百分位 = (h["本益比"] < 目前).mean() * 100
+    return h, 倍數們, 百分位
+
+
+def 同族群(今日, 代號, 檔數=10):
+    """同產業市值最大的幾檔（一定包含自己），用來比較估值與成長。"""
+    產業 = 今日.loc[今日["代號"] == 代號, "產業"]
+    if 產業.empty or not 產業.iloc[0]:
+        return None
+    群 = 今日[(今日["產業"] == 產業.iloc[0]) & (今日["收盤"] > 0) & ~今日["代號"].str.startswith("00")].copy()
+    群["市值億"] = (群["收盤"] * 群["發行股數"] / 1e8).round(0)
+    前段 = 群.nlargest(檔數, "市值億")
+    if 代號 not in 前段["代號"].values:
+        前段 = pd.concat([前段.head(檔數 - 1), 群[群["代號"] == 代號]])
+    return 前段.sort_values("市值億", ascending=False)
+
+
+# ========== 14. 除權息、集保大戶、國際行情 ==========
+def 讀取除權息(代號):
+    """回傳 (歷史, 預告)。歷史：date、type（權/息/權息）、value（權值+息值）、cash、pre_close、ref。"""
+    歷史 = 預告 = None
+    f = 資料夾 / "fundamental" / "dividend.csv"
+    if f.exists():
+        t = pd.read_csv(f, dtype={"code": str}, parse_dates=["date"])
+        歷史 = t[t["code"] == 代號].sort_values("date")
+    f = 資料夾 / "fundamental" / "dividend_upcoming.csv"
+    if f.exists():
+        t = pd.read_csv(f, dtype={"code": str}, parse_dates=["date"])
+        預告 = t[(t["code"] == 代號) & (t["date"] >= pd.Timestamp.now().normalize())]
+    return 歷史, 預告
+
+
+def 填息(除權息, 價格):
+    """價格：該檔每日 date、收盤（原始價）。每次除權息後，收盤回到除權息前收盤價要幾個交易日。"""
+    結果 = []
+    for _, e in 除權息.iterrows():
+        之後 = 價格[價格["date"] >= e["date"]]
+        回到 = 之後[之後["收盤"] >= e["pre_close"]]
+        if len(之後) == 0:
+            狀態 = "—"
+        elif len(回到):
+            狀態 = f"{len(之後[之後['date'] <= 回到['date'].iloc[0]]) - 1} 天"
+        else:
+            狀態 = "尚未填息" if 之後["date"].min() > 價格["date"].min() else "—"
+        結果.append(狀態)
+    return 結果
+
+
+def 讀取集保(代號):
+    """每週千張大戶、400 張以上大戶、50 張以下散戶持股比例與總股東人數。"""
+    表們 = []
+    for f in sorted((資料夾 / "tdcc").glob("*.csv.gz")):
+        t = pd.read_csv(f, dtype={"code": str})
+        t = t[t["code"] == 代號]
+        if len(t):
+            表們.append(t.assign(date=pd.Timestamp(f.name[:8])))
+    return pd.concat(表們, ignore_index=True) if 表們 else None
+
+
+國際代號 = {"道瓊": "^DJI", "那斯達克": "^IXIC", "S&P 500": "^GSPC", "費城半導體": "^SOX",
+          "台積電 ADR": "TSM", "日經 225": "^N225", "美元/台幣": "USDTWD=X"}
+
+
+def 國際行情():
+    """Yahoo 財經的國際指數（最新價與漲跌）。回傳 {名稱: dict(價, 漲跌, 幅度, 時間)}。"""
+    import requests
+    from concurrent.futures import ThreadPoolExecutor
+
+    def 抓(項):
+        名, 符號 = 項
+        try:
+            r = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{requests.utils.quote(符號)}"
+                             "?interval=1d&range=5d", headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+            結果 = r.json()["chart"]["result"][0]
+            收們 = [c for c in 結果["indicators"]["quote"][0]["close"] if c is not None]
+            價 = 結果["meta"].get("regularMarketPrice") or 收們[-1]
+            # 日線最後一根通常就是現價，昨收取前一根
+            昨 = 收們[-2] if len(收們) >= 2 and abs(收們[-1] - 價) <= abs(價) * 1e-6 else 收們[-1]
+            時間 = pd.Timestamp(結果["meta"]["regularMarketTime"], unit="s", tz="UTC").tz_convert("Asia/Taipei")
+            return 名, {"價": 價, "漲跌": 價 - 昨, "幅度": (價 / 昨 - 1) * 100, "時間": 時間}
+        except Exception:
+            return 名, None
+
+    with ThreadPoolExecutor(8) as 工人:
+        return {名: v for 名, v in 工人.map(抓, 國際代號.items()) if v}
+
+
+def 台指期():
+    """期交所行情：台指期近月日盤與夜盤。回傳 {"日盤": dict, "夜盤": dict}（抓不到的不放）。"""
+    import requests
+
+    結果 = {}
+    for 盤, 代碼, 尾 in (("日盤", "0", "-F"), ("夜盤", "1", "-M")):
+        try:
+            r = requests.post("https://mis.taifex.com.tw/futures/api/getQuoteList", timeout=10,
+                              headers={"User-Agent": "Mozilla/5.0"},
+                              json={"MarketType": 代碼, "SymbolType": "F", "KindID": "1", "CID": "TXF",
+                                    "ExpireMonth": "", "RowSize": "全部", "PageNo": "", "SortColumn": "",
+                                    "AscDesc": "A"})
+            for q in r.json()["RtData"]["QuoteList"]:
+                if q["SymbolID"].startswith("TXF") and q["SymbolID"].endswith(尾) and q.get("CLastPrice"):
+                    結果[盤] = {"名稱": q["DispCName"], "價": float(q["CLastPrice"]), "漲跌": float(q["CDiff"]),
+                              "幅度": float(q["CDiffRate"]), "時間": f"{q['CDate'][4:6]}/{q['CDate'][6:]} "
+                              f"{q['CTime'][:2]}:{q['CTime'][2:4]}" if q.get("CTime") else q["CDate"]}
+                    break
+        except Exception:
+            pass
+    return 結果

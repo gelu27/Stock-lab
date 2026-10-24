@@ -14,6 +14,8 @@
 #   data/fundamental/revenue_history.csv   近 5 年每月營收（公開資訊觀測站），算「營收創新高」
 #   data/fundamental/capital.csv           股本、發行股數、產業，算「週轉率」
 #   data/fundamental/insider.csv           每月內部人（董監經理人、大股東）持股與質押合計，逐月累積
+#   data/fundamental/dividend.csv          近 6 年除權息紀錄；dividend_upcoming.csv 除權息預告
+#   data/tdcc/20261022.csv.gz             集保每週股權分散（千張大戶、400 張大戶、散戶比例），每週累積
 #   data/fx.csv                           美元兌台幣匯率
 
 import argparse
@@ -371,6 +373,93 @@ def 抓基本面():
     抓內部人()
     抓歷史營收()
     抓損益表()
+    抓除權息()
+    抓集保()
+
+
+def _民國日期(文字):
+    """「114年01月02日」「114/01/02」「1140102」都轉成 2025-01-02，看不懂就回傳 None。"""
+    數字 = re.sub(r"\D", "", str(文字))
+    return 民國轉西元(數字) if len(數字) in (6, 7) else None
+
+
+def 抓除權息(年數=6):
+    """除權息歷史（交易所 TWT49U、櫃買 exDailyQ，一年抓一次）→ dividend.csv；
+    之後的除權息預告 → dividend_upcoming.csv。今年和去年每次重抓，更早的已經有就不重抓。"""
+    檔案 = 資料夾 / "fundamental" / "dividend.csv"
+    舊 = pd.read_csv(檔案, dtype={"code": str}) if 檔案.exists() else pd.DataFrame()
+    已有年 = set(舊["date"].str[:4]) if len(舊) else set()
+    今年 = dt.date.today().year
+    新們 = []
+    for 年 in range(今年 - 年數 + 1, 今年 + 1):
+        if str(年) in 已有年 and 年 < 今年 - 1:
+            continue
+        上市 = 證交所(f"https://www.twse.com.tw/rwd/zh/exRight/TWT49U?startDate={年}0101&endDate={年}1231&response=json")
+        for 標題, 欄, 資料 in 取得表格(上市 or {}):
+            t = pd.DataFrame(資料, columns=欄)
+            新們.append(pd.DataFrame({
+                "code": t["股票代號"].str.strip(), "date": t["資料日期"].map(_民國日期),
+                "type": t["權/息"].str.strip(), "value": t["權值+息值"].map(轉數字), "cash": float("nan"),
+                "pre_close": t["除權息前收盤價"].map(轉數字), "ref": t["除權息參考價"].map(轉數字)}))
+        try:
+            time.sleep(3)
+            r = requests.post("https://www.tpex.org.tw/www/zh-tw/bulletin/exDailyQ", headers=標頭, timeout=30,
+                              data={"startDate": f"{年}/01/01", "endDate": f"{年}/12/31", "response": "json"})
+            for 標題, 欄, 資料 in 取得表格(r.json()):
+                t = pd.DataFrame(資料, columns=欄)
+                新們.append(pd.DataFrame({
+                    "code": t["代號"].str.strip(), "date": t["除權息日期"].map(_民國日期),
+                    "type": t["權/息"].str.replace("除", "").str.strip(), "value": t["權值+息值"].map(轉數字),
+                    "cash": t["現金股利"].map(轉數字),
+                    "pre_close": t["除權息前收盤價"].map(轉數字), "ref": t["除權息參考價"].map(轉數字)}))
+        except Exception as 錯誤:
+            print(f"  櫃買除權息 {年} 失敗：{錯誤}")
+    if 新們:
+        新 = pd.concat(新們)
+        新 = 新[新["code"].str.fullmatch(代號格式) & 新["date"].notna()]
+        新["date"] = pd.to_datetime(新["date"]).dt.strftime("%Y-%m-%d")
+        表 = pd.concat([舊, 新]).drop_duplicates(["code", "date"], keep="last").sort_values(["code", "date"])
+        表.round(4).to_csv(檔案, index=False)
+        print(f"除權息歷史完成，共 {len(表)} 筆")
+    預告 = []
+    for 列 in 證交所("https://openapi.twse.com.tw/v1/exchangeReport/TWT48U_ALL") or []:
+        預告.append({"code": 列.get("Code", "").strip(), "date": _民國日期(列.get("Date", "")),
+                   "type": 列.get("Exdividend", "").strip(), "cash": 轉數字(列.get("CashDividend")),
+                   "stock_ratio": 轉數字(列.get("StockDividendRatio"))})
+    for 列 in 櫃買("https://www.tpex.org.tw/openapi/v1/tpex_exright_prepost") or []:
+        預告.append({"code": 列.get("SecuritiesCompanyCode", "").strip(),
+                   "date": _民國日期(列.get("ExRrightsExDividendDate", "")),
+                   "type": 列.get("ExRrightsExDividend", "").replace("除", "").strip(),
+                   "cash": 轉數字(列.get("CashDividend")), "stock_ratio": 轉數字(列.get("StockDividendRatio"))})
+    if 預告:
+        表 = pd.DataFrame(預告).dropna(subset=["date"])
+        表["date"] = pd.to_datetime(表["date"]).dt.strftime("%Y-%m-%d")
+        表.to_csv(資料夾 / "fundamental" / "dividend_upcoming.csv", index=False)
+        print(f"除權息預告完成，共 {len(表)} 筆")
+
+
+def 抓集保():
+    """集保結算所每週股權分散表（只有最新一週，每週累積一份）→ data/tdcc/YYYYMMDD.csv.gz。
+    分級 1~15：1 張以下 … 15 為 1000 張以上；17 為合計。"""
+    r = requests.get("https://opendata.tdcc.com.tw/getOD.ashx?id=1-5", headers=標頭, timeout=60)
+    r.raise_for_status()
+    t = pd.read_csv(io.StringIO(r.content.decode("utf-8-sig")), dtype={"證券代號": str})
+    t.columns = ["date", "code", "level", "people", "shares", "pct"]
+    t["code"] = t["code"].str.strip()
+    t = t[t["code"].str.fullmatch(代號格式)]
+    日期 = str(t["date"].iloc[0])
+    樞 = t.pivot_table(index="code", columns="level", values="pct", aggfunc="sum").fillna(0)
+    人 = t.pivot_table(index="code", columns="level", values="people", aggfunc="sum").fillna(0)
+    結果 = pd.DataFrame({
+        "big1000": 樞.get(15, 0),
+        "big400": 樞[[c for c in (12, 13, 14, 15) if c in 樞]].sum(axis=1),
+        "retail": 樞[[c for c in range(1, 9) if c in 樞]].sum(axis=1),   # 50 張以下
+        "holders": 人.get(17, 0),
+        "big1000_people": 人.get(15, 0),
+    }).round(2).reset_index()
+    (資料夾 / "tdcc").mkdir(exist_ok=True)
+    存壓縮檔(結果, 資料夾 / "tdcc" / f"{日期}.csv.gz")
+    print(f"集保股權分散完成（{日期}，{len(結果)} 檔）")
 
 
 def 抓內部人():
