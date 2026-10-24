@@ -6,7 +6,9 @@ import hmac
 import io
 
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 
 import importlib
@@ -218,7 +220,7 @@ else:
     條件.update(engine.烏賊條件[範本]["條件"])
     條件["排除ETF"] = True
 
-分頁 = st.tabs(["01 / 市場總覽", "02 / 選股", "03 / 回測"])
+分頁 = st.tabs(["01 / 市場總覽", "02 / 選股", "03 / 回測", "04 / 個股查詢"])
 
 # ---------- 01 市場總覽 ----------
 def 我的庫存():
@@ -367,7 +369,34 @@ with 分頁[0]:
 
 # ---------- 02 選股 ----------
 with 分頁[1]:
-  選股分頁 = st.tabs(["條件選股", "烏賊每日功課"])
+  選股分頁 = st.tabs(["條件選股", "烏賊每日功課", "烏賊策略總覽"])
+  with 選股分頁[2]:
+    總表, 名單, 重複 = engine.烏賊總覽(今日)
+    多 = 總表[總表["多空"] == "多"]["符合檔數"].sum()
+    空 = 總表[總表["多空"] == "空"]["符合檔數"].sum()
+    卡片格([卡片("多方策略符合", f"{多}", "檔次（可能重複）", 紅), 卡片("空方策略符合", f"{空}", "檔次（可能重複）", 綠),
+           卡片("同時符合 2 個以上", f"{len(重複)}", "檔", 青)])
+    st.caption("多＝適合找買點（講義：強勢股買拉回、盤整突破）；空＝轉弱、避開或減碼（講義：跌破十日線、弱勢股）。"
+               "資料日期 " + 最新日.strftime("%Y-%m-%d"))
+    段落("SUMMARY // 各策略符合檔數")
+    st.dataframe(總表.style.map(lambda v: f"color:{紅 if v == '多' else 綠}", subset=["多空"]),
+                 hide_index=True, width="stretch",
+                 column_config={"說明": st.column_config.TextColumn(width="large")})
+    段落("OVERLAP // 同時符合多個策略")
+    if 重複.empty:
+        st.write("今天沒有股票同時符合 2 個以上的策略。")
+    else:
+        st.dataframe(上色(重複).map(lambda v: f"color:{紅 if v == '多' else (綠 if v == '空' else '#FFC24B')}",
+                                  subset=["多空"]), hide_index=True, width="stretch")
+    段落("DETAIL // 各策略名單")
+    清單欄 = ["代號", "名稱", "市場", "收盤", "漲跌幅", "成交張數", "量對5日均", "3日漲幅", "5日漲幅", "20日漲幅",
+             "40日漲幅", "週轉率", "股本億", "法人5日買超", "法人10日買超", "營收年增率", "近三季EPS"]
+    for 名, 結果 in 名單.items():
+        方向 = engine.烏賊條件[名]["方向"]
+        with st.expander(f"{'🔴 多' if 方向 == '多' else '🟢 空'}｜{名.replace('烏賊', '')}｜{len(結果)} 檔"):
+            st.caption(engine.烏賊條件[名]["說明"])
+            if len(結果):
+                st.dataframe(上色(結果[[c for c in 清單欄 if c in 結果.columns]]), hide_index=True, width="stretch")
   with 選股分頁[1]:
     st.caption("講義「每天的功課」：每天看這六張榜，熟悉股性。三&五日強勢股的重點是找貼近 5 日或 10 日線、"
                "均線剛勾起來的股票（★）；股本小、量大、有題材最好。")
@@ -543,6 +572,89 @@ with 分頁[2]:
                 st.write("這段期間沒有產生任何交易。")
             else:
                 st.dataframe(上色(交易), hide_index=True, width="stretch")
+
+
+# ---------- 04 個股查詢 ----------
+with 分頁[3]:
+    查詢選項 = (今日["代號"] + " " + 今日["名稱"]).tolist()
+    查詢 = st.selectbox("輸入代號或名稱查詢", 查詢選項,
+                       index=next((i for i, v in enumerate(查詢選項) if v.startswith("2330 ")), 0), key="個股查詢")
+    代號 = 查詢.split()[0]
+    r = 今日[今日["代號"] == 代號].iloc[0]
+    股 = engine._股本表()
+    if "股本億" not in 今日.columns and 代號 in 股.index:
+        r = pd.concat([r, 股.loc[代號]])
+    數 = lambda v, f="{:,.2f}", 尾="": "—" if pd.isna(v) else f.format(v) + 尾
+    比 = r["收盤"] / r["還原價"] if r["還原價"] else 1  # 均線用還原價算，換回原始股價
+    色 = 漲跌色(r["漲跌"])
+
+    段落(f"PROFILE // {代號} {r['名稱']}")
+    股數 = r.get("發行股數")
+    卡片格([
+        卡片("收盤 · " + 最新日.strftime("%m/%d"), 數(r["收盤"]), f"{r['漲跌']:+.2f}（{r['漲跌幅']:+.2f}%）", 色),
+        卡片("產業", r.get("產業") or "—", r["市場"]),
+        卡片("股本", 數(r.get("股本億"), "{:,.1f}", " 億")),
+        卡片("發行股數", 數(股數 / 1000 if pd.notna(股數) else np.nan, "{:,.0f}", " 張")),
+        卡片("市值", 數(股數 * r["收盤"] / 1e8 if pd.notna(股數) else np.nan, "{:,.0f}", " 億")),
+        卡片("成交量", 數(r["成交張數"], "{:,.0f}", " 張"), f"週轉率 {數(r['volume'] / 股數 * 100 if pd.notna(股數) else np.nan, '{:.2f}', '%')}"),
+    ])
+    段落("FUNDAMENTAL // 基本面")
+    營收 = r.get("營收年增率")
+    卡片格([
+        卡片("本益比", 數(r["本益比"])), 卡片("殖利率", 數(r["殖利率"], 尾="%")), 卡片("股價淨值比", 數(r["淨值比"])),
+        卡片("EPS（今年累計）", 數(r.get("EPS")), r.get("EPS季度") or ""),
+        卡片("近三季 EPS 合計", 數(r.get("近三季EPS"))),
+        卡片("月營收年增率", 數(營收, 尾="%"), f"{r.get('營收月份') or ''}"
+             + ("　★ 創歷史新高" if r.get("營收創新高") == True else ""), 漲跌色(營收 if pd.notna(營收) else 0)),
+        卡片("月營收月增率", 數(r.get("營收月增率"), 尾="%"), "", 漲跌色(r.get("營收月增率") or 0)),
+        卡片("累計營收年增率", 數(r.get("累計營收年增率"), 尾="%"), "", 漲跌色(r.get("累計營收年增率") or 0)),
+        卡片("距 52 週高點", 數(r["距52週高點"], "{:+.1f}", "%")),
+    ])
+    if 有籌碼:
+        段落("CHIPS // 籌碼面（張）")
+        卡片格([
+            卡片("外資", 數(r["外資買超"], "{:+,.0f}"), f"連買 {數(r['外資連買'], '{:.0f}')} 天", 漲跌色(r["外資買超"])),
+            卡片("投信", 數(r["投信買超"], "{:+,.0f}"), f"連買 {數(r['投信連買'], '{:.0f}')} 天", 漲跌色(r["投信買超"])),
+            卡片("自營商", 數(r["自營買超"], "{:+,.0f}"), "", 漲跌色(r["自營買超"])),
+            卡片("法人 5 日合計", 數(r["法人5日買超"], "{:+,.0f}"), "", 漲跌色(r["法人5日買超"])),
+            卡片("法人 10 日合計", 數(r["法人10日買超"], "{:+,.0f}"), "", 漲跌色(r["法人10日買超"])),
+            卡片("融資餘額", 數(r["融資餘額"], "{:,.0f}"), f"5 日 {數(r['融資5日增減'], '{:+.1f}', '%')}"),
+        ])
+    段落("TECHNICAL // 技術面")
+    均線 = {n: r[f"MA{n}"] * 比 for n in (5, 10, 20, 60)}
+    卡片格([卡片(f"{n} 日線", 數(v), "站上" if r["收盤"] >= v else "跌破", 紅 if r["收盤"] >= v else 綠)
+           for n, v in 均線.items()] + [
+        卡片("RSI(14)", 數(r["RSI"], "{:.1f}"), "超買" if r["RSI"] > 70 else ("超賣" if r["RSI"] < 30 else "")),
+        卡片("量比（÷20 日均量）", 數(r["量比"])),
+        卡片("20 日漲幅", 數(r["20日漲幅"], "{:+.2f}", "%"), "", 漲跌色(r["20日漲幅"])),
+        卡片("盤整箱頂 / 箱底", f"{數(r['箱頂'])} / {數(r['箱底'])}", f"箱寬 {數(r['箱寬'], '{:.1f}', '%')}"),
+        卡片("今日振幅", 數(r["振幅"], 尾="%")),
+    ])
+    符合 = [名 for 名, 設定 in engine.烏賊條件.items()
+            if 代號 in engine.選股(今日[今日["代號"] == 代號], dict(設定["條件"], 排除ETF=False))["代號"].values]
+    st.markdown("**今天符合的烏賊策略：** " + ("、".join(
+        f"{'🔴' if engine.烏賊條件[x]['方向'] == '多' else '🟢'} {x.replace('烏賊', '')}" for x in 符合) or "無"))
+
+    段落("CHART // 日 K、成交量、法人買賣超")
+    歷史 = 指標[指標["代號"] == 代號].tail(180)
+    列數 = 3 if 有籌碼 else 2
+    圖 = make_subplots(rows=列數, cols=1, shared_xaxes=True, vertical_spacing=0.03,
+                       row_heights=[0.6, 0.2, 0.2][:列數])
+    圖.add_trace(go.Candlestick(x=歷史["date"], open=歷史["open"], high=歷史["high"], low=歷史["low"],
+                                close=歷史["收盤"], name="K 線", increasing=dict(line=dict(color=紅), fillcolor=紅),
+                                decreasing=dict(line=dict(color=綠), fillcolor=綠)), row=1, col=1)
+    換算 = 歷史["收盤"] / 歷史["還原價"]
+    for n, c in ((5, "#FFFFFF"), (10, "#FFC24B"), (20, 青), (60, "#FF00E5")):
+        圖.add_trace(go.Scatter(x=歷史["date"], y=歷史[f"MA{n}"] * 換算, name=f"MA{n}", line=dict(color=c, width=1)),
+                     row=1, col=1)
+    量色 = [紅 if v >= 0 else 綠 for v in 歷史["漲跌"].fillna(0)]
+    圖.add_trace(go.Bar(x=歷史["date"], y=歷史["成交張數"], name="成交張數", marker_color=量色), row=2, col=1)
+    if 有籌碼:
+        法人色 = [紅 if v >= 0 else 綠 for v in 歷史["法人買超"].fillna(0)]
+        圖.add_trace(go.Bar(x=歷史["date"], y=歷史["法人買超"], name="法人買超", marker_color=法人色), row=3, col=1)
+    圖.update_layout(xaxis_rangeslider_visible=False, showlegend=False)
+    圖.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+    st.plotly_chart(圖表外觀(圖, 560), width="stretch")
 
 st.markdown(f'<div class="sub" style="color:{灰};font-family:JetBrains Mono;font-size:11px;margin-top:30px">'
             '僅供個人研究，不構成投資建議 // DATA: TWSE · TPEx</div>', unsafe_allow_html=True)
