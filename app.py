@@ -877,8 +877,13 @@ if 頁面 == 頁面們[1]:
             紀錄們 = []
             權杖 = engine.清理金鑰(設定.get("GITHUB_TOKEN"))
             if "401" in str(錯) or not (權杖.startswith(("github_pat_", "ghp_")) and len(權杖) >= 40):
+                原始 = str(設定.get("GITHUB_TOKEN", ""))
+                怪字 = sorted({f"U+{ord(c):04X}" for c in 原始 if not 33 <= ord(c) <= 126})
                 st.warning("Secrets 裡的 GITHUB_TOKEN 看起來不正確（可能貼上時被改到或少了字），"
-                           "請刪掉那一行重新貼上；報告暫時只會存在網站上。")
+                           "請刪掉那一行重新貼上；報告暫時只會存在網站上。\n\n"
+                           f"檢查資訊（不含金鑰內容）：原始長度 {len(原始)}、清理後長度 {len(權杖)}（正確約 93）、"
+                           f"開頭 {權杖[:11]}、特殊字元 {len([c for c in 原始 if not 33 <= ord(c) <= 126])} 個"
+                           f"{' ' + ' '.join(怪字[:5]) if 怪字 else ''}、錯誤：{str(錯)[:80]}")
             else:
                 st.caption(f"讀取過去的 AI 報告失敗：{錯}")
         上次 = 紀錄們[0] if 紀錄們 else None
