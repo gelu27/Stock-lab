@@ -19,8 +19,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install pandas requests
+      - run: pip install pandas requests pyarrow
       - run: python update_data.py --years 5 --max-minutes 320
+      - name: 整併過完的月份成 parquet（網站讀得快、省記憶體）
+        if: always()
+        run: |
+          python -c "import engine; engine.整併月檔()"
+          TZ=Asia/Taipei date '+%Y/%m/%d %H:%M' > data/updated.txt
       - name: 存回 GitHub
         if: always()
         run: |
@@ -32,9 +37,7 @@ jobs:
           git push
       - name: LINE 收盤摘要
         continue-on-error: true
-        run: |
-          pip install pyarrow
-          python notify.py daily
+        run: python notify.py daily
         env:
           LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
