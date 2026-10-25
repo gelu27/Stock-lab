@@ -147,6 +147,45 @@ def 法人圖(歷史, 寬=9.2, 高=3.6):
     return _存圖(plt, 圖)
 
 
+def 變化圖(變化, 寬=9.2, 高=4.8):
+    """FLOW：股價、週轉率、千張大戶、三大法人買賣超四層共用時間軸。"""
+    if not 變化 or 變化["歷史"] is None or len(變化["歷史"]) < 5:
+        return None
+    plt = _畫布()
+    h = 變化["歷史"].reset_index(drop=True)
+    週轉 = pd.Series(np.asarray(變化["週轉"]), index=h.index)
+    大 = 變化.get("大戶")
+    有法人 = "外資買超" in h.columns
+    列數 = 4 if 有法人 else 3
+    圖, 軸們 = plt.subplots(列數, 1, figsize=(寬, 高), sharex=True,
+                         gridspec_kw={"height_ratios": [1.5, 0.8, 1, 1][:列數], "hspace": 0.12})
+    日 = h["date"]
+    軸們[0].plot(日, h["收盤"], color=青, linewidth=1.3)
+    軸們[0].set_ylabel("股價", fontsize=8)
+    軸們[1].bar(日, 週轉, color=黃, width=1)
+    軸們[1].set_ylabel("週轉率%", fontsize=8)
+    if 大 is not None and len(大):
+        軸們[2].plot(大["date"], 大["big1000"], color=紅, linewidth=1.3, marker="o", markersize=2.5)
+    軸們[2].set_ylabel("千張大戶%", fontsize=8)
+    if 有法人:
+        底 = np.zeros(len(h))
+        負底 = np.zeros(len(h))
+        for 欄, 名, 色 in (("外資買超", "外資", "#4DA3FF"), ("投信買超", "投信", "#FF00E5"), ("自營買超", "自營商", "#9B9B9B")):
+            v = h[欄].fillna(0).to_numpy()
+            正, 負 = np.clip(v, 0, None), np.clip(v, None, 0)
+            軸們[3].bar(日, 正, bottom=底, color=色, width=1, label=名)
+            軸們[3].bar(日, 負, bottom=負底, color=色, width=1)
+            底 += 正
+            負底 += 負
+        軸們[3].axhline(0, color=淡字, linewidth=0.7)
+        軸們[3].set_ylabel("法人(張)", fontsize=8)
+        軸們[3].legend(loc="upper left", frameon=False, ncol=3, fontsize=7)
+    for 軸 in 軸們:
+        軸.tick_params(labelsize=7)
+    軸們[-1].xaxis.set_major_formatter(__import__("matplotlib.dates", fromlist=["DateFormatter"]).DateFormatter("%m/%d"))
+    return _存圖(plt, 圖)
+
+
 # ---------- 白話解讀 ----------
 def _數(v, f="{:,.2f}"):
     return "—" if v is None or pd.isna(v) else f.format(v)
@@ -452,6 +491,10 @@ def 產生PDF(代號, 名稱, 資料):
     左圖右文("Revenue", "月營收：生意做得怎麼樣", 營收圖(資料.get("營收"), 高=3.3), 營收解讀(資料.get("營收")), 圖高 + 14)
     左圖右文("Margin", "毛利率：賺錢的效率", 毛利圖(資料.get("損益"), 高=3.3), 毛利解讀(資料.get("損益")), 圖高 + 14)
     左圖右文("Institutional", "法人動向：大戶在買還是賣", 法人圖(資料["歷史"], 高=3.3), 法人解讀(資料["歷史"]), 圖高 + 14)
+    變化 = 資料.get("變化")
+    if 變化:
+        左圖右文("Flow", "股價・週轉率・大戶・法人 變化（近半年）", 變化圖(變化, 高=4.8),
+                 ("籌碼與股價一起看", 變化["解讀"]), 105)
 
     # 目標價
     if 建議.get("目標價合理") is not None:

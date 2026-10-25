@@ -1766,3 +1766,56 @@ def 內部人歷史(代號, 月數=7):
     with ThreadPoolExecutor(4) as 工人:
         結果 = [x for x in 工人.map(查, 月們) if x]
     return pd.DataFrame(結果).sort_values("month", ignore_index=True) if 結果 else None
+
+
+# ========== 15. FLOW：股價、週轉率、千張大戶、三大法人變化（網站、AI 分析、PDF 共用） ==========
+def 變化解讀(歷史, 週轉, 大):
+    """白話解讀（Markdown 條列文字）。歷史：這檔近 N 日的指標表；週轉：每日週轉率 %；大：每週千張大戶表。"""
+    說明 = []
+    漲 = (歷史["還原價"].iloc[-1] / 歷史["還原價"].iloc[0] - 1) * 100
+    說明.append(f"**股價**：這段期間 {'上漲' if 漲 >= 0 else '下跌'} {abs(漲):.1f}%"
+              f"（{歷史['收盤'].iloc[0]:,.2f} → {歷史['收盤'].iloc[-1]:,.2f}）。")
+    if 週轉.notna().any():
+        近, 平 = 週轉.tail(5).mean(), 週轉.mean()
+        倍 = 近 / 平 if 平 else np.nan
+        狀態 = "明顯變熱" if 倍 >= 1.5 else ("變冷清" if 倍 <= 0.6 else "跟平常差不多")
+        說明.append(f"**週轉率**：近 5 日平均 {近:.2f}%，期間平均 {平:.2f}%，交易{狀態}。")
+    if 大 is not None and len(大) >= 2:
+        差 = 大["big1000"].iloc[-1] - 大["big1000"].iloc[0]
+        說明.append(f"**千張大戶**：{大['date'].iloc[0]:%m/%d} {大['big1000'].iloc[0]:.2f}% → {大['date'].iloc[-1]:%m/%d} "
+                  f"{大['big1000'].iloc[-1]:.2f}%（{差:+.2f} 個百分點），"
+                  + ("籌碼往大戶集中。" if 差 >= 0.5 else "大戶在減碼。" if 差 <= -0.5 else "變化不大。"))
+    elif 大 is not None and len(大) == 1:
+        說明.append(f"**千張大戶**：目前只有 {大['date'].iloc[0]:%m/%d} 一週的資料（{大['big1000'].iloc[0]:.2f}%）。")
+    else:
+        說明.append("**千張大戶**：集保資料暫時查不到。")
+    if "外資買超" in 歷史.columns:
+        合 = {名: 歷史[欄].sum() for 欄, 名 in (("外資買超", "外資"), ("投信買超", "投信"), ("自營買超", "自營商"))}
+        說明.append("**三大法人**：期間累計 " + "、".join(f"{k}{'買超' if v >= 0 else '賣超'} {abs(v):,.0f} 張"
+                                               for k, v in 合.items()) + "。")
+    return 說明
+
+
+def 變化摘要(歷史, 週轉, 大):
+    """給 AI 分析的文字：白話解讀＋每 20 個交易日一段的數字表。"""
+    行們 = [f"- {x.replace('**', '')}" for x in 變化解讀(歷史, 週轉, 大)]
+    h = 歷史.assign(週轉率=週轉.values).reset_index(drop=True)
+    段落們 = [h.iloc[i:i + 20] for i in range(max(len(h) - 20 * (len(h) // 20), 0), len(h), 20)]
+    行們.append("| 期間 | 收盤 | 期間漲跌 | 平均週轉率 | 千張大戶 | 外資 | 投信 | 自營商 |")
+    行們.append("|---|---|---|---|---|---|---|---|")
+    for 段 in 段落們:
+        if 段.empty:
+            continue
+        末 = 段["date"].iloc[-1]
+        大值 = "—"
+        if 大 is not None and len(大):
+            前 = 大[大["date"] <= 末 + pd.Timedelta(days=3)]
+            大值 = f"{前['big1000'].iloc[-1]:.2f}%" if len(前) else "—"
+        起 = 段.index[0]
+        基 = h["還原價"].iloc[起 - 1] if 起 > 0 else 段["還原價"].iloc[0]  # 跟上一段最後一天比
+        漲 = (段["還原價"].iloc[-1] / 基 - 1) * 100
+        法 = ([f"{段[c].sum():+,.0f}" for c in ("外資買超", "投信買超", "自營買超")]
+             if "外資買超" in 段.columns else ["—"] * 3)
+        行們.append(f"| {段['date'].iloc[0]:%m/%d}~{末:%m/%d} | {段['收盤'].iloc[-1]:,.2f} | {漲:+.1f}% | "
+                  f"{段['週轉率'].mean():.2f}% | {大值} | " + " | ".join(法) + " |")
+    return "\n".join(行們)
