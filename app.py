@@ -1898,6 +1898,51 @@ if 頁面 == 頁面們[2]:
                         st.markdown(engine.拆解AI建議(舊["內容"])[0])
                         st.divider()
 
+def 評分驗證區():
+    驗 = engine.讀取評分回測()
+    段落("VALIDATION // 評分歷史驗證")
+    if not 驗:
+        st.caption("還沒有驗證結果（每天自動更新後會計算，每月重算一次）。")
+        return
+    st.caption(f"{驗['起']}～{驗['迄']} 每月最後一個交易日打分數（共 {驗['期數']} 次、平均 {驗['平均檔數']} 檔，"
+               f"五日均量 500 張以上、不含 ETF），看之後 {驗['持有天數']} 個交易日的報酬。"
+               f"「超額」＝減掉同一天全部股票的平均報酬。計算時間 {驗['計算時間']}。")
+    組 = 驗["五分組"]["總分"]
+    看 = 驗["看法"]
+    a, b = st.columns(2)
+    with a:
+        圖 = go.Figure(go.Bar(x=[f"第{x['組']}組" for x in 組], y=[x["超額"] for x in 組],
+                              marker_color=[紅 if x["超額"] > 0 else 綠 for x in 組],
+                              text=[f"{x['超額']:+.2f}%" for x in 組], textposition="outside"))
+        圖.update_layout(title="總分由低到高分五組 · 之後 20 日超額報酬", height=300)
+        圖.update_yaxes(ticksuffix="%")
+        st.plotly_chart(圖表外觀(圖), width="stretch")
+    with b:
+        圖 = go.Figure(go.Bar(x=[x["看法"] for x in 看], y=[x["超額"] for x in 看],
+                              marker_color=[紅 if x["超額"] > 0 else 綠 for x in 看],
+                              text=[f"{x['超額']:+.2f}%（{x['檔次']:,}次）" for x in 看], textposition="outside"))
+        圖.update_layout(title="依看法分 · 之後 20 日超額報酬", height=300)
+        圖.update_yaxes(ticksuffix="%")
+        st.plotly_chart(圖表外觀(圖), width="stretch")
+    相 = 驗["相關"]
+    表 = pd.DataFrame([{"項目": k if k == "總分" else f"{k}面", "目前權重": "—" if k == "總分" else f"{驗['權重'][k]:.0%}",
+                       "分數與報酬的相關（IC）": v["IC"], "顯著性 t": v["t"], "相關為正的月份": v["勝率"] * 100,
+                       "最高分組超額 %": 驗["五分組"][k][-1]["超額"], "最低分組超額 %": 驗["五分組"][k][0]["超額"]}
+                      for k, v in 相.items()])
+    st.dataframe(表.style.format({"分數與報酬的相關（IC）": "{:+.3f}", "顯著性 t": "{:+.1f}", "相關為正的月份": "{:.0f}%",
+                                 "最高分組超額 %": "{:+.2f}", "最低分組超額 %": "{:+.2f}"}),
+                 hide_index=True, width="stretch")
+    前, 後 = 驗["前後半"]["前半"][-1]["超額"], 驗["前後半"]["後半"][-1]["超額"]
+    with st.expander("📖 怎麼看這些數字？"):
+        st.markdown(f"""
+- **IC** 是「分數排名」和「之後報酬排名」的相關係數，0 代表沒關係；股票裡 IC 有 0.03～0.05 就算有用。**t 超過 2** 才比較不像巧合。
+- 目前只有**基本面**明顯有效（分數越高之後越會漲）；技術面、市場面平均起來是**負的**，代表「已經漲很多、很強勢」的股票之後常會拉回。
+- 但**總分最高的那 20%** 前後兩段期間都贏平均（前半 {前:+.2f}%、後半 {後:+.2f}%），「強勢」也明顯贏。比較適合拿來**挑前段班**，不適合用分數高低排整個市場。
+- 2026/10 依這份結果把權重從「技術 30%、籌碼 25%、基本 30%、市場 15%」改成現在的權重（舊權重的總分 IC 是 −0.028）。
+- 限制：歷史 EPS、毛利率沒有資料，回測裡的基本面只有營收、本益比、殖利率；也沒扣交易成本。
+""")
+
+
 # ---------- 06 每日評分 ----------
 if 頁面 == 頁面們[5]:
     分, d, 大 = 評分資料(_版本)
@@ -1962,6 +2007,7 @@ if 頁面 == 頁面們[5]:
 
 規則寫在 `engine.py` 的「評分規則」表，可以自己調整分數。每天收盤後的 LINE 摘要也會附上大盤與庫存的評分。
 """)
+    評分驗證區()
     st.caption("⚠️ 分數只是把公開數據套進固定規則的結果，不含新聞、產業前景與突發事件，不構成投資建議。")
 
 st.markdown(f'<div class="sub" style="color:{灰};font-family:JetBrains Mono;font-size:11px;margin-top:30px">'
