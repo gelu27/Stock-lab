@@ -2,6 +2,7 @@
 #   python notify.py daily   收盤摘要（大盤、強弱族群、自選股、庫存損益、到價）
 #   python notify.py alert   盤中檢查到價提醒（同一個提醒一天只通知一次）
 #   python notify.py test    傳一則測試訊息
+#   python notify.py health  檢查各資料來源有沒有正常更新，有問題才通知（休市日不算問題）
 #
 # 需要在 GitHub 專案 Settings → Secrets and variables → Actions 設定：
 #   LINE_TOKEN    LINE Messaging API 的 Channel access token（必填）
@@ -129,7 +130,7 @@ def 收盤摘要(強制=False):
         行們 += ["", f"💼 庫存今日 {今日:+,.0f} 元，累積 {總:+,.0f} 元"]
 
     自選, _ = 讀設定("watchlist.json")
-    代號們 = list(dict.fromkeys(c for v in 自選.values() for c in v))
+    代號們 = list(dict.fromkeys(c for k, v in 自選.items() if not k.startswith("_") for c in v))
     if 代號們:
         行們 += ["", "⭐ 自選股"]
         for c in 代號們[:30]:
@@ -221,11 +222,80 @@ def 盤中提醒():
         print("沒有觸發的提醒")
 
 
+def _最新檔日(子):
+    檔們 = [f.name[:8] for f in (資料夾 / 子).glob("**/*.csv.gz")]
+    return pd.Timestamp(max(檔們)).date() if 檔們 else None
+
+
+def 健康檢查():
+    """每天更新完檢查一次：今天有開盤卻沒抓到、每週每月資料太久沒更新、網站即時查詢的來源連不上，就 LINE 通知。"""
+    import engine
+    問題 = []
+    今天 = dt.datetime.now(台北).date()
+    if os.environ.get("UPDATE_OUTCOME") == "failure":
+        問題.append("資料更新程式執行失敗（到 GitHub Actions 看錯誤訊息）")
+    # 今天有沒有開盤：問證交所即時行情，加權指數的資料日期是不是今天
+    開盤 = None
+    try:
+        r = requests.get("https://mis.twse.com.tw/stock/api/getStockInfo.jsp",
+                         params={"ex_ch": "tse_t00.tw", "json": 1, "delay": 0},
+                         headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        開盤 = r.json()["msgArray"][0]["d"] == 今天.strftime("%Y%m%d")
+    except Exception as e:
+        問題.append(f"證交所即時行情連不上（{type(e).__name__}），無法確認今天有沒有開盤")
+    價 = _最新檔日("prices")
+    print(f"今天 {今天}，{'有' if 開盤 else '沒有' if 開盤 is False else '不確定有沒有'}開盤，股價最新 {價}")
+    if 開盤 and 價 != 今天:
+        問題.append(f"今天有開盤，但股價資料沒抓到（最新 {價:%m/%d}）")
+    籌 = _最新檔日("chips")
+    if 價 and (籌 is None or 籌 < 價):
+        問題.append(f"三大法人／融資資料落後（最新 {籌:%m/%d}，股價 {價:%m/%d}）" if 籌 else "沒有三大法人／融資資料")
+
+    def 太舊(名稱, 最新, 容許天數):
+        if 最新 is None:
+            問題.append(f"{名稱}：沒有資料")
+        elif (今天 - 最新).days > 容許天數:
+            問題.append(f"{名稱}：最新是 {最新:%Y/%m/%d}，已經 {(今天 - 最新).days} 天沒更新")
+
+    def 讀(檔, 欄):
+        f = 資料夾 / 檔
+        return pd.read_csv(f, usecols=[欄])[欄].astype(str).max() if f.exists() else None
+
+    太舊("集保股權分散（每週）", _最新檔日("tdcc"), 10)
+    fx = 讀("fx.csv", "date")
+    太舊("美元匯率", fx and pd.Timestamp(fx).date(), 5)
+    # 月營收次月 10 日前公布、內部人持股次月 15 日前、季報最晚季後 75～90 天
+    營 = 讀("fundamental/revenue.csv", "month")
+    太舊("月營收", 營 and (pd.Period(營, "M") + 1).to_timestamp().date(), 45)
+    內 = 讀("fundamental/insider.csv", "month")
+    太舊("內部人持股", 內 and (pd.Period(內, "M") + 1).to_timestamp().date(), 50)
+    季 = 讀("fundamental/eps.csv", "quarter")
+    太舊("季報 EPS", 季 and (pd.Period(季, "Q") + 1).to_timestamp().date(), 140)
+
+    # 網站點個股時才即時查的來源
+    for 名稱, 查 in (("集保結算所歷史查詢（FLOW、HOLDERS 用）", lambda: engine.集保歷史("2330", 週數=2)),
+                   ("公開資訊觀測站內部人查詢（INSIDER 用）", lambda: engine.內部人歷史("2330", 月數=2))):
+        try:
+            結果 = 查()
+            if 結果 is None or len(結果) == 0:
+                問題.append(f"{名稱}：查不到資料，網頁格式可能改了")
+        except Exception as e:
+            問題.append(f"{名稱}：連不上（{type(e).__name__}）")
+
+    if 問題:
+        推播("⚠️ 台股觀測實驗室：資料來源異常\n" + "\n".join(f"・{x}" for x in 問題)
+             + "\n\n網站其他功能照常，可以到 GitHub Actions 看「更新資料庫」的紀錄。")
+    else:
+        print("資料來源全部正常")
+
+
 if __name__ == "__main__":
     模式 = sys.argv[1] if len(sys.argv) > 1 else "daily"
     if 模式 == "test":
         推播("✅ 台股觀測實驗室：LINE 推播設定成功！之後每個交易日收盤後會傳摘要給你。")
     elif 模式 == "alert":
         盤中提醒()
+    elif 模式 == "health":
+        健康檢查()
     else:
         收盤摘要(強制=模式 == "daily-force")

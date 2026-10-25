@@ -1714,7 +1714,8 @@ def _有(d, 欄):
     ("市場", 5, lambda d: d["贏大盤5日"] >= 3, lambda r: f"近 5 日贏大盤 {r['贏大盤5日']:.1f}%"),
     ("市場", -5, lambda d: d["贏大盤5日"] <= -3, lambda r: f"近 5 日輸大盤 {abs(r['贏大盤5日']):.1f}%"),
 ]
-評分權重 = {"技術": 0.30, "籌碼": 0.25, "基本": 0.30, "市場": 0.15}
+# 權重依 data/score_backtest.json 的歷史驗證調整（2026-10：基本面最有效，技術、市場面平均效果偏負）
+評分權重 = {"技術": 0.15, "籌碼": 0.25, "基本": 0.50, "市場": 0.10}
 
 
 def 評分看法(分):
@@ -1960,3 +1961,90 @@ def 變化摘要(歷史, 週轉, 大):
         行們.append(f"| {段['date'].iloc[0]:%m/%d}~{末:%m/%d} | {段['收盤'].iloc[-1]:,.2f} | {漲:+.1f}% | "
                   f"{段['週轉率'].mean():.2f}% | {大值} | " + " | ".join(法) + " |")
     return "\n".join(行們)
+
+
+# ========== 14. 評分回測：分數高的股票之後真的比較會漲嗎？ ==========
+def 評分回測(持有天數=20, 最少量=500):
+    """每月最後一個交易日用「當時看得到的資料」打分數，比較之後 N 個交易日的報酬。
+    營收用當時已公布的月份（假設次月 10 日前公布）；EPS、毛利率沒有歷史資料，所以不算。
+    很吃記憶體，在 GitHub Actions 算好存成 data/score_backtest.json，網站只讀結果。"""
+    指 = 計算指標(讀取資料庫())
+    加 = 讀取加權指數()
+    股 = _股本表()
+    營收 = pd.read_csv(資料夾 / "fundamental" / "revenue_history.csv", dtype={"code": str})
+    營收["m"] = pd.PeriodIndex(營收["month"], freq="M")
+    營收 = 營收.set_index(["code", "m"])["revenue"]
+    有的月 = set(營收.index.get_level_values("m"))
+    日們 = pd.DatetimeIndex(sorted(指["date"].unique()))
+    期 = 日們.to_period("M")
+    月底 = 日們[np.r_[期[1:] != 期[:-1], True]]
+    還原 = 指.pivot_table(index="date", columns="代號", values="還原價")
+    未來 = (還原.shift(-持有天數) / 還原 - 1) * 100
+    結果 = []
+    for 日 in 月底[12:]:  # 前 12 個月要拿來算均線、52 週高點
+        if pd.isna(未來.loc[日]).all():
+            continue
+        當 = 指[指["date"] == 日].join(股, on="代號")
+        月 = (日 - pd.Timedelta(days=10)).to_period("M") - 1
+        if 月 in 有的月 and 月 - 12 in 有的月:
+            當["營收年增率"] = 當["代號"].map((營收.xs(月, level="m") / 營收.xs(月 - 12, level="m") - 1) * 100)
+        分, _ = 每日評分(當, 加[加["date"] <= 日])
+        分["報酬"] = 未來.loc[日].reindex(分.index)
+        分 = 分[(分["5日均量"] >= 最少量) & ~分.index.str.startswith("00")].dropna(subset=["報酬", "總分"])
+        分["date"] = 日
+        結果.append(分[["date", "總分", "看法", "技術", "籌碼", "基本", "市場", "報酬"]])
+    return pd.concat(結果) if 結果 else None
+
+
+def 評分回測摘要(表, 持有天數=20):
+    """把 評分回測() 的結果整理成網站要顯示的數字（超額報酬＝減掉同一天所有股票的平均）。"""
+    表 = 表.copy()
+    表["超額"] = 表["報酬"] - 表.groupby("date")["報酬"].transform("mean")
+    def 相關(欄):
+        s = 表.groupby("date")[[欄, "報酬"]].apply(lambda g: g[欄].rank().corr(g["報酬"].rank())).dropna()
+        return {"IC": round(float(s.mean()), 4), "t": round(float(s.mean() / s.std() * np.sqrt(len(s))), 2),
+                "勝率": round(float((s > 0).mean()), 3)}
+    def 分組(欄, 資料=表):
+        組 = 資料.groupby("date")[欄].transform(lambda x: pd.qcut(x.rank(method="first"), 5, labels=False))
+        g = 資料.groupby(組)
+        return [{"組": int(k) + 1, "超額": round(float(v["超額"].mean()), 3), "報酬": round(float(v["報酬"].mean()), 3),
+                 "贏過平均": round(float((v["超額"] > 0).mean()), 3)} for k, v in g]
+    日們 = sorted(表["date"].unique())
+    中 = 日們[len(日們) // 2]
+    看法 = 表.groupby("看法").agg(檔次=("超額", "size"), 超額=("超額", "mean"), 報酬=("報酬", "mean"))
+    看法 = 看法.reindex([k for k in ("強勢", "偏多", "中性", "偏空", "弱勢") if k in 看法.index])
+    return {
+        "計算時間": pd.Timestamp.now(tz="Asia/Taipei").strftime("%Y/%m/%d %H:%M"),
+        "起": f"{pd.Timestamp(日們[0]):%Y/%m/%d}", "迄": f"{pd.Timestamp(日們[-1]):%Y/%m/%d}",
+        "期數": len(日們), "平均檔數": int(表.groupby("date").size().mean()), "持有天數": 持有天數,
+        "權重": 評分權重,
+        "相關": {欄: 相關(欄) for 欄 in ("總分", "技術", "籌碼", "基本", "市場")},
+        "五分組": {欄: 分組(欄) for 欄 in ("總分", "技術", "籌碼", "基本", "市場")},
+        "前後半": {"前半": 分組("總分", 表[表["date"] < 中]), "後半": 分組("總分", 表[表["date"] >= 中])},
+        "看法": [{"看法": k, "檔次": int(r["檔次"]), "超額": round(float(r["超額"]), 3), "報酬": round(float(r["報酬"]), 3)}
+               for k, r in 看法.iterrows()],
+    }
+
+
+def 更新評分回測(強制=False, 間隔天數=25):
+    """GitHub Actions 每天呼叫；距離上次超過 間隔天數 才重算（約幾分鐘）。"""
+    import json
+    檔 = 資料夾 / "score_backtest.json"
+    if 檔.exists() and not 強制:
+        舊 = json.loads(檔.read_text())
+        if 舊.get("權重") == 評分權重 and (pd.Timestamp.now() - pd.Timestamp(舊.get("計算日", "2000-01-01"))).days < 間隔天數:
+            print("評分回測：還不用重算")
+            return
+    表 = 評分回測()
+    if 表 is None:
+        return
+    摘要 = 評分回測摘要(表)
+    摘要["計算日"] = f"{pd.Timestamp.now():%Y-%m-%d}"
+    檔.write_text(json.dumps(摘要, ensure_ascii=False, indent=1))
+    print("評分回測：已更新", 摘要["相關"]["總分"])
+
+
+def 讀取評分回測():
+    import json
+    檔 = 資料夾 / "score_backtest.json"
+    return json.loads(檔.read_text()) if 檔.exists() else None

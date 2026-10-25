@@ -1,0 +1,21 @@
+name: 網站自動檢查
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["data/**"]   # 每天的資料更新不用跑
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pages:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: 每個頁面都打開看看有沒有錯誤
+        run: python tests/test_pages.py
