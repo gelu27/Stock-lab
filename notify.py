@@ -51,18 +51,28 @@ def 寫設定(檔名, 內容物, sha):
                  timeout=30).raise_for_status()
 
 
+def 清理(值):
+    """手機複製貼上常夾帶全形字、換行或看不見的字元，轉成半形並只留英數符號。"""
+    import unicodedata
+    值 = unicodedata.normalize("NFKC", str(值 or ""))
+    return "".join(c for c in 值 if 33 <= ord(c) <= 126).strip('"\'')
+
+
 def 推播(文字):
-    權杖 = os.environ.get("LINE_TOKEN", "").strip()
+    權杖 = 清理(os.environ.get("LINE_TOKEN"))
     if not 權杖:
         print("沒有設定 LINE_TOKEN，略過推播。內容如下：\n" + 文字)
         return
-    對象 = os.environ.get("LINE_USER_ID", "").strip()
+    對象 = 清理(os.environ.get("LINE_USER_ID"))
     網址 = "https://api.line.me/v2/bot/message/" + ("push" if 對象 else "broadcast")
     內容 = {"messages": [{"type": "text", "text": 文字[:4900]}]}
     if 對象:
         內容["to"] = 對象
     r = requests.post(網址, headers={"Authorization": f"Bearer {權杖}"}, json=內容, timeout=15)
     print("LINE 回應", r.status_code, r.text[:200])
+    if r.status_code == 401:
+        print(f"金鑰長度 {len(權杖)} 個字（正確的 Channel access token 通常 170 字左右；"
+              "32 個字的是 Channel secret，貼錯了）")
     r.raise_for_status()
 
 
