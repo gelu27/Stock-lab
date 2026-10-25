@@ -553,6 +553,79 @@ def 庫存代號():
         return []
 
 
+@st.cache_data(ttl=43200, show_spinner="查詢集保大戶歷史中（第一次約 10～20 秒）…", max_entries=50)
+def 大戶歷史(代號):
+    """集保網站查過去一年每週的大戶比例，再補上資料庫裡每週存下來的。"""
+    表們 = [集保資料(代號)]
+    try:
+        表們.append(engine.集保歷史(代號, 52))
+    except Exception:
+        pass
+    表們 = [t for t in 表們 if t is not None and len(t)]
+    if not 表們:
+        return None
+    return pd.concat(表們).drop_duplicates("date", keep="last").sort_values("date", ignore_index=True)
+
+
+def 變化圖(代號, r, 天數):
+    """一張圖看四件事：股價、週轉率、千張大戶持股比例、三大法人買賣超，下面附白話解讀。"""
+    歷史 = 指標[指標["代號"] == 代號].tail(天數)
+    if len(歷史) < 5:
+        st.caption("資料太少，畫不出變化圖。")
+        return
+    股 = engine._股本表()
+    股數 = 股.at[代號, "發行股數"] if 代號 in 股.index else np.nan
+    週轉 = 歷史["volume"] / 股數 * 100 if pd.notna(股數) and 股數 else pd.Series(np.nan, index=歷史.index)
+    大 = 大戶歷史(代號)
+    if 大 is not None:
+        大 = 大[大["date"] >= 歷史["date"].iloc[0] - pd.Timedelta(days=7)]
+    列們 = ["股價", "週轉率 %", "千張大戶持股 %", "三大法人買賣超（張）"]
+    圖 = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.04, row_heights=[0.34, 0.18, 0.24, 0.24],
+                       subplot_titles=列們)
+    圖.add_trace(go.Scatter(x=歷史["date"], y=歷史["收盤"], name="收盤", line=dict(color=青, width=1.6)), row=1, col=1)
+    圖.add_trace(go.Bar(x=歷史["date"], y=週轉, name="週轉率 %", marker_color="#FFC24B"), row=2, col=1)
+    if 大 is not None and len(大):
+        圖.add_trace(go.Scatter(x=大["date"], y=大["big1000"], name="千張大戶 %", mode="lines+markers",
+                                line=dict(color=紅, width=1.6), marker=dict(size=5)), row=3, col=1)
+    if 有籌碼:
+        for 欄, 名, 色 in (("外資買超", "外資", "#4DA3FF"), ("投信買超", "投信", "#FF00E5"), ("自營買超", "自營商", "#9B9B9B")):
+            圖.add_trace(go.Bar(x=歷史["date"], y=歷史[欄], name=名, marker_color=色), row=4, col=1)
+    圖.update_layout(barmode="relative", xaxis_rangeslider_visible=False, showlegend=True,
+                    legend=dict(orientation="h", y=-0.06, x=0))
+    圖.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+    圖.update_annotations(font=dict(size=11, color=灰), x=0, xanchor="left")
+    圖 = 圖表外觀(圖, 720)
+    圖.update_layout(legend=dict(orientation="h", y=-0.06, x=0))
+    st.plotly_chart(圖, width="stretch")
+
+    # 白話解讀
+    說明 = []
+    漲 = (歷史["還原價"].iloc[-1] / 歷史["還原價"].iloc[0] - 1) * 100
+    說明.append(f"**股價**：這段期間 {'上漲' if 漲 >= 0 else '下跌'} {abs(漲):.1f}%（{歷史['收盤'].iloc[0]:,.2f} → {歷史['收盤'].iloc[-1]:,.2f}）。")
+    if 週轉.notna().any():
+        近 = 週轉.tail(5).mean()
+        平 = 週轉.mean()
+        倍 = 近 / 平 if 平 else np.nan
+        狀態 = "明顯變熱" if 倍 >= 1.5 else ("變冷清" if 倍 <= 0.6 else "跟平常差不多")
+        說明.append(f"**週轉率**：近 5 日平均 {近:.2f}%，期間平均 {平:.2f}%，交易{狀態}。")
+    if 大 is not None and len(大) >= 2:
+        差 = 大["big1000"].iloc[-1] - 大["big1000"].iloc[0]
+        說明.append(f"**千張大戶**：{大['date'].iloc[0]:%m/%d} {大['big1000'].iloc[0]:.2f}% → {大['date'].iloc[-1]:%m/%d} "
+                  f"{大['big1000'].iloc[-1]:.2f}%（{差:+.2f} 個百分點），"
+                  + ("籌碼往大戶集中。" if 差 >= 0.5 else "大戶在減碼。" if 差 <= -0.5 else "變化不大。"))
+    elif 大 is not None and len(大) == 1:
+        說明.append(f"**千張大戶**：目前只有 {大['date'].iloc[0]:%m/%d} 一週的資料（{大['big1000'].iloc[0]:.2f}%），之後每週累積。")
+    else:
+        說明.append("**千張大戶**：集保資料暫時查不到。")
+    if 有籌碼:
+        合 = {名: 歷史[欄].sum() for 欄, 名 in (("外資買超", "外資"), ("投信買超", "投信"), ("自營買超", "自營商"))}
+        說明.append("**三大法人**：期間累計 " + "、".join(f"{k}{'買超' if v >= 0 else '賣超'} {abs(v):,.0f} 張" for k, v in 合.items())
+                  + "。")
+    st.markdown("\n".join(f"- {x}" for x in 說明))
+    st.caption("週轉率 = 當天成交股數 ÷ 發行股數；千張大戶 = 持有 1,000 張以上的股東合計持股比例（集保每週五公布）。"
+               "股價上漲時大戶比例上升、法人買超，通常代表籌碼健康；反過來則要小心。")
+
+
 # ---------- 01 市場總覽 ----------
 def 我的庫存():
     """庫存放在 Streamlit 的 Secrets（不會出現在公開的 GitHub）。"""
@@ -1428,6 +1501,11 @@ if 頁面 == 頁面們[2]:
         st.plotly_chart(圖表外觀(圖, 380 + 150 * len(指標們)), width="stretch")
 
     走勢圖()
+
+    段落("FLOW // 股價・週轉率・大戶・法人 變化")
+    期間 = st.segmented_control("期間", ["3 個月", "半年", "1 年"], default="半年", key="變化期間",
+                              label_visibility="collapsed") or "半年"
+    變化圖(代號, r, {"3 個月": 63, "半年": 126, "1 年": 250}[期間])
 
     河流 = engine.本益比河流(指標[指標["代號"] == 代號])
     if 河流:
