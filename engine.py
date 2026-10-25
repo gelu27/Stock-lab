@@ -1727,3 +1727,42 @@ def 集保歷史(代號, 週數=26):
     with ThreadPoolExecutor(6) as 工人:
         結果 = [x for x in 工人.map(查, 日期們) if x]
     return pd.DataFrame(結果).sort_values("date", ignore_index=True) if 結果 else None
+
+
+def 內部人歷史(代號, 月數=7):
+    """從公開資訊觀測站查這檔近幾個月的董監經理人、大股東持股（同一人有多個職稱只算一次）。
+    回傳 month、insider（內部人持股）、directors（董監持股）、pledged（設質）股數；查不到回傳 None。"""
+    import re
+    from concurrent.futures import ThreadPoolExecutor
+    import requests
+
+    今 = pd.Timestamp.now(tz="Asia/Taipei")
+    月們 = [(今 - pd.DateOffset(months=i)) for i in range(1, 月數 + 2)]
+
+    def 查(月):
+        try:
+            r = requests.post("https://mopsov.twse.com.tw/mops/web/ajax_stapap1", headers={"User-Agent": "Mozilla/5.0"},
+                              timeout=20, data={"encodeURIComponent": "1", "step": "1", "firstin": "1", "off": "1",
+                                                "queryName": "co_id", "inpuType": "co_id", "TYPEK": "all", "isnew": "false",
+                                                "co_id": 代號, "year": str(月.year - 1911), "month": f"{月.month:02d}"})
+        except requests.RequestException:
+            return None
+        人們 = {}
+        for 列 in re.findall(r"<tr[^>]*>(.*?)</tr>", r.text, re.S | re.I):
+            格 = [re.sub(r"<[^>]+>|&nbsp;|\s", "", c) for c in re.findall(r"<td[^>]*>(.*?)</td>", 列, re.S | re.I)]
+            if len(格) < 5 or not re.fullmatch(r"[\d,]+", 格[3] or "x"):
+                continue
+            職稱, 姓名 = 格[0], 格[1]
+            持股, 設質 = float(格[3].replace(",", "")), float((格[4] or "0").replace(",", ""))
+            舊 = 人們.get(姓名, {"持股": 0, "設質": 0, "董監": False})
+            人們[姓名] = {"持股": max(舊["持股"], 持股), "設質": max(舊["設質"], 設質),
+                        "董監": 舊["董監"] or bool(re.search("董事|監察人", 職稱))}
+        if not 人們:
+            return None
+        return {"month": f"{月.year}-{月.month:02d}", "insider": sum(p["持股"] for p in 人們.values()),
+                "directors": sum(p["持股"] for p in 人們.values() if p["董監"]),
+                "pledged": sum(p["設質"] for p in 人們.values())}
+
+    with ThreadPoolExecutor(4) as 工人:
+        結果 = [x for x in 工人.map(查, 月們) if x]
+    return pd.DataFrame(結果).sort_values("month", ignore_index=True) if 結果 else None

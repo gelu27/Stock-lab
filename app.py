@@ -229,57 +229,70 @@ if 指標 is None:
 市場對照 = dict(zip(今日["代號"], 今日["市場"]))
 有籌碼 = "法人買超" in 指標.columns
 
-# ---------- 側邊欄：選股條件（選股與回測共用） ----------
-st.sidebar.markdown(f'<div class="sec">SCREEN RULES</div>', unsafe_allow_html=True)
-條件 = {}
-條件["市場"] = st.sidebar.multiselect("市場", ["上市", "上櫃"], default=["上市", "上櫃"])
-範本 = st.sidebar.selectbox("策略範本", ["自訂條件"] + list(engine.烏賊條件),
-                          help="烏賊 0530 課程的五組選股條件，選了之後下面的自訂條件會暫停使用")
-if 範本 == "自訂條件":
-    with st.sidebar.expander("基本面", expanded=True):
-        if st.checkbox("本益比上限", True):
-            條件["本益比上限"] = st.number_input("本益比 ≤", value=15.0, step=1.0)
-        if st.checkbox("殖利率下限", True):
-            條件["殖利率下限"] = st.number_input("殖利率(%) ≥", value=4.0, step=0.5)
-        if st.checkbox("股價淨值比上限"):
-            條件["淨值比上限"] = st.number_input("淨值比 ≤", value=2.0, step=0.1)
-        if st.checkbox("月營收年增率下限"):
-            條件["營收年增率下限"] = st.number_input("營收年增率(%) ≥", value=20.0, step=5.0)
-        if st.checkbox("月營收月增率下限"):
-            條件["營收月增率下限"] = st.number_input("營收月增率(%) ≥", value=0.0, step=5.0)
-        if st.checkbox("累計營收年增率下限"):
-            條件["累計營收年增率下限"] = st.number_input("累計營收年增率(%) ≥", value=10.0, step=5.0)
-        if st.checkbox("最新一季 EPS 下限"):
-            條件["EPS下限"] = st.number_input("EPS(元) ≥", value=1.0, step=0.5)
-        st.caption("月營收與 EPS 只有最新一期，組合回測時不會套用。")
-    with st.sidebar.expander("籌碼面", expanded=True):
-        if st.checkbox("外資連續買超"):
-            條件["外資連買下限"] = st.number_input("外資連買天數 ≥", value=3, step=1)
-        if st.checkbox("投信連續買超"):
-            條件["投信連買下限"] = st.number_input("投信連買天數 ≥", value=3, step=1)
-        if st.checkbox("三大法人 5 日合計買超"):
-            條件["法人5日買超下限"] = st.number_input("法人 5 日買超(張) ≥", value=1000, step=500)
-        if st.checkbox("融資 5 日增減上限"):
-            條件["融資5日增減上限"] = st.number_input("融資 5 日增減(%) ≤", value=0.0, step=1.0)
-    with st.sidebar.expander("技術面", expanded=True):
-        if st.checkbox("站上均線"):
-            條件["站上均線"] = st.selectbox("收盤價站上", [5, 20, 60], index=1, format_func=lambda n: f"{n} 日均線")
-        條件["均線多頭排列"] = st.checkbox("均線多頭排列（5 > 20 > 60 日）")
-        if st.checkbox("20 日漲幅下限"):
-            條件["20日漲幅下限"] = st.number_input("20 日漲幅(%) ≥", value=5.0, step=1.0)
-        if st.checkbox("RSI 區間"):
-            條件["RSI區間"] = st.slider("RSI(14)", 0, 100, (30, 70))
-        if st.checkbox("量比下限（今日量 ÷ 20 日均量）"):
-            條件["量比下限"] = st.number_input("量比 ≥", value=1.5, step=0.1)
-    with st.sidebar.expander("流動性與價格", expanded=True):
-        條件["成交張數下限"] = st.number_input("成交張數 ≥", value=500, step=100)
-        條件["股價區間"] = st.slider("收盤價", 0, 3000, (10, 1000))
-        條件["排除ETF"] = st.checkbox("排除 ETF", True)
-    條件["排序"] = st.sidebar.selectbox("排序依據", list(engine.排序方式))
-else:
-    st.sidebar.info(engine.烏賊條件[範本]["說明"])
-    條件.update(engine.烏賊條件[範本]["條件"])
-    條件["排除ETF"] = True
+# ---------- 選股條件（04 選股與 05 組合回測共用，原本在左側欄） ----------
+def 選股條件區():
+    """畫出選股條件，回傳 (條件, 範本)。換頁時 Streamlit 會清掉沒顯示的元件狀態，所以另外記一份。"""
+    記憶 = st.session_state.setdefault("_條件記憶", {})
+    for k, v in 記憶.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+    條件 = {}
+    條件["市場"] = st.multiselect("市場", ["上市", "上櫃"], default=["上市", "上櫃"], key="條_市場")
+    範本 = st.selectbox("策略範本", ["自訂條件"] + list(engine.烏賊條件), key="條_策略範本",
+                      help="烏賊 0530 課程的五組選股條件，選了之後下面的自訂條件會暫停使用")
+    if 範本 == "自訂條件":
+        格 = st.columns(2)
+        with 格[0].container(border=True):
+            st.markdown("**基本面**")
+            if st.checkbox("本益比上限", True, key="條_本益比上限"):
+                條件["本益比上限"] = st.number_input("本益比 ≤", value=15.0, step=1.0, key="條_本益比 ≤")
+            if st.checkbox("殖利率下限", True, key="條_殖利率下限"):
+                條件["殖利率下限"] = st.number_input("殖利率(%) ≥", value=4.0, step=0.5, key="條_殖利率(%) ≥")
+            if st.checkbox("股價淨值比上限", key="條_股價淨值比上限"):
+                條件["淨值比上限"] = st.number_input("淨值比 ≤", value=2.0, step=0.1, key="條_淨值比 ≤")
+            if st.checkbox("月營收年增率下限", key="條_月營收年增率下限"):
+                條件["營收年增率下限"] = st.number_input("營收年增率(%) ≥", value=20.0, step=5.0, key="條_營收年增率(%) ≥")
+            if st.checkbox("月營收月增率下限", key="條_月營收月增率下限"):
+                條件["營收月增率下限"] = st.number_input("營收月增率(%) ≥", value=0.0, step=5.0, key="條_營收月增率(%) ≥")
+            if st.checkbox("累計營收年增率下限", key="條_累計營收年增率下限"):
+                條件["累計營收年增率下限"] = st.number_input("累計營收年增率(%) ≥", value=10.0, step=5.0, key="條_累計營收年增率(%) ≥")
+            if st.checkbox("最新一季 EPS 下限", key="條_最新一季 EPS 下限"):
+                條件["EPS下限"] = st.number_input("EPS(元) ≥", value=1.0, step=0.5, key="條_EPS(元) ≥")
+            st.caption("月營收與 EPS 只有最新一期，組合回測時不會套用。")
+        with 格[1].container(border=True):
+            st.markdown("**籌碼面**")
+            if st.checkbox("外資連續買超", key="條_外資連續買超"):
+                條件["外資連買下限"] = st.number_input("外資連買天數 ≥", value=3, step=1, key="條_外資連買天數 ≥")
+            if st.checkbox("投信連續買超", key="條_投信連續買超"):
+                條件["投信連買下限"] = st.number_input("投信連買天數 ≥", value=3, step=1, key="條_投信連買天數 ≥")
+            if st.checkbox("三大法人 5 日合計買超", key="條_三大法人 5 日合計買超"):
+                條件["法人5日買超下限"] = st.number_input("法人 5 日買超(張) ≥", value=1000, step=500, key="條_法人 5 日買超(張) ≥")
+            if st.checkbox("融資 5 日增減上限", key="條_融資 5 日增減上限"):
+                條件["融資5日增減上限"] = st.number_input("融資 5 日增減(%) ≤", value=0.0, step=1.0, key="條_融資 5 日增減(%) ≤")
+        with 格[0].container(border=True):
+            st.markdown("**技術面**")
+            if st.checkbox("站上均線", key="條_站上均線"):
+                條件["站上均線"] = st.selectbox("收盤價站上", [5, 20, 60], index=1, format_func=lambda n: f"{n} 日均線", key="條_收盤價站上")
+            條件["均線多頭排列"] = st.checkbox("均線多頭排列（5 > 20 > 60 日）", key="條_均線多頭排列（5 > 20 > 60 日）")
+            if st.checkbox("20 日漲幅下限", key="條_20 日漲幅下限"):
+                條件["20日漲幅下限"] = st.number_input("20 日漲幅(%) ≥", value=5.0, step=1.0, key="條_20 日漲幅(%) ≥")
+            if st.checkbox("RSI 區間", key="條_RSI 區間"):
+                條件["RSI區間"] = st.slider("RSI(14)", 0, 100, (30, 70), key="條_RSI(14)")
+            if st.checkbox("量比下限（今日量 ÷ 20 日均量）", key="條_量比下限（今日量 ÷ 20 日均量）"):
+                條件["量比下限"] = st.number_input("量比 ≥", value=1.5, step=0.1, key="條_量比 ≥")
+        with 格[1].container(border=True):
+            st.markdown("**流動性與價格**")
+            條件["成交張數下限"] = st.number_input("成交張數 ≥", value=500, step=100, key="條_成交張數 ≥")
+            條件["股價區間"] = st.slider("收盤價", 0, 3000, (10, 1000), key="條_收盤價")
+            條件["排除ETF"] = st.checkbox("排除 ETF", True, key="條_排除 ETF")
+        條件["排序"] = st.selectbox("排序依據", list(engine.排序方式), key="條_排序依據")
+    else:
+        st.info(engine.烏賊條件[範本]["說明"])
+        條件.update(engine.烏賊條件[範本]["條件"])
+        條件["排除ETF"] = True
+    st.session_state["_條件記憶"] = {k: v for k, v in st.session_state.items() if str(k).startswith("條_")}
+    return 條件, 範本
+
 
 # ---------- 頁面切換（用按鈕列代替分頁，才能點股票後直接跳到個股查詢） ----------
 頁面們 = ["01 / 市場總覽", "02 / 我的股票", "03 / 個股查詢", "04 / 選股", "05 / 回測", "06 / 每日評分"]
@@ -551,6 +564,36 @@ def 庫存代號():
         return list(dict.fromkeys(持股["代號"].astype(str).str.strip()))
     except Exception:
         return []
+
+
+def 前後期表(歷史, 欄位, 比較們, 期名, 反向=()):
+    """本期跟前幾期的數字並排，附上增減。歷史：以日期/月份為索引；欄位：{欄: (中文名, 格式)}；
+    比較們：[(名稱, 往前幾期)]；反向：數字變大代表籌碼變分散的欄位（散戶、股東人數），顏色反過來。"""
+    本 = 歷史.iloc[-1]
+    列們 = []
+    for 欄, (名, 式) in 欄位.items():
+        列 = {"項目": 名, f"本期 {期名(歷史.index[-1])}": 式.format(本[欄])}
+        for 比名, n in 比較們:
+            if len(歷史) > n:
+                舊 = 歷史.iloc[-1 - n]
+                差 = 本[欄] - 舊[欄]
+                色 = "🔴" if (差 > 0) != (欄 in 反向) and 差 != 0 else ("🟢" if 差 != 0 else "⚪")
+                列[f"{比名} {期名(歷史.index[-1 - n])}"] = 式.format(舊[欄])
+                列[f"較{比名}"] = f"{色} {('+' if 差 > 0 else '')}{式.format(差)}"
+        列們.append(列)
+    st.dataframe(pd.DataFrame(列們), hide_index=True, width="stretch")
+
+
+@st.cache_data(ttl=43200, show_spinner="查詢內部人持股歷史中…", max_entries=50)
+def 內部人資料(代號):
+    """先向公開資訊觀測站查近 7 個月，查不到就用資料庫每月存的。"""
+    try:
+        歷史 = engine.內部人歷史(代號)
+        if 歷史 is not None and len(歷史):
+            return 歷史
+    except Exception:
+        pass
+    return engine.讀取內部人(代號)
 
 
 @st.cache_data(ttl=43200, show_spinner="查詢集保大戶歷史中（第一次約 10～20 秒）…", max_entries=50)
@@ -1102,9 +1145,11 @@ if 頁面 == 頁面們[3]:
 - **五分 K**：用盤中 5 分鐘 K 線找當日進出場點，避免看到大單就追或被嚇跑（本站目前只有日線資料）。
 - **烏賊的話**：勇於嘗試＋嚴格停損；隔日沖反應不如預期就砍；小波段請把握反轉點或跌破關鍵價位。
 
-這些規則已做成「個股回測」裡的 **盤整突破（烏賊）** 與 **均線勾起（烏賊）** 兩個策略，左側「策略範本」可直接套用五組選股條件。
+這些規則已做成「個股回測」裡的 **盤整突破（烏賊）** 與 **均線勾起（烏賊）** 兩個策略，「條件選股」分頁的「策略範本」可直接套用五組選股條件。
 """)
   with 選股分頁[0]:
+    with st.expander("⚙️ 選股條件（組合回測也用這組）", expanded=True):
+        條件, 範本 = 選股條件區()
     結果 = engine.選股(今日, 條件)
     卡片列([
         卡片("符合條件", f"{len(結果)}", "檔", 青),
@@ -1157,7 +1202,9 @@ def 績效卡(績, 基準名, 基準鍵):
 if 頁面 == 頁面們[4]:
     回測分頁 = st.tabs(["組合回測", "個股回測"])
     with 回測分頁[0]:
-        st.caption("規則：每期最後一個交易日收盤後用左側條件選股，隔日收盤價買進前 N 檔，每檔投入總資產 ÷ N；"
+        with st.expander("⚙️ 選股條件（跟 04 / 選股 共用）"):
+            條件, 範本 = 選股條件區()
+        st.caption("規則：每期最後一個交易日收盤後用上面的條件選股，隔日收盤價買進前 N 檔，每檔投入總資產 ÷ N；"
                    "沒入選的賣出；觸發停損停利當天收盤賣出。已計入手續費 0.1425% 與證交稅 0.3%。"
                    "月營收與 EPS 條件只有最新一期，回測時不套用。")
         最早 = 指標["date"].min().date()
@@ -1180,7 +1227,7 @@ if 頁面 == 頁面們[4]:
 
         報告 = st.session_state.get("回測")
         if 報告 is None:
-            st.info("設定好左側選股條件與上方參數後，按「開始回測」。")
+            st.info("設定好上面的選股條件與參數後，按「開始回測」。")
         else:
             績效卡(報告["績效"], "0050 同期", "0050 同期報酬(%)")
 
@@ -1354,7 +1401,7 @@ if 頁面 == 頁面們[2]:
     st.markdown("**今天符合的烏賊策略：** " + ("、".join(
         f"{'🔴' if engine.烏賊條件[x]['方向'] == '多' else '🟢'} {x.replace('烏賊', '')}" for x in 符合) or "無"))
 
-    內部 = engine.讀取內部人(代號)
+    內部 = 內部人資料(代號)
     if 內部 is not None:
         段落("INSIDER // 公司內部人（董監、經理人、大股東）")
         最近 = 內部.iloc[-1]
@@ -1369,8 +1416,15 @@ if 頁面 == 頁面們[2]:
             卡片("設質（質押）", 數(最近["pledged"] / 1000, "{:,.0f}", " 張"),
                  f"佔內部人 {數(最近['pledged'] / 最近['insider'] * 100 if 最近['insider'] else np.nan, '{:.1f}', '%')}"),
         ])
+        if 前月 is not None:
+            張 = 內部.set_index("month")[["insider", "directors", "pledged"]] / 1000
+            前後期表(張, {"insider": ("內部人持股（張）", "{:,.0f}"), "directors": ("董監持股（張）", "{:,.0f}"),
+                        "pledged": ("設質（張）", "{:,.0f}")},
+                     [("上月", 1), ("3 個月前", 3), ("6 個月前", 6)], str, 反向={"pledged"})
+            st.caption("資料：公開資訊觀測站每月董監事持股餘額（同一人有多個職稱只算一次）。"
+                       "內部人增持通常代表看好自家公司；設質（拿股票去借錢）增加要留意。")
 
-    集保 = 集保資料(代號)
+    集保 = 大戶歷史(代號)
     if 集保 is not None and len(集保):
         段落("HOLDERS // 集保股權分散（大戶與散戶）")
         最新 = 集保.iloc[-1]
@@ -1386,6 +1440,10 @@ if 頁面 == 頁面們[2]:
             卡片("股東人數", f"{最新['holders']:,.0f}",
                  f"較上週 {差('holders'):+,.0f}" if 前 is not None else ""),
         ])
+        if 前 is not None:
+            前後期表(集保.set_index("date"), {"big1000": ("千張大戶 %", "{:.2f}"), "big400": ("400 張以上 %", "{:.2f}"),
+                                             "retail": ("50 張以下散戶 %", "{:.2f}"), "holders": ("股東人數", "{:,.0f}")},
+                     [("上週", 1), ("4 週前", 4), ("12 週前", 12)], lambda d: f"{d:%m/%d}", 反向={"retail", "holders"})
         if len(集保) >= 3:
             圖 = make_subplots(specs=[[{"secondary_y": True}]])
             圖.add_trace(go.Scatter(x=集保["date"], y=集保["big1000"], name="千張大戶 %", line=dict(color=紅)))
@@ -1393,8 +1451,7 @@ if 頁面 == 頁面們[2]:
             圖.add_trace(go.Bar(x=集保["date"], y=集保["holders"], name="股東人數", marker_color="#333",
                                 opacity=0.6), secondary_y=True)
             st.plotly_chart(圖表外觀(圖, 260), width="stretch")
-        st.caption("集保結算所每週五公布。大戶比例上升、股東人數下降，通常代表籌碼往大戶集中；"
-                   "資料從 2026/10 開始每週累積，幾週後就能看出趨勢。")
+        st.caption("集保結算所每週五公布。大戶比例上升、股東人數下降，通常代表籌碼往大戶集中（表中紅色＝籌碼變集中）。")
 
     除權息, 預告 = engine.讀取除權息(代號)
     if 除權息 is not None and (len(除權息) or (預告 is not None and len(預告))):
@@ -1430,7 +1487,6 @@ if 頁面 == 頁面們[2]:
         可選 = ["成交量", "RSI", "MACD"]
     指標們 = st.multiselect("下方指標", 可選, default=[x for x in ["成交量", "三大法人", "MACD"] if x in 可選],
                            key=f"個股指標{週期 in ('當日', '5分')}")
-    st.caption("官股行庫（八大公股券商）買賣超需要券商分點資料，交易所沒有免費開放，暫時無法提供。")
 
     def 走勢圖():
         if 週期 in ("當日", "5分"):
