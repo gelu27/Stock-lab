@@ -130,7 +130,7 @@ def 收盤摘要(強制=False):
         行們 += ["", f"💼 庫存今日 {今日:+,.0f} 元，累積 {總:+,.0f} 元"]
 
     自選, _ = 讀設定("watchlist.json")
-    代號們 = list(dict.fromkeys(c for v in 自選.values() for c in v))
+    代號們 = list(dict.fromkeys(c for k, v in 自選.items() if not k.startswith("_") for c in v))
     if 代號們:
         行們 += ["", "⭐ 自選股"]
         for c in 代號們[:30]:
