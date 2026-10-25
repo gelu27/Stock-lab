@@ -181,10 +181,20 @@ def 上色(表):
 
 
 # ---------- 讀資料 ----------
+常駐天數 = 300  # 52 週高點要 240 天，多留一點
+
+
+@st.cache_data(max_entries=30, ttl=43200, show_spinner=False)
+def 個股全史(代號, 資料版本=None):
+    """這一檔完整 5 年的指標（K 線週月季、本益比河流圖、個股回測用），只讀這檔所以很快、也不佔記憶體。"""
+    原始 = engine.讀取資料庫(代號=代號)
+    return None if 原始 is None else engine.計算指標(原始)
+
+
 @st.cache_resource(max_entries=1, show_spinner="讀取資料庫中…")  # 不複製資料，省一半記憶體
 def 載入(資料版本):
     # 資料版本變了（每天更新後）就會重新讀取，不會一直用舊的暫存
-    原始 = engine.讀取資料庫()
+    原始 = engine.讀取資料庫(最近天數=常駐天數)  # 平常只放近一年多，完整 5 年要用時再臨時讀
     if 原始 is None:
         return None, None
     指標 = engine.計算指標(原始)
@@ -195,7 +205,7 @@ def 載入(資料版本):
 
 def 資料版本():
     紀錄們 = list((engine.資料夾 / "status").glob("*.txt")) + list(engine.資料夾.glob("dates.txt"))
-    最新 = max((f.stat().st_mtime for f in 紀錄們), default=0)
+    最新 = max((f.stat().st_mtime for f in 紀錄們 + list(engine.資料夾.glob("updated.txt"))), default=0)
     檔數 = len(list((engine.資料夾 / "prices").glob("**/*.csv.gz")))
     return f"{最新}-{檔數}"
 
@@ -218,6 +228,11 @@ st.markdown("""<div class="hero"><div class="kicker">TAIWAN STOCK EXCHANGE // PE
 <div class="sub">SCREEN · BACKTEST · OBSERVE — 資料來源：臺灣證券交易所、證券櫃檯買賣中心</div></div>""",
             unsafe_allow_html=True)
 
+def 最後更新():
+    f = engine.資料夾 / "updated.txt"
+    return f.read_text().strip() if f.exists() else "（下次自動更新後顯示）"
+
+
 if 指標 is None:
     載入.clear()
     st.warning("資料庫還是空的。請到 GitHub 專案的「Actions」頁面，點「更新資料庫」→「Run workflow」，"
@@ -225,6 +240,28 @@ if 指標 is None:
     st.stop()
 
 最新日 = 指標["date"].max()
+a, b = st.columns([4, 1])
+a.caption(f"📅 資料日期 {最新日:%Y/%m/%d}　·　資料庫最後更新 {最後更新()}（每個交易日約 18:00 自動更新）")
+with b.popover("🔄 更新"):
+    st.markdown("**重新載入**：資料庫已經更新、但網站顯示的還是舊資料時按。")
+    if st.button("🔄 重新載入網站資料", key="重新載入"):
+        載入.clear()
+        st.cache_data.clear()
+        for k in ("自選股", "到價提醒"):
+            st.session_state.pop(k, None)
+        engine.釋放記憶體()
+        st.rerun()
+    st.markdown("**重新執行更新**：請 GitHub 立刻再抓一次交易所資料（約 5～15 分鐘），完成後再按上面的重新載入。")
+    if st.button("⚡ 重新執行資料更新", key="觸發更新"):
+        try:
+            秘密 = dict(st.secrets)
+        except Exception:
+            秘密 = {}
+        if 秘密.get("password") and not st.session_state.get("已解鎖"):
+            st.warning("請先到「02 / 我的股票」輸入密碼解鎖。")
+        else:
+            成功, 說明 = engine.觸發更新(秘密)
+            (st.success if 成功 else st.error)(說明)
 今日 = engine.加基本面(指標[指標["date"] == 最新日], engine.讀取基本面())
 市場對照 = dict(zip(今日["代號"], 今日["市場"]))
 有籌碼 = "法人買超" in 指標.columns
@@ -409,7 +446,8 @@ def ROE資料(代號, r):
     四季, 季度, 去年四季 = engine.近四季EPS(代號)
     淨值比 = r.get("淨值比")
     現在 = 四季 / (r["收盤"] / 淨值比) * 100 if pd.notna(四季) and pd.notna(淨值比) and 淨值比 > 0 else np.nan
-    舊 = 指標[(指標["code"] == 代號) & (指標["date"] <= 最新日 - pd.Timedelta(days=365))].tail(1)
+    全 = 個股全史(代號, _版本)
+    舊 = 全[全["date"] <= 最新日 - pd.Timedelta(days=365)].tail(1) if 全 is not None else pd.DataFrame()
     以前 = np.nan
     if pd.notna(去年四季) and len(舊) and 舊["淨值比"].iloc[0] > 0:
         以前 = 去年四季 / (舊["收盤"].iloc[0] / 舊["淨值比"].iloc[0]) * 100
@@ -492,7 +530,7 @@ def 做PDF(代號, r, 建議, 內文, 時間):
         ("距 52 週高點", 數(r["距52週高點"], "{:+.1f}", "%")), ("箱頂", 數(r["箱頂"])), ("箱底", 數(r["箱底"]))]))
     資料 = {"收盤": float(r["收盤"]), "漲跌": float(r["漲跌"]), "漲跌幅": float(r["漲跌幅"]), "日期": 最新日.strftime("%Y-%m-%d"),
             "產業": g("產業"), "市場": r["市場"], "卡片": 卡們, "基本資料": 基本, "判讀": engine.規則判讀(r),
-            "歷史": 指標[指標["代號"] == 代號], "營收": engine.讀取營收歷史(代號), "損益": engine.單季損益(代號),
+            "歷史": 個股全史(代號, _版本), "營收": engine.讀取營收歷史(代號), "損益": engine.單季損益(代號),
             "建議": 建議, "報告": 內文, "報告時間": 時間}
     try:
         h, 週轉, 大 = 變化資料(代號, 126)
@@ -1226,7 +1264,7 @@ if 頁面 == 頁面們[4]:
         st.caption("規則：每期最後一個交易日收盤後用上面的條件選股，隔日收盤價買進前 N 檔，每檔投入總資產 ÷ N；"
                    "沒入選的賣出；觸發停損停利當天收盤賣出。已計入手續費 0.1425% 與證交稅 0.3%。"
                    "月營收與 EPS 條件只有最新一期，回測時不套用。")
-        最早 = 指標["date"].min().date()
+        最早 = engine.資料起訖()[0].date()
         a, b, c, d, e = st.columns(5)
         開始 = a.date_input("開始日期", max(最早, 最新日.date() - dt.timedelta(days=730)), min_value=最早,
                          max_value=最新日.date())
@@ -1240,9 +1278,12 @@ if 頁面 == 頁面們[4]:
 
         if st.button("▶ 開始回測"):
             with st.spinner("回測計算中…"):
+                每日, 調倉日表 = engine.回測資料(開始, 結束, 調倉)
                 st.session_state["回測"] = engine.回測(
-                    指標, 條件, pd.Timestamp(開始), pd.Timestamp(結束), 檔數, 調倉,
-                    停損 or None, 停利 or None, 資金)
+                    每日, 條件, pd.Timestamp(開始), pd.Timestamp(結束), 檔數, 調倉,
+                    停損 or None, 停利 or None, 資金, 選股資料=調倉日表)
+                del 每日, 調倉日表
+                engine.釋放記憶體()
 
         報告 = st.session_state.get("回測")
         if 報告 is None:
@@ -1294,7 +1335,7 @@ if 頁面 == 頁面們[4]:
         停利2 = d.number_input("停利 %（0 不設）", 0.0, 500.0, 0.0, step=5.0, key="個股停利")
         if st.button("▶ 開始個股回測"):
             st.session_state["個股回測"] = engine.個股回測(
-                指標, 標的.split()[0], pd.Timestamp(開始2), pd.Timestamp(結束2), 策略, 短, 長, RSI下, RSI上,
+                個股全史(標的.split()[0], _版本), 標的.split()[0], pd.Timestamp(開始2), pd.Timestamp(結束2), 策略, 短, 長, RSI下, RSI上,
                 停損2 or None, 停利2 or None)
         報告 = st.session_state.get("個股回測")
         if 報告 is None:
@@ -1482,7 +1523,7 @@ if 頁面 == 頁面們[2]:
                             + (f"，股票股利每千股 {p['stock_ratio'] * 1000:g} 股"
                                if pd.notna(p.get("stock_ratio")) and p.get("stock_ratio") else ""))
         if len(除權息):
-            價格 = 指標.loc[指標["代號"] == 代號, ["date", "收盤"]]
+            價格 = 個股全史(代號, _版本)[["date", "收盤"]]
             表 = 除權息.assign(填息=engine.填息(除權息, 價格)).sort_values("date", ascending=False)
             近一年 = 表[表["date"] >= 表["date"].max() - pd.Timedelta(days=365)]
             年配 = 近一年["value"].sum()
@@ -1520,7 +1561,7 @@ if 頁面 == 頁面們[2]:
                               "close": 線["close"], "量": 線["volume"] / 1000})
             st.caption(f"{線['datetime'].iloc[-1]:%Y/%m/%d %H:%M} 為止，資料來源 Yahoo 奇摩股市（盤中約延遲數分鐘）")
         else:
-            歷史 = 指標[指標["代號"] == 代號]
+            歷史 = 個股全史(代號, _版本)
             if 週期 != "日":
                 歷史 = engine.週期K線(歷史, 週期)
             歷史 = 歷史.tail({"日": 180, "週": 156, "月": 72, "季": 40}[週期])
@@ -1582,7 +1623,7 @@ if 頁面 == 頁面們[2]:
                               label_visibility="collapsed") or "半年"
     變化圖(代號, r, {"3 個月": 63, "半年": 126, "1 年": 250}[期間])
 
-    河流 = engine.本益比河流(指標[指標["代號"] == 代號])
+    河流 = engine.本益比河流(個股全史(代號, _版本))
     if 河流:
         段落("VALUATION // 本益比河流圖")
         h, 倍數們, 百分位 = 河流
@@ -1693,7 +1734,8 @@ if 頁面 == 頁面們[2]:
             摘要 += "\n\n近半年股價、週轉率、千張大戶、三大法人變化：\n" + engine.變化摘要(*變化資料(代號, 126))
         except Exception:
             pass
-        本益 = 指標.loc[(指標["code"] == 代號) & (指標["date"] >= 最新日 - pd.Timedelta(days=3 * 365)), "本益比"]
+        全 = 個股全史(代號, _版本)
+        本益 = 全.loc[全["date"] >= 最新日 - pd.Timedelta(days=3 * 365), "本益比"]
         本益 = 本益[本益 > 0]
         if len(本益) > 60:
             摘要 += (f"\n- 近三年本益比區間：最低 {本益.min():.1f}、25% {本益.quantile(.25):.1f}、中位數 {本益.median():.1f}、"

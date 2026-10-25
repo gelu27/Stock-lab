@@ -38,34 +38,105 @@ def 釋放記憶體():
         pass
 
 
-def _讀每日檔(子資料夾, 最近天數=None):
-    """用 pyarrow 多執行緒一次讀完每天的小檔（比一檔一檔用 pandas 讀快兩三倍，網站開啟等比較久的就是這步）。
-    最近天數：只讀最後幾個交易日（LINE 推播算評分用，不必讀 5 年）。"""
-    from concurrent.futures import ThreadPoolExecutor
+def _讀一天(f):
+    """讀一個每日 csv.gz，數字一律轉 float32 省記憶體，日期從檔名取。"""
     import pyarrow as pa
     import pyarrow.csv as pc
 
-    檔案們 = sorted((資料夾 / 子資料夾).glob("**/*.csv.gz"))
-    if 最近天數:
-        檔案們 = 檔案們[-最近天數:]
-    if not 檔案們:
-        return None
     選項 = pc.ConvertOptions(column_types={"code": pa.string(), "market": pa.string(), "name": pa.string()})
+    t = pc.read_csv(f, convert_options=選項)
+    欄們 = {}
+    for 名 in t.column_names:
+        c = t[名]
+        if pa.types.is_integer(c.type) or pa.types.is_floating(c.type) or pa.types.is_null(c.type):
+            c = c.cast(pa.float32(), safe=False)
+        欄們[名] = c
+    日 = np.datetime64(f"{f.name[:4]}-{f.name[4:6]}-{f.name[6:8]}", "us")
+    欄們["date"] = pa.array(np.full(t.num_rows, 日))
+    return pa.table(欄們)
 
-    def 讀(f):
-        t = pc.read_csv(f, convert_options=選項)
-        欄們 = {}
-        for 名 in t.column_names:
-            c = t[名]
-            if pa.types.is_integer(c.type) or pa.types.is_floating(c.type) or pa.types.is_null(c.type):
-                c = c.cast(pa.float32(), safe=False)  # 省記憶體
-            欄們[名] = c
-        日 = np.datetime64(f"{f.name[:4]}-{f.name[4:6]}-{f.name[6:8]}", "us")  # 日期從檔名取
-        欄們["date"] = pa.array(np.full(t.num_rows, 日))
-        return pa.table(欄們)
+
+def _月檔(子資料夾, 月):
+    return 資料夾 / "monthly" / f"{子資料夾}_{月}.parquet"
+
+
+def 整併月檔(子資料夾們=("prices", "chips")):
+    """把已經過完的月份（每天一檔的 csv.gz）合併成一個依代號排序的 parquet，
+    網站要查單一股票或讀很多天時快很多、也省記憶體。由 GitHub Actions 每天更新資料後執行。"""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    本月 = pd.Timestamp.now(tz="Asia/Taipei").strftime("%Y-%m")
+    (資料夾 / "monthly").mkdir(exist_ok=True)
+    for 子 in 子資料夾們:
+        for 夾 in sorted(p for p in (資料夾 / 子).glob("*") if p.is_dir()):
+            月 = 夾.name
+            檔們 = sorted(夾.glob("*.csv.gz"))
+            目標 = _月檔(子, 月)
+            if 月 >= 本月 or not 檔們:
+                continue
+            # 記下來源檔名與大小，來源沒變就不重做（git 下載後檔案時間不可靠）
+            指紋 = ",".join(f"{f.name}:{f.stat().st_size}" for f in 檔們).encode()
+            if 目標.exists() and (pq.read_schema(目標).metadata or {}).get(b"sources") == 指紋:
+                continue
+            t = pa.concat_tables([_讀一天(f) for f in 檔們], promote_options="permissive")
+            t = t.sort_by([("code", "ascending"), ("date", "ascending")])
+            t = t.replace_schema_metadata({"sources": 指紋})
+            pq.write_table(t, 目標, compression="zstd", row_group_size=8000)
+            print(f"整併 {子} {月}：{t.num_rows} 列")
+
+
+def _交易日(子資料夾):
+    return sorted(pd.Timestamp(f.name[:8]) for f in (資料夾 / 子資料夾).glob("*/*.csv.gz"))
+
+
+def _讀每日檔(子資料夾, 最近天數=None, 代號=None, 起日=None):
+    """讀資料庫：過完的月份讀整併好的 parquet，其他讀每天的 csv.gz。
+    最近天數：只讀最後幾個交易日；代號：只讀這一檔；起日：只讀這天以後。"""
+    from concurrent.futures import ThreadPoolExecutor
+    import pyarrow as pa
+    import pyarrow.compute as pcm
+    import pyarrow.parquet as pq
+
+    夾們 = sorted(p for p in (資料夾 / 子資料夾).glob("*") if p.is_dir())
+    if not 夾們:
+        return None
+    if 最近天數:
+        日們 = _交易日(子資料夾)
+        if 日們:
+            起日 = max(起日 or 日們[0], 日們[-最近天數:][0])
+    起月 = 起日.strftime("%Y-%m") if 起日 is not None else ""
+    過濾 = []
+    代號們 = None if 代號 is None else ([str(代號)] if isinstance(代號, str) else [str(c) for c in 代號])
+    if 代號們 is not None:
+        過濾.append(("code", "in", 代號們))
+    if 起日 is not None:
+        過濾.append(("date", ">=", pd.Timestamp(起日).to_datetime64().astype("datetime64[us]")))
+
+    工作 = []
+    for 夾 in 夾們:
+        if 夾.name < 起月:
+            continue
+        月檔 = _月檔(子資料夾, 夾.name)
+        if 月檔.exists():
+            工作.append(("pq", 月檔))
+        else:
+            工作.extend(("csv", f) for f in sorted(夾.glob("*.csv.gz"))
+                      if 起日 is None or pd.Timestamp(f.name[:8]) >= 起日)
+
+    def 讀(項):
+        種類, f = 項
+        if 種類 == "pq":
+            return pq.read_table(f, filters=過濾 or None)
+        t = _讀一天(f)
+        if 代號們 is not None:
+            t = t.filter(pcm.is_in(t["code"], value_set=pa.array(代號們)))
+        return t
 
     with ThreadPoolExecutor(4) as 工人:
-        表們 = list(工人.map(讀, 檔案們))
+        表們 = [t for t in 工人.map(讀, 工作) if t.num_rows]
+    if not 表們:
+        return None
     合併 = pa.concat_tables(表們, promote_options="permissive")
     del 表們
     名稱們 = {}
@@ -87,15 +158,16 @@ def _讀每日檔(子資料夾, 最近天數=None):
     return 表
 
 
-def 讀取資料庫(最近天數=None):
-    表 = _讀每日檔("prices", 最近天數)
+def 讀取資料庫(最近天數=None, 代號=None, 起日=None):
+    """上市櫃每日行情＋籌碼。最近天數／代號／起日可以只讀一部分，省記憶體。"""
+    表 = _讀每日檔("prices", 最近天數, 代號, 起日)
     if 表 is None:
         return None
     if "market" not in 表.columns:
         表["market"] = "上市"
     表["market"] = 表["market"].fillna("上市")
     釋放記憶體()
-    籌碼 = _讀每日檔("chips", 最近天數)
+    籌碼 = _讀每日檔("chips", 最近天數, 代號, 起日)
     if 籌碼 is not None:
         表 = 表.merge(籌碼, on=["date", "code"], how="left")
         del 籌碼
@@ -103,6 +175,12 @@ def 讀取資料庫(最近天數=None):
     數字 = 表.select_dtypes("float64").columns
     表[數字] = 表[數字].astype("float32")  # 省記憶體
     return 表.sort_values(["code", "date"], ignore_index=True)
+
+
+def 資料起訖():
+    """資料庫第一天、最後一天（看檔名，不必讀資料）。"""
+    日們 = _交易日("prices")
+    return (日們[0], 日們[-1]) if 日們 else (None, None)
 
 
 def 讀取加權指數():
@@ -525,7 +603,7 @@ def 每日功課(今日, 檔數=20):
 
 # ---------- 4. 回測 ----------
 def 回測(指標, 條件, 開始, 結束, 最多檔數=10, 調倉="每月", 停損=None, 停利=None,
-       初始資金=1_000_000):
+       初始資金=1_000_000, 選股資料=None):
     """
     規則：每週或每月最後一個交易日收盤後選股，隔一個交易日以收盤價買進，
     每檔投入「總資產 ÷ 最多檔數」。沒入選的持股賣出；
@@ -539,7 +617,8 @@ def 回測(指標, 條件, 開始, 結束, 最多檔數=10, 調倉="每月", 停
     還原表 = 區間.pivot(index="date", columns="code", values="還原價")
     名稱 = 區間.drop_duplicates("code", keep="last").set_index("code")["名稱"]
     日期們 = 報酬表.index
-    依日期 = {d: g for d, g in 區間.groupby("date")}
+    # 選股資料：只有調倉日的完整指標（省記憶體版，見 回測資料()）；沒給就用 指標 本身
+    依日期 = {d: g for d, g in (區間 if 選股資料 is None else 選股資料).groupby("date")}
 
     if 調倉 == "每日":
         訊號日 = set(日期們)
@@ -616,6 +695,50 @@ def 回測(指標, 條件, 開始, 結束, 最多檔數=10, 調倉="每月", 停
         基準 = (1 + 報酬表["0050"]).cumprod()
     交易表 = pd.DataFrame(交易紀錄)
     return {"曲線": 曲線, "基準": 基準, "交易": 交易表, "績效": 計算績效(曲線, 交易表, 基準)}
+
+
+def 調倉日(日期們, 調倉):
+    日期們 = pd.DatetimeIndex(日期們)
+    if 調倉 == "每日":
+        return set(日期們)
+    期別 = 日期們.to_period("W" if 調倉 == "每週" else "M")
+    return set(日期們[np.r_[期別[1:] != 期別[:-1], True]]) | {日期們[0]}
+
+
+def 回測資料(開始, 結束, 調倉="每月", 批數=6):
+    """組合回測用的資料，分批計算省記憶體：每天只留報酬、收盤、還原價、名稱（算績效用），
+    調倉日才留完整指標（選股用）。回傳 (每日窄表, 調倉日完整表)。"""
+    import pyarrow.parquet as pq
+
+    開始, 結束 = pd.Timestamp(開始), pd.Timestamp(結束)
+    日們 = [d for d in _交易日("prices") if 開始 <= d <= 結束]
+    if not 日們:
+        return None, None
+    訊號 = 調倉日(日們, 調倉)
+    # 期間內出現過的所有代號（含已下市），只讀 code 欄很快
+    代號們 = set()
+    for f in (資料夾 / "monthly").glob("prices_*.parquet"):
+        if 開始.strftime("%Y-%m") <= f.stem[-7:] <= 結束.strftime("%Y-%m"):
+            代號們 |= set(pq.read_table(f, columns=["code"])["code"].to_pylist())
+    for f in (資料夾 / "prices").glob("*/*.csv.gz"):
+        if 開始 <= pd.Timestamp(f.name[:8]) <= 結束 and not _月檔("prices", f.parent.name).exists():
+            代號們 |= set(pd.read_csv(f, usecols=["code"], dtype=str)["code"])
+    代號們 = sorted(代號們)
+    窄們, 全們 = [], []
+    for i in range(批數):
+        批 = 代號們[i::批數]
+        原始 = 讀取資料庫(代號=批, 起日=開始 - pd.Timedelta(days=400))  # 多讀一年多算均線、52 週高點
+        if 原始 is None:
+            continue
+        指 = 計算指標(原始)
+        del 原始
+        指 = 指[(指["date"] >= 開始) & (指["date"] <= 結束)]
+        窄們.append(指[["date", "code", "代號", "名稱", "日報酬", "收盤", "還原價"]].copy())
+        全們.append(指[指["date"].isin(訊號)].copy())
+        del 指
+        釋放記憶體()
+    排 = lambda 們: pd.concat(們, ignore_index=True).sort_values(["code", "date"], ignore_index=True)  # 同分時順序跟以前一樣
+    return 排(窄們), 排(全們)
 
 
 def 計算績效(曲線, 交易表, 基準):
@@ -1324,6 +1447,24 @@ def _GitHub設定(設定, 檔名):
     分支 = 設定.get("AI_BRANCH", "ai-reports")
     標頭 = {"Authorization": f"Bearer {權杖}", "Accept": "application/vnd.github+json"}
     return 權杖, f"https://api.github.com/repos/{倉庫}/contents/{檔名}", 分支, 標頭
+
+
+def 觸發更新(設定):
+    """請 GitHub Actions 立刻跑一次「更新資料庫」。回傳 (成功, 說明)。
+    GITHUB_TOKEN 需要 Actions 的 Read and write 權限。"""
+    import requests
+    權杖, _, _, 標頭 = _GitHub設定(設定, "")
+    if not 權杖:
+        return False, "Secrets 沒有設定 GITHUB_TOKEN"
+    倉庫 = 設定.get("AI_REPO", "gelu27/Stock-lab")
+    r = requests.post(f"https://api.github.com/repos/{倉庫}/actions/workflows/update.yml/dispatches",
+                      headers=標頭, json={"ref": "main"}, timeout=15)
+    if r.status_code == 204:
+        return True, "已開始更新"
+    if r.status_code in (401, 403, 404):
+        return False, ("GITHUB_TOKEN 沒有執行 Actions 的權限：到 GitHub → Settings → Developer settings → "
+                       "Fine-grained tokens，編輯這把金鑰，在 Repository permissions 把「Actions」改成 Read and write。")
+    return False, f"GitHub 回應 {r.status_code}：{r.text[:120]}"
 
 
 def 讀取設定檔(設定, 檔名):
