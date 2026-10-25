@@ -2048,3 +2048,49 @@ def 讀取評分回測():
     import json
     檔 = 資料夾 / "score_backtest.json"
     return json.loads(檔.read_text()) if 檔.exists() else None
+
+
+# ========== 16. 使用統計：來客數、產生過 AI 報告的個股 ==========
+def 列出AI報告(設定):
+    """回傳 {代號: 紀錄們（新到舊）}，讀 ai-reports 分支 reports/ 底下的全部報告。"""
+    import json, requests
+
+    權杖 = 清理金鑰(設定.get("GITHUB_TOKEN"))
+    if not 權杖:
+        資料 = 資料夾.parent / "ai_reports"
+        return {f.stem: json.loads(f.read_text("utf-8")) for f in sorted(資料.glob("*.json"))
+                if f.stem[:1].isdigit()} if 資料.exists() else {}
+    倉庫 = 設定.get("AI_REPO", "gelu27/Stock-lab")
+    回應 = requests.get(f"https://api.github.com/repos/{倉庫}/contents/reports", timeout=15,
+                        params={"ref": 設定.get("AI_BRANCH", "ai-reports")},
+                        headers={"Authorization": f"Bearer {權杖}", "Accept": "application/vnd.github+json"})
+    if 回應.status_code == 404:
+        return {}
+    回應.raise_for_status()
+    代號們 = [x["name"][:-5] for x in 回應.json() if x["name"].endswith(".json")]
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(6) as 工人:
+        return dict(zip(代號們, 工人.map(lambda c: 讀取AI紀錄(c, 設定), 代號們)))
+
+
+def 記錄來訪(設定, 自己=False, 訪客碼=""):
+    """每個瀏覽階段記一次：stats.json 的 {日期: {"次數", "自己", "訪客": [代碼]}}（訪客碼是 IP 加密後的前 8 碼）。"""
+    import datetime as dt
+
+    今天 = dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).strftime("%Y-%m-%d")
+    for _ in range(3):  # 同時有人存檔會衝突，重試
+        try:
+            統計 = 讀取設定檔(設定, "stats.json") or {}
+            日 = 統計.setdefault(今天, {"次數": 0, "自己": 0, "訪客": []})
+            日["次數"] += 1
+            日["自己"] += int(bool(自己))
+            if 訪客碼 and not 自己 and 訪客碼 not in 日["訪客"]:
+                日["訪客"].append(訪客碼)
+            儲存設定檔(設定, "stats.json", 統計, f"來訪 {今天}")
+            return
+        except Exception:
+            continue
+
+
+def 讀取來訪(設定):
+    return 讀取設定檔(設定, "stats.json") or {}
