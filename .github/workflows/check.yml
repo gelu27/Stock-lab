@@ -2,6 +2,7 @@ name: 網站自動檢查
 
 on:
   push:
+    branches: [main]
     paths-ignore: ["data/**"]   # 每天的資料更新不用跑
   pull_request:
   workflow_dispatch:
