@@ -1686,3 +1686,44 @@ def 今昨評分(指標, 基本面, 加權):
         大["較昨日"] = 大["分數"] - 昨大["分數"]
     大["日期"] = pd.Timestamp(日們[-1])
     return 分, d, 大
+
+
+def 集保歷史(代號, 週數=26):
+    """從集保結算所網站查這檔過去幾週的股權分散表（官方開放資料只有最新一週）。
+    回傳 date、big1000（千張大戶 %）、big400（400 張以上 %）、retail（50 張以下 %）、holders（股東人數）。"""
+    import re
+    from concurrent.futures import ThreadPoolExecutor
+    import requests
+
+    網址 = "https://www.tdcc.com.tw/portal/zh/smWeb/qryStock"
+    標頭 = {"User-Agent": "Mozilla/5.0"}
+    with requests.Session() as s:
+        頁 = s.get(網址, headers=標頭, timeout=20).text
+        日期們 = re.findall(r'<option[^>]*value="(\d{8})"', 頁)[:週數]
+        權杖 = re.search(r'name="SYNCHRONIZER_TOKEN"[^>]*value="([^"]+)"', 頁)
+        if not 日期們 or not 權杖:
+            return None
+        cookie = s.cookies.get_dict()
+
+    def 查(日):
+        with requests.Session() as s2:
+            s2.cookies.update(cookie)
+            # 每次查詢都要新的權杖，所以先重新開一次查詢頁
+            頁2 = s2.get(網址, headers=標頭, timeout=20).text
+            t = re.search(r'name="SYNCHRONIZER_TOKEN"[^>]*value="([^"]+)"', 頁2)
+            r = s2.post(網址, headers=標頭, timeout=20, data={
+                "SYNCHRONIZER_TOKEN": t.group(1) if t else "", "SYNCHRONIZER_URI": "/portal/zh/smWeb/qryStock",
+                "method": "submit", "firDate": 日期們[0], "scaDate": 日, "sqlMethod": "StockNo",
+                "stockNo": 代號, "stockName": ""})
+        列們 = re.findall(r"<tr>\s*<td[^>]*>\s*(\d+)\s*</td>\s*<td[^>]*>[^<]*</td>\s*<td[^>]*>\s*([\d,]+)\s*</td>"
+                        r"\s*<td[^>]*>\s*([\d,]+)\s*</td>\s*<td[^>]*>\s*([\d.]+)\s*</td>", r.text)
+        級 = {int(a): (int(b.replace(",", "")), float(d)) for a, b, _, d in 列們}
+        if 15 not in 級:
+            return None
+        return {"date": pd.Timestamp(日), "big1000": 級[15][1], "big400": sum(級[k][1] for k in range(12, 16) if k in 級),
+                "retail": sum(級[k][1] for k in range(1, 9) if k in 級),
+                "holders": sum(級[k][0] for k in range(1, 16) if k in 級)}
+
+    with ThreadPoolExecutor(6) as 工人:
+        結果 = [x for x in 工人.map(查, 日期們) if x]
+    return pd.DataFrame(結果).sort_values("date", ignore_index=True) if 結果 else None
