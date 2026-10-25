@@ -2,8 +2,10 @@
 # 執行方式：streamlit run app.py
 
 import datetime as dt
+import hashlib
 import hmac
 import io
+import threading
 import urllib.parse
 
 import pandas as pd
@@ -174,8 +176,8 @@ def 圖表外觀(圖, 高=380):
 
 
 def 上色(表):
-    欄們 = [c for c in ["漲跌幅", "5日漲幅", "20日漲幅", "報酬率(%)", "加入至今%", "今日損益", "總損益", "法人(張)"] if c in 表.columns]
-    整數 = {"成交張數", "今日損益", "總損益", "股數", "總成本", "法人(張)", "市值億"}
+    欄們 = [c for c in ["漲跌幅", "5日漲幅", "20日漲幅", "報酬率(%)", "加入至今%", "報告後漲跌%", "今日損益", "總損益", "法人(張)"] if c in 表.columns]
+    整數 = {"成交張數", "報告次數", "今日損益", "總損益", "股數", "總成本", "法人(張)", "市值億"}
     格式 = {c: ("{:,.0f}" if c in 整數 else "{:,.2f}") for c in 表.select_dtypes("number").columns}
     return 表.style.map(lambda v: f"color:{漲跌色(v)}", subset=欄們).format(格式, na_rep="—")
 
@@ -332,7 +334,7 @@ def 選股條件區():
 
 
 # ---------- 頁面切換（用按鈕列代替分頁，才能點股票後直接跳到個股查詢） ----------
-頁面們 = ["01 / 市場總覽", "02 / 我的股票", "03 / 個股查詢", "04 / 選股", "05 / 回測", "06 / 每日評分"]
+頁面們 = ["01 / 市場總覽", "02 / 我的股票", "03 / 個股查詢", "04 / 選股", "05 / 回測", "06 / 每日評分", "07 / 使用統計"]
 股票選項 = (今日["代號"] + " " + 今日["名稱"]).tolist()
 
 
@@ -383,6 +385,21 @@ if "k" in st.query_params:
         st.session_state["已解鎖"] = True
     else:
         del st.query_params["k"]
+
+if "已計來訪" not in st.session_state:  # 每個瀏覽階段記一次來客數（背景存檔，不拖慢網頁）
+    st.session_state["已計來訪"] = True
+    try:
+        # 依序用：真實 IP（經過 Streamlit 的轉送標頭）、連線 IP、瀏覽器的 cookie
+        _ip = (st.context.headers.get("X-Forwarded-For", "").split(",")[0].strip() or st.context.ip_address
+               or st.context.cookies.get("_streamlit_xsrf", ""))
+    except Exception:
+        _ip = ""
+    try:
+        _秘 = dict(st.secrets)
+    except Exception:
+        _秘 = {}
+    _碼 = hashlib.sha256(f"{_秘.get('password', '')}|{_ip}".encode()).hexdigest()[:8] if _ip else ""
+    threading.Thread(target=engine.記錄來訪, args=(_秘, bool(st.session_state.get("已解鎖")), _碼), daemon=True).start()
 
 if "s" in st.query_params:  # 排行榜的連結：?s=2330
     前往(st.query_params["s"])
@@ -2044,6 +2061,94 @@ if 頁面 == 頁面們[5]:
 """)
     評分驗證區()
     st.caption("⚠️ 分數只是把公開數據套進固定規則的結果，不含新聞、產業前景與突發事件，不構成投資建議。")
+
+# ---------- 07 使用統計 ----------
+@st.cache_data(ttl=60, show_spinner=False)
+def 來訪資料(_權杖):
+    return engine.讀取來訪(_設定())
+
+
+@st.cache_data(ttl=600, show_spinner="讀取 AI 報告中…")
+def AI報告總覽(_權杖):
+    return engine.列出AI報告(_設定())
+
+
+if 頁面 == 頁面們[6]:
+    if not 可編輯():
+        段落("STATS // 使用統計")
+        輸入 = st.text_input("使用統計只有站長能看，請輸入密碼", type="password", key="統計解鎖")
+        if 輸入 and hmac.compare_digest(輸入, _密碼()):
+            st.session_state["已解鎖"] = True
+            st.query_params["k"] = 登入憑證()
+            st.rerun()
+        elif 輸入:
+            st.error("密碼不正確")
+        st.stop()
+    權杖 = str(_設定().get("GITHUB_TOKEN", ""))
+    段落("VISITORS // 來客數")
+    try:
+        統計 = 來訪資料(權杖)
+    except Exception as e:
+        統計 = {}
+        st.caption(f"來客數暫時讀不到（{type(e).__name__}）")
+    if not 統計:
+        st.info("從這次更新開始記錄，之後每有人打開網站就會累計。")
+    else:
+        日表 = pd.DataFrame([{"日期": pd.Timestamp(d), "瀏覽": v.get("次數", 0) - v.get("自己", 0),
+                             "訪客": len(v.get("訪客", [])), "自己": v.get("自己", 0)} for d, v in 統計.items()])
+        日表 = 日表.sort_values("日期")
+        今 = pd.Timestamp(dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).date())
+        def 區間(天):
+            t = 日表[日表["日期"] > 今 - pd.Timedelta(days=天)]
+            碼 = {c for d, v in 統計.items() if pd.Timestamp(d) > 今 - pd.Timedelta(days=天) for c in v.get("訪客", [])}
+            return int(t["瀏覽"].sum()), len(碼)
+        卡們 = []
+        for 名, 天 in (("今天", 1), ("近 7 天", 7), ("近 30 天", 30), (f"累計（{日表['日期'].min():%m/%d} 起）", 100000)):
+            次, 人 = 區間(天)
+            卡們.append(卡片(名, f"{人:,} 人", f"瀏覽 {次:,} 次"))
+        卡片格(卡們)
+        近 = 日表[日表["日期"] > 今 - pd.Timedelta(days=30)]
+        圖 = go.Figure([go.Bar(x=近["日期"], y=近["瀏覽"], name="瀏覽次數", marker_color=青),
+                        go.Scatter(x=近["日期"], y=近["訪客"], name="訪客人數", mode="lines+markers",
+                                   line=dict(color="#FFC24B", width=2))])
+        圖.update_layout(hovermode="x unified", legend=dict(orientation="h", y=1.1))
+        st.plotly_chart(圖表外觀(圖, 280), width="stretch")
+        st.caption("瀏覽＝打開網站的次數（重新整理也算一次）；訪客＝不同網路位址（同一個 Wi-Fi 下的人會算成一位）。"
+                   f"都不含你自己登入後的瀏覽（你自己共 {int(日表['自己'].sum()):,} 次）。"
+                   "Streamlit 後台（share.streamlit.io → 這個 App →「Analytics」）也有官方的觀看人數。")
+
+    段落("AI REPORTS // 產生過 AI 報告的個股")
+    try:
+        報告們 = AI報告總覽(權杖)
+    except Exception as e:
+        報告們 = {}
+        st.caption(f"AI 報告暫時讀不到（{type(e).__name__}）")
+    列們 = []
+    現價 = 今日.set_index("代號")
+    for 代號, 紀錄們 in 報告們.items():
+        if not 紀錄們:
+            continue
+        新 = 紀錄們[0]
+        _, 建議 = engine.拆解AI建議(新.get("內容", ""))
+        try:
+            當時 = float(新.get("收盤"))
+        except (TypeError, ValueError):
+            當時 = np.nan
+        現 = 現價["收盤"].get(代號, np.nan)
+        列們.append({"名稱": 現價["名稱"].get(代號, 代號), "報告次數": len(紀錄們), "最新報告": 新.get("時間", ""),
+                    "AI 看法": (建議 or {}).get("看法") or "—", "當時收盤": 當時, "現在股價": 現,
+                    "報告後漲跌%": round((現 / 當時 - 1) * 100, 2) if 當時 else np.nan,
+                    "引擎": 新.get("引擎", ""), "代號": 代號})
+    if not 列們:
+        st.info("還沒有產生過 AI 報告。")
+    else:
+        表 = pd.DataFrame(列們).sort_values("最新報告", ascending=False)
+        卡片格([卡片("產生過報告的個股", f"{len(表)} 檔"), 卡片("報告總數", f"{int(表['報告次數'].sum())} 份"),
+               卡片("報告後平均漲跌", f"{表['報告後漲跌%'].mean():+.2f}%", "以最新一份報告的收盤價起算",
+                    漲跌色(表["報告後漲跌%"].mean()))])
+        點選表(表, 上色(表).format({"報告後漲跌%": "{:+.2f}"}, na_rep="—"), "AI報告表",
+               height=35 * (len(表) + 1) + 3)
+        st.caption("點一下股票可到個股查詢的「🤖 AI 分析」分頁看完整報告。")
 
 st.markdown(f'<div class="sub" style="color:{灰};font-family:JetBrains Mono;font-size:11px;margin-top:30px">'
             '僅供個人研究，不構成投資建議 // DATA: TWSE · TPEx</div>', unsafe_allow_html=True)
