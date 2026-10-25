@@ -494,6 +494,11 @@ def 做PDF(代號, r, 建議, 內文, 時間):
             "產業": g("產業"), "市場": r["市場"], "卡片": 卡們, "基本資料": 基本, "判讀": engine.規則判讀(r),
             "歷史": 指標[指標["代號"] == 代號], "營收": engine.讀取營收歷史(代號), "損益": engine.單季損益(代號),
             "建議": 建議, "報告": 內文, "報告時間": 時間}
+    try:
+        h, 週轉, 大 = 變化資料(代號, 126)
+        資料["變化"] = {"歷史": h, "週轉": 週轉, "大戶": 大, "解讀": engine.變化解讀(h, 週轉, 大)}
+    except Exception:
+        pass
     return report.產生PDF(代號, r["名稱"], 資料)
 
 
@@ -610,18 +615,24 @@ def 大戶歷史(代號):
     return pd.concat(表們).drop_duplicates("date", keep="last").sort_values("date", ignore_index=True)
 
 
-def 變化圖(代號, r, 天數):
-    """一張圖看四件事：股價、週轉率、千張大戶持股比例、三大法人買賣超，下面附白話解讀。"""
+def 變化資料(代號, 天數=126):
+    """FLOW 用的資料：近 N 個交易日的歷史、每日週轉率（%）、每週千張大戶。"""
     歷史 = 指標[指標["代號"] == 代號].tail(天數)
-    if len(歷史) < 5:
-        st.caption("資料太少，畫不出變化圖。")
-        return
     股 = engine._股本表()
     股數 = 股.at[代號, "發行股數"] if 代號 in 股.index else np.nan
     週轉 = 歷史["volume"] / 股數 * 100 if pd.notna(股數) and 股數 else pd.Series(np.nan, index=歷史.index)
     大 = 大戶歷史(代號)
-    if 大 is not None:
+    if 大 is not None and len(歷史):
         大 = 大[大["date"] >= 歷史["date"].iloc[0] - pd.Timedelta(days=7)]
+    return 歷史, 週轉, 大
+
+
+def 變化圖(代號, r, 天數):
+    """一張圖看四件事：股價、週轉率、千張大戶持股比例、三大法人買賣超，下面附白話解讀。"""
+    歷史, 週轉, 大 = 變化資料(代號, 天數)
+    if len(歷史) < 5:
+        st.caption("資料太少，畫不出變化圖。")
+        return
     列們 = ["股價", "週轉率 %", "千張大戶持股 %", "三大法人買賣超（張）"]
     圖 = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.04, row_heights=[0.34, 0.18, 0.24, 0.24],
                        subplot_titles=列們)
@@ -640,31 +651,7 @@ def 變化圖(代號, r, 天數):
     圖 = 圖表外觀(圖, 720)
     圖.update_layout(legend=dict(orientation="h", y=-0.06, x=0))
     st.plotly_chart(圖, width="stretch")
-
-    # 白話解讀
-    說明 = []
-    漲 = (歷史["還原價"].iloc[-1] / 歷史["還原價"].iloc[0] - 1) * 100
-    說明.append(f"**股價**：這段期間 {'上漲' if 漲 >= 0 else '下跌'} {abs(漲):.1f}%（{歷史['收盤'].iloc[0]:,.2f} → {歷史['收盤'].iloc[-1]:,.2f}）。")
-    if 週轉.notna().any():
-        近 = 週轉.tail(5).mean()
-        平 = 週轉.mean()
-        倍 = 近 / 平 if 平 else np.nan
-        狀態 = "明顯變熱" if 倍 >= 1.5 else ("變冷清" if 倍 <= 0.6 else "跟平常差不多")
-        說明.append(f"**週轉率**：近 5 日平均 {近:.2f}%，期間平均 {平:.2f}%，交易{狀態}。")
-    if 大 is not None and len(大) >= 2:
-        差 = 大["big1000"].iloc[-1] - 大["big1000"].iloc[0]
-        說明.append(f"**千張大戶**：{大['date'].iloc[0]:%m/%d} {大['big1000'].iloc[0]:.2f}% → {大['date'].iloc[-1]:%m/%d} "
-                  f"{大['big1000'].iloc[-1]:.2f}%（{差:+.2f} 個百分點），"
-                  + ("籌碼往大戶集中。" if 差 >= 0.5 else "大戶在減碼。" if 差 <= -0.5 else "變化不大。"))
-    elif 大 is not None and len(大) == 1:
-        說明.append(f"**千張大戶**：目前只有 {大['date'].iloc[0]:%m/%d} 一週的資料（{大['big1000'].iloc[0]:.2f}%），之後每週累積。")
-    else:
-        說明.append("**千張大戶**：集保資料暫時查不到。")
-    if 有籌碼:
-        合 = {名: 歷史[欄].sum() for 欄, 名 in (("外資買超", "外資"), ("投信買超", "投信"), ("自營買超", "自營商"))}
-        說明.append("**三大法人**：期間累計 " + "、".join(f"{k}{'買超' if v >= 0 else '賣超'} {abs(v):,.0f} 張" for k, v in 合.items())
-                  + "。")
-    st.markdown("\n".join(f"- {x}" for x in 說明))
+    st.markdown("\n".join(f"- {x}" for x in engine.變化解讀(歷史, 週轉, 大)))
     st.caption("週轉率 = 當天成交股數 ÷ 發行股數；千張大戶 = 持有 1,000 張以上的股東合計持股比例（集保每週五公布）。"
                "股價上漲時大戶比例上升、法人買超，通常代表籌碼健康；反過來則要小心。")
 
@@ -1702,9 +1689,10 @@ if 頁面 == 頁面們[2]:
             f"20 日漲幅 {數(r['20日漲幅'], '{:+.2f}', '%')}，距 52 週高點 {數(r['距52週高點'], '{:+.1f}', '%')}",
             f"- 符合的烏賊策略：{'、'.join(符合) or '無'}",
         ])
-        if 新聞 is not None and not 新聞.empty:
-            摘要 += "\n\n近半年新聞標題（新到舊）：\n" + "\n".join(
-                f"- {x['日期']:%Y-%m-%d} {x['標題']}（{x['來源']}）" for _, x in 新聞.head(60).iterrows())
+        try:
+            摘要 += "\n\n近半年股價、週轉率、千張大戶、三大法人變化：\n" + engine.變化摘要(*變化資料(代號, 126))
+        except Exception:
+            pass
         本益 = 指標.loc[(指標["code"] == 代號) & (指標["date"] >= 最新日 - pd.Timedelta(days=3 * 365)), "本益比"]
         本益 = 本益[本益 > 0]
         if len(本益) > 60:
