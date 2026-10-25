@@ -282,7 +282,7 @@ else:
     條件["排除ETF"] = True
 
 # ---------- 頁面切換（用按鈕列代替分頁，才能點股票後直接跳到個股查詢） ----------
-頁面們 = ["01 / 市場總覽", "02 / 個股查詢", "03 / 選股", "04 / 回測"]
+頁面們 = ["01 / 市場總覽", "02 / 個股查詢", "03 / 選股", "04 / 回測", "05 / 每日評分"]
 股票選項 = (今日["代號"] + " " + 今日["名稱"]).tolist()
 
 
@@ -482,6 +482,75 @@ def 做PDF(代號, r, 建議, 內文, 時間):
             "歷史": 指標[指標["代號"] == 代號], "營收": engine.讀取營收歷史(代號), "損益": engine.單季損益(代號),
             "建議": 建議, "報告": 內文, "報告時間": 時間}
     return report.產生PDF(代號, r["名稱"], 資料)
+
+
+
+# ---------- 每日評分（規則打分數，網站與 LINE 收盤摘要共用 engine 的規則） ----------
+@st.cache_resource(max_entries=1, show_spinner="計算每日評分中…")
+def 評分資料(_資料版本):
+    return engine.今昨評分(指標[指標["date"] >= 指標["date"].max() - pd.Timedelta(days=20)],
+                         engine.讀取基本面(), 加權)
+
+
+def 分數色(分):
+    if pd.isna(分):
+        return 灰
+    return 紅 if 分 >= 58 else (綠 if 分 <= 42 else 灰)
+
+
+def 評分表(代號們=None, 篩選=None):
+    """總分、各面向分數與較昨日變化，代號們給了就照那個順序。"""
+    分 = 評分資料(_版本)[0]
+    表 = 分.reindex(list(代號們)) if 代號們 is not None else 分
+    if 篩選 is not None:
+        表 = 表[篩選(表)]
+    表 = 表.dropna(subset=["總分"]).reset_index(names="代號")
+    return 表[["名稱", "總分", "較昨日", "看法", "技術", "籌碼", "基本", "市場", "收盤", "漲跌幅", "產業", "代號"]]
+
+
+def 評分樣式(表):
+    分欄 = [c for c in ("總分", "技術", "籌碼", "基本", "市場") if c in 表.columns]
+    格式 = {c: "{:.0f}" for c in 分欄} | {"較昨日": "{:+.0f}", "收盤": "{:,.2f}", "漲跌幅": "{:+.2f}"}
+    return (表.style.map(lambda v: f"color:{分數色(v)}", subset=分欄)
+            .map(lambda v: f"color:{漲跌色(v)}", subset=[c for c in ("較昨日", "漲跌幅") if c in 表.columns])
+            .format({k: v for k, v in 格式.items() if k in 表.columns}, na_rep="—"))
+
+
+def 評分卡片(代號):
+    """個股的總分與四個面向分數卡片，加上加分、扣分理由。"""
+    分, d, _ = 評分資料(_版本)
+    if 代號 not in 分.index or pd.isna(分.at[代號, "總分"]):
+        st.caption("這檔沒有足夠資料可以評分。")
+        return
+    r = 分.loc[代號]
+    變 = r["較昨日"]
+    卡們 = [卡片("總分", f"{r['總分']:.0f}", f"{r['看法']}" + ("" if pd.isna(變) else f" · 較昨日 {變:+.0f}"), 分數色(r["總分"]))]
+    for 面 in engine.評分權重:
+        卡們.append(卡片(f"{面}面 · 佔 {engine.評分權重[面]:.0%}", "—" if pd.isna(r[面]) else f"{r[面]:.0f}",
+                       "", 分數色(r[面])))
+    名次 = int((分["總分"] > r["總分"]).sum()) + 1
+    卡們.append(卡片("全市場排名", f"{名次:,}", f"共 {分['總分'].notna().sum():,} 檔"))
+    卡片格(卡們)
+    明細 = engine.評分明細(d, 代號)
+    with st.expander("看加分、扣分理由"):
+        for 面, 項 in 明細.items():
+            if pd.isna(r[面]):
+                st.markdown(f"**{面}面**：沒有資料，不計分")
+                continue
+            理由 = [f"🔴 {x}" for x in 項["利多"]] + [f"🟢 {x}" for x in 項["利空"]]
+            st.markdown(f"**{面}面 {r[面]:.0f} 分**" + ("".join(f"\n- {x}" for x in 理由) or "\n- 沒有加減分（50 分＝中性）"))
+
+
+def 庫存代號():
+    """有設定庫存、而且已解鎖（或沒設密碼）時，回傳庫存的代號清單。"""
+    設定 = _設定()
+    if "holdings" not in 設定 or not 可編輯():
+        return []
+    try:
+        持股 = pd.read_csv(io.StringIO(str(設定["holdings"]).strip()), dtype={"代號": str})
+        return list(dict.fromkeys(持股["代號"].astype(str).str.strip()))
+    except Exception:
+        return []
 
 
 # ---------- 01 市場總覽 ----------
@@ -1391,6 +1460,9 @@ if 頁面 == 頁面們[1]:
         st.caption(f"同業本益比中位數 {中位['本益比']:.1f} 倍、營收年增率中位數 {中位['營收年增率']:+.1f}%；"
                    "點一下股票可切換到那一檔。")
 
+    段落("SCORE // 每日評分（大盤、技術、籌碼、基本面規則計分，僅供參考）")
+    評分卡片(代號)
+
     段落("OUTLOOK // 綜合判讀（依數據規則，免費）")
     判 = engine.規則判讀(r)
     卡片格([卡片("綜合分數", f"{判['分數']:+d}", 判["看法"], 紅 if 判["分數"] >= 30 else (綠 if 判["分數"] <= -30 else 灰)),
@@ -1612,6 +1684,72 @@ if 頁面 == 頁面們[1]:
                         st.markdown(f"#### {舊['時間']}（當時收盤 {舊.get('收盤', '—')}，{舊.get('引擎', '')}）")
                         st.markdown(engine.拆解AI建議(舊["內容"])[0])
                         st.divider()
+
+# ---------- 05 每日評分 ----------
+if 頁面 == 頁面們[4]:
+    分, d, 大 = 評分資料(_版本)
+    段落(f"MARKET // 大盤評分　{大['日期']:%Y/%m/%d}")
+    數 = 大["數字"]
+    變 = 大.get("較昨日", np.nan)
+    卡片格([
+        卡片("大盤分數", f"{大['分數']}", 大["看法"] + ("" if pd.isna(變) else f" · 較昨日 {變:+.0f}"), 分數色(大["分數"])),
+        卡片("上漲 / 下跌", f"{數.get('上漲', 0)} / {數.get('下跌', 0)}", "上市櫃普通股家數"),
+        卡片("外資買賣超", "—" if "外資億" not in 數 else f"{數['外資億']:+,.0f} 億", "依收盤價估算金額",
+           漲跌色(數.get("外資億", 0))),
+    ])
+    a, b = st.columns(2)
+    a.markdown("**🔴 加分**" + ("".join(f"\n- {x}" for x in 大["利多"]) or "\n- 無"))
+    b.markdown("**🟢 扣分**" + ("".join(f"\n- {x}" for x in 大["利空"]) or "\n- 無"))
+
+    庫 = 庫存代號()
+    if 庫:
+        段落("PORTFOLIO // 我的庫存評分")
+        表 = 評分表(庫).sort_values("總分", ascending=False)
+        點選表(表, 評分樣式(表), "庫存評分表", height=35 * (len(表) + 1) + 3)
+    if 可編輯():
+        自選 = list(dict.fromkeys(c for v in 自選股清單().values() for c in v if c not in 庫))
+        if 自選:
+            段落("WATCHLIST // 自選股評分")
+            表 = 評分表(自選).sort_values("總分", ascending=False)
+            點選表(表, 評分樣式(表), "自選評分表", height=35 * (len(表) + 1) + 3)
+
+    段落("RANKING // 評分排行")
+    a, b = st.columns([3, 2])
+    市場們 = a.pills("市場", ["上市", "上櫃"], selection_mode="multi", default=["上市", "上櫃"], key="評分市場")
+    含ETF = b.toggle("包含 ETF", key="評分ETF")
+    篩 = lambda t: (t["5日均量"] >= 500) & t["上市櫃"].isin(市場們 or ["上市", "上櫃"]) & (含ETF | ~t.index.str.startswith("00"))
+    for 標籤, 分頁 in zip(["高分", "低分", "分數進步", "分數退步"], st.tabs(["高分榜", "低分榜", "分數進步", "分數退步"])):
+        with 分頁:
+            表 = 評分表(篩選=篩)
+            欄, 小到大 = {"高分": ("總分", False), "低分": ("總分", True), "分數進步": ("較昨日", False),
+                       "分數退步": ("較昨日", True)}[標籤]
+            表 = 表.sort_values([欄, "總分"], ascending=[小到大, 小到大], na_position="last").head(30)
+            點選表(表, 評分樣式(表), f"評分榜{標籤}", height=35 * 31 + 3)
+    st.caption("排行只列五日均量 500 張以上的股票（避免冷門股）。點一下股票可看個股查詢。")
+
+    段落("CHECK // 單檔評分明細")
+    選 = st.selectbox("輸入代號或名稱", 股票選項, key="評分查詢",
+                     index=next((i for i, v in enumerate(股票選項) if v.startswith("2330 ")), 0))
+    評分卡片(選.split()[0])
+    if st.button("看這檔的個股查詢 →", key="評分前往"):
+        前往(選.split()[0])
+        st.rerun()
+
+    with st.expander("📖 評分怎麼算？"):
+        st.markdown(f"""
+每一面都從 **50 分（中性）** 開始，符合條件就加分或扣分，最後限制在 0～100 分。
+總分 = 技術面 {engine.評分權重['技術']:.0%} ＋ 籌碼面 {engine.評分權重['籌碼']:.0%} ＋ 基本面 {engine.評分權重['基本']:.0%} ＋ 市場面 {engine.評分權重['市場']:.0%}
+（沒有資料的面向不算，例如 ETF 沒有營收、EPS，就只看其他三面）。
+
+- **70 分以上 強勢**、58～69 偏多、43～57 中性、31～42 偏空、30 分以下 弱勢
+- **技術面**：是否站上 20 日線、60 日線，均線多空排列，近 20 日漲跌，距 52 週高點，RSI 過熱／超賣，價量配合
+- **籌碼面**：三大法人 5 日買賣超（跟成交量比）、外資／投信連買、外資今日買賣、融資增減
+- **基本面**：月營收年增率、累計營收、營收創新高、近三季 EPS、毛利率比去年同季、本益比、殖利率
+- **市場面**：大盤分數（指數均線、漲跌家數、外資買賣超金額）、所屬族群近 20 日強弱、近 5／20 日是否贏大盤
+
+規則寫在 `engine.py` 的「評分規則」表，可以自己調整分數。每天收盤後的 LINE 摘要也會附上大盤與庫存的評分。
+""")
+    st.caption("⚠️ 分數只是把公開數據套進固定規則的結果，不含新聞、產業前景與突發事件，不構成投資建議。")
 
 st.markdown(f'<div class="sub" style="color:{灰};font-family:JetBrains Mono;font-size:11px;margin-top:30px">'
             '僅供個人研究，不構成投資建議 // DATA: TWSE · TPEx</div>', unsafe_allow_html=True)

@@ -138,6 +138,11 @@ def 收盤摘要(強制=False):
                 r = 列.iloc[0]
                 行們.append(f"{r['name']} {r['close']:,.2f} {r['幅度']:+.2f}%")
 
+    try:
+        行們 += 評分摘要(持股)
+    except Exception as e:  # 評分失敗不影響其他摘要
+        print("評分計算失敗：", repr(e))
+
     提醒, _ = 讀設定("alerts.json")
     到價 = []
     for c, 設 in 提醒.items():
@@ -152,6 +157,28 @@ def 收盤摘要(強制=False):
     if 到價:
         行們 += ["", "🔔 到價"] + 到價
     推播("\n".join(行們))
+
+
+def 評分摘要(持股):
+    """大盤分數、庫存每檔分數、高分榜前 5（規則計分，跟網站「每日評分」頁同一套）。"""
+    import engine
+    原始 = engine.讀取資料庫(最近天數=260)  # 52 週高點要用到約一年的資料
+    指標 = engine.計算指標(原始)
+    del 原始
+    分, _, 大 = engine.今昨評分(指標[指標["date"] >= 指標["date"].max() - pd.Timedelta(days=20)],
+                          engine.讀取基本面(), engine.讀取加權指數())
+    變 = lambda v: "" if pd.isna(v) or v == 0 else f"{符號(v)}{abs(v):.0f}"
+    行們 = ["", f"🧮 今日評分（滿分 100，50 為中性）", f"大盤 {大['分數']} 分 {大['看法']} {變(大.get('較昨日'))}".rstrip()]
+    if 持股:
+        h = pd.read_csv(io.StringIO(持股), dtype={"代號": str})
+        庫 = 分.reindex(h["代號"].str.strip().unique()).dropna(subset=["總分"]).sort_values("總分", ascending=False)
+        if len(庫):
+            行們.append("💼 庫存：")
+            行們 += [f"{r['名稱']} {r['總分']:.0f} {r['看法']} {變(r['較昨日'])}".rstrip() for _, r in 庫.iterrows()]
+    高 = 分[(分["5日均量"] >= 500) & ~分.index.str.startswith("00")].sort_values("總分", ascending=False).head(5)
+    行們.append("🔝 高分股：" + "、".join(f"{r['名稱']} {r['總分']:.0f}" for _, r in 高.iterrows()))
+    行們.append("（規則計分，僅供參考，非投資建議）")
+    return 行們
 
 
 def 盤中提醒():
