@@ -1748,8 +1748,8 @@ def 內部人歷史(代號, 月數=7):
         except requests.RequestException:
             return None
         人們 = {}
-        for 列 in re.findall(r"<tr[^>]*>(.*?)</tr>", r.text, re.S):
-            格 = [re.sub(r"<[^>]+>|&nbsp;|\s", "", c) for c in re.findall(r"<td[^>]*>(.*?)</td>", 列, re.S)]
+        for 列 in re.findall(r"<tr[^>]*>(.*?)</tr>", r.text, re.S | re.I):
+            格 = [re.sub(r"<[^>]+>|&nbsp;|\s", "", c) for c in re.findall(r"<td[^>]*>(.*?)</td>", 列, re.S | re.I)]
             if len(格) < 5 or not re.fullmatch(r"[\d,]+", 格[3] or "x"):
                 continue
             職稱, 姓名 = 格[0], 格[1]
