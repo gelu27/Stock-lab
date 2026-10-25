@@ -32,7 +32,9 @@ jobs:
           git push
       - name: LINE 收盤摘要
         continue-on-error: true
-        run: python notify.py daily
+        run: |
+          pip install pyarrow
+          python notify.py daily
         env:
           LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
