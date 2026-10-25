@@ -1,0 +1,14 @@
+name: 暫時測試集保
+on:
+  push:
+    branches: [claude/project-thread-vmuckf]
+    paths: [.github/workflows/tmp-tdcc-test.yml, tmp_tdcc.py]
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install pandas requests
+      - run: python tmp_tdcc.py
