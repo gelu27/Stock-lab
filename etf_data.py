@@ -498,6 +498,9 @@ def main():
             print(f"{代號} {投信}：沒抓到（{'沒有日期' if 結果 and not 結果[0] else '沒有持股'}）")
             continue
         資料日, 持股, 資訊 = 結果
+        if not 日期可信(代號, 資料日, 持股):
+            print(f"{代號} {投信}：{資料日} 不是交易日或和上一份相同，略過")
+            continue
         存持股(代號, 資料日, 持股, "官網")
         資訊們.append({"etf": 代號, "date": 資料日.isoformat(), "issuer": 投信, "source": "官網", **資訊})
         筆數 += 1
@@ -525,7 +528,7 @@ def main():
             print(f"{代號} 第二彙整：{type(e).__name__} {str(e)[:120]}")
             continue
         time.sleep(0.3)
-        if not 結果 or 結果[1].empty or 結果[0] > 今天:
+        if not 結果 or 結果[1].empty or 結果[0] > 今天 or not 日期可信(代號, 結果[0], 結果[1]):
             continue
         資料日, 持股, 資訊 = 結果
         資訊們.append({"etf": 代號, "date": 資料日.isoformat(), "issuer": "", "source": "彙整2", **資訊})
@@ -558,6 +561,25 @@ def 前一交易日(日期):
     while d.weekday() >= 5 or f"{d:%Y%m%d}" in 休市:
         d -= dt.timedelta(days=1)
     return d
+
+
+def 日期可信(代號, 日期, 持股):
+    """只有最新一天的來源，日期是推算的：休市日不收；還不知道是不是交易日時，持股和上一份一模一樣就不收（多半是假日重複）。"""
+    狀態 = {}
+    for f in (價格資料夾.parent / "status").glob("*.txt"):
+        狀態.update(x.split(",", 1) for x in f.read_text().split() if "," in x)
+    if 狀態.get(f"{日期:%Y%m%d}") == "closed":
+        return False
+    if 狀態.get(f"{日期:%Y%m%d}") == "ok":
+        return True
+    for f in sorted(持股資料夾.glob("*/*.csv.gz"), reverse=True)[:10]:
+        if f.name[:8] >= f"{日期:%Y%m%d}":
+            continue
+        舊 = pd.read_csv(f, dtype={"etf": str, "code": str})
+        舊 = 舊[舊["etf"] == 代號]
+        if len(舊):
+            return not 舊.set_index("code")["shares"].sort_index().equals(持股.set_index("code")["shares"].sort_index().astype(float))
+    return True
 
 
 def 主動式清單():

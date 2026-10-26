@@ -2526,8 +2526,9 @@ if 頁面 == 頁面們[7]:
     if st.button(f"到個股查詢看 {股}", key="ETF到個股"):
         前往(股)
         st.rerun()
-    st.caption("資料來源：野村、統一、群益、復華投信官網每日持股；其他投信取自公開彙整 nctuwanglin.github.io/active-etf"
-               "（整理自各投信官網申購買回清單）。僅供研究參考，不構成投資建議。")
+    st.caption("資料來源：優先用各投信官網每日公布的持股（野村、統一、群益、復華、中信、第一金、富邦、凱基、摩根、台新、永豐、聯博、安聯）；"
+               "官網抓不到時改用公開彙整 nctuwanglin.github.io/active-etf，再不行用 github.com/janeytu/tw-etf-pages 的快照"
+               "（國泰、兆豐官網擋 GitHub，只能靠彙整）。總覽表的「來源」欄可看每檔用的是哪一個。僅供研究參考，不構成投資建議。")
 
 st.markdown(f'<div class="sub" style="color:{灰};font-family:JetBrains Mono;font-size:11px;margin-top:30px">'
             '僅供個人研究，不構成投資建議 // DATA: TWSE · TPEx</div>', unsafe_allow_html=True)
