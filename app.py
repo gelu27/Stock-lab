@@ -17,8 +17,10 @@ import streamlit as st
 import importlib
 
 import engine
+import etf_data
 
-importlib.reload(engine)  # 程式更新後確保用的是最新版的計算規則
+importlib.reload(engine)
+importlib.reload(etf_data)  # 程式更新後確保用的是最新版的計算規則
 
 st.set_page_config(page_title="TW//STOCK LAB", page_icon="◢", layout="wide")
 
@@ -334,7 +336,7 @@ def 選股條件區():
 
 
 # ---------- 頁面切換（用按鈕列代替分頁，才能點股票後直接跳到個股查詢） ----------
-頁面們 = ["01 / 市場總覽", "02 / 我的股票", "03 / 個股查詢", "04 / 選股", "05 / 回測", "06 / 每日評分", "07 / 使用統計"]
+頁面們 = ["01 / 市場總覽", "02 / 我的股票", "03 / 個股查詢", "04 / 選股", "05 / 回測", "06 / 每日評分", "07 / 使用統計", "08 / 主動式 ETF"]
 股票選項 = (今日["代號"] + " " + 今日["名稱"]).tolist()
 
 
@@ -2157,6 +2159,221 @@ if 頁面 == 頁面們[6]:
                height=35 * (len(表) + 1) + 3, column_config={"代號": None})
         st.caption("AI 目標價＝報告裡的「合理目標價」，距目標價% ＝ 目標價比現在股價高（紅）或低（綠）多少。"
                    "舊版報告沒有目標價，到個股的「🤖 AI 分析」分頁打開一次就會自動補上。點一下股票可到個股查詢。")
+
+# ---------- 08 主動式 ETF ----------
+def ETF版本():
+    檔們 = sorted(etf_data.持股資料夾.glob("*/*.csv.gz"))
+    return f"{檔們[-1].name}-{檔們[-1].stat().st_mtime}-{len(檔們)}" if 檔們 else ""
+
+
+@st.cache_data(max_entries=2, ttl=43200, show_spinner="讀取主動式 ETF 持股中…")
+def ETF資料(_版本):
+    持股 = etf_data.讀持股(70)
+    資訊 = etf_data.讀資訊()
+    return 持股, 資訊, etf_data.每日變化(持股, 資訊)
+
+
+def 張(股):
+    return 股 / 1000
+
+
+類型色 = {"新增": 紅, "加碼": "#FF8FA3", "減碼": "#7FE8C1", "出清": 綠, "持平": "#EDEDED"}
+
+
+if 頁面 == 頁面們[7]:
+    持股, 資訊, 變化 = ETF資料(ETF版本())
+    if 持股.empty:
+        st.info("主動式 ETF 的持股資料還沒抓到。資料每個交易日晚上自動更新（GitHub Actions「主動式 ETF 持股」）。")
+        st.stop()
+    名稱 = dict(zip(今日["代號"], 今日["名稱"]))
+    收盤 = dict(zip(今日["代號"], 今日["收盤"]))
+    最新 = 持股.sort_values("date").groupby("etf").tail(1)[["etf", "date"]].drop_duplicates()
+    最新日期 = dict(zip(最新["etf"], 最新["date"]))
+    最新持股 = 持股[持股.apply(lambda x: 最新日期.get(x["etf"]) == x["date"], axis=1)]
+    if len(變化):
+        最新變化 = 變化[變化.apply(lambda x: 最新日期.get(x["etf"]) == x["date"], axis=1)]
+    else:
+        最新變化 = 變化
+    資料日 = max(最新日期.values())
+
+    段落("ACTIVE ETF // 主動式 ETF 總覽")
+    列們 = []
+    for 代號, d in sorted(最新日期.items()):
+        資 = 資訊[(資訊["etf"] == 代號)].sort_values("date")
+        今資 = 資[資["date"] == d].tail(1)
+        前資 = 資[資["date"] < d].tail(1)
+        規模 = 今資["aum"].iloc[0] / 1e8 if len(今資) else np.nan
+        前規模 = 前資["aum"].iloc[0] / 1e8 if len(前資) else np.nan
+        單位變 = (今資["units"].iloc[0] / 前資["units"].iloc[0] - 1) * 100 if len(今資) and len(前資) else np.nan
+        變 = 最新變化[最新變化["etf"] == 代號] if len(最新變化) else pd.DataFrame(columns=["type"])
+        數 = 變["type"].value_counts()
+        列們.append({"ETF": f"{代號} {名稱.get(代號, '')}".strip(), "投信": 今資["issuer"].iloc[0] if len(今資) else "",
+                    "規模(億)": 規模, "申贖%": 單位變, "持股檔數": int((持股[(持股["etf"] == 代號) & (持股["date"] == d)]).shape[0]),
+                    "新增": int(數.get("新增", 0)), "加碼": int(數.get("加碼", 0)), "減碼": int(數.get("減碼", 0)),
+                    "出清": int(數.get("出清", 0)), "資料日": f"{d:%m/%d}",
+                    "來源": 今資["source"].iloc[0] if len(今資) else ""})
+    總表 = pd.DataFrame(列們).sort_values("規模(億)", ascending=False)
+    卡片格([卡片("追蹤檔數", f"{len(總表)} 檔", f"最新資料 {資料日:%Y/%m/%d}"),
+           卡片("總規模", f"{總表['規模(億)'].sum():,.0f} 億"),
+           卡片("今日有調整", f"{int((總表[['新增', '加碼', '減碼', '出清']].sum(axis=1) > 0).sum())} 檔",
+                f"新增 {int(總表['新增'].sum())}・出清 {int(總表['出清'].sum())}")])
+    st.dataframe(總表.style.format({"規模(億)": "{:,.0f}", "申贖%": "{:+.2f}"}, na_rep="—")
+                 .map(lambda v: f"color:{漲跌色(v)}", subset=["申贖%"]),
+                 hide_index=True, width="stretch", height=35 * (len(總表) + 1) + 3)
+    st.caption("每檔都和自己的前一份持股比；申贖%＝在外流通單位數的變化（正＝有人申購、基金變大）。"
+               "各投信公布時間不同（有的當晚、有的隔天早上），資料日可能差一天。")
+
+    段落("CONSENSUS // 經理人共識：大家一起買、一起賣的股票")
+    區間 = st.segmented_control("期間", ["最新一天", "近 5 天", "近 20 天"], default="最新一天", key="ETF共識期間",
+                              label_visibility="collapsed") or "最新一天"
+    if len(變化):
+        if 區間 == "最新一天":
+            範圍 = 最新變化
+        else:
+            天 = 5 if 區間 == "近 5 天" else 20
+            日們 = sorted(變化["date"].unique())[-天:]
+            範圍 = 變化[變化["date"].isin(日們)]
+        主動 = 範圍[範圍["type"] != "持平"]
+        if 主動.empty:
+            st.info("這段期間沒有主動調整的紀錄。")
+        else:
+            彙 = 主動.groupby("code").agg(
+                買進檔數=("etf", lambda s: s[主動.loc[s.index, "adj_delta"] > 0].nunique()),
+                賣出檔數=("etf", lambda s: s[主動.loc[s.index, "adj_delta"] < 0].nunique()),
+                張數=("adj_delta", lambda v: v.sum() / 1000), 金額=("adj_amount", lambda v: v.sum() / 1e8),
+                名稱=("name", "first"),
+                買進ETF=("etf", lambda s: "、".join(sorted(set(s[主動.loc[s.index, "adj_delta"] > 0])))),
+                賣出ETF=("etf", lambda s: "、".join(sorted(set(s[主動.loc[s.index, "adj_delta"] < 0]))))).reset_index()
+            彙["代號"] = 彙["code"]
+            彙["股票"] = 彙["code"] + " " + 彙["code"].map(名稱).fillna(彙["名稱"])
+            彙["現價"] = 彙["code"].map(收盤)
+            欄 = ["股票", "買進檔數", "賣出檔數", "張數", "金額", "現價", "代號"]
+            左, 右 = st.columns(2)
+            with 左:
+                st.markdown(f"**🔴 買超（扣除申贖）**")
+                買 = 彙[彙["張數"] > 0].sort_values(["金額", "買進檔數"], ascending=False).head(20)
+                點選表(買[欄 + ["買進ETF"]].rename(columns={"金額": "金額(億)", "買進ETF": "買進的 ETF"}),
+                       上色(買[欄 + ["買進ETF"]].rename(columns={"金額": "金額(億)", "買進ETF": "買進的 ETF"}))
+                       .format({"張數": "{:+,.0f}", "金額(億)": "{:+,.2f}", "現價": "{:,.2f}"}, na_rep="—"),
+                       "ETF共識買", height=35 * (len(買) + 1) + 3, column_config={"代號": None})
+            with 右:
+                st.markdown(f"**🟢 賣超（扣除申贖）**")
+                賣 = 彙[彙["張數"] < 0].sort_values(["金額", "賣出檔數"], ascending=[True, False]).head(20)
+                點選表(賣[欄 + ["賣出ETF"]].rename(columns={"金額": "金額(億)", "賣出ETF": "賣出的 ETF"}),
+                       上色(賣[欄 + ["賣出ETF"]].rename(columns={"金額": "金額(億)", "賣出ETF": "賣出的 ETF"}))
+                       .format({"張數": "{:+,.0f}", "金額(億)": "{:+,.2f}", "現價": "{:,.2f}"}, na_rep="—"),
+                       "ETF共識賣", height=35 * (len(賣) + 1) + 3, column_config={"代號": None})
+            st.caption("扣除申贖：基金被申購時經理人要等比例買進全部持股，那不代表看好，所以先扣掉，只看「多買、少買」的部分。"
+                       "金額＝張數×當天收盤，海外股票沒有台股價格不算金額。點一下股票可到個股查詢。")
+
+    段落("HOLDINGS // 單一 ETF 持股明細")
+    選項 = [f"{c} {名稱.get(c, '')}".strip() for c in 總表["ETF"].str.split().str[0]]
+    選 = st.selectbox("選擇 ETF", 選項, key="ETF明細").split()[0]
+    d = 最新日期[選]
+    資 = 資訊[資訊["etf"] == 選].sort_values("date")
+    今 = 持股[(持股["etf"] == 選) & (持股["date"] == d)].copy()
+    變 = 變化[(變化["etf"] == 選)] if len(變化) else pd.DataFrame()
+    今變 = 變[變["date"] == d].set_index("code") if len(變) else pd.DataFrame()
+    今資 = 資[資["date"] == d].tail(1)
+    卡片格([卡片("規模", f"{今資['aum'].iloc[0] / 1e8:,.0f} 億" if len(今資) and pd.notna(今資['aum'].iloc[0]) else "—",
+                f"資料日 {d:%Y/%m/%d}"),
+           卡片("淨值 / 市價", f"{今資['nav'].iloc[0]:,.2f}" if len(今資) and pd.notna(今資['nav'].iloc[0]) else "—",
+                f"收盤 {收盤.get(選, np.nan):,.2f}" if pd.notna(收盤.get(選, np.nan)) else ""),
+           卡片("持股", f"{len(今)} 檔", f"前十大占 {今['weight'].nlargest(10).sum():.1f}%")])
+    分頁 = st.tabs(["持股明細", "異動紀錄", "權重走勢", "規模走勢"])
+    with 分頁[0]:
+        明細 = pd.DataFrame({"代號": 今["code"], "股票": 今["code"] + " " + 今["code"].map(名稱).fillna(今["name"]),
+                            "權重%": 今["weight"], "張數": 張(今["shares"])})
+        if len(今變):
+            明細["張數變化"] = 張(今["code"].map(今變["delta"]))
+            明細["扣申贖"] = 張(今["code"].map(今變["adj_delta"]))
+            明細["權重變化"] = 今["code"].map(今變["weight"] - 今變["prev_weight"])
+            明細["動作"] = 今["code"].map(今變["type"]).replace("持平", "")
+        明細["現價"] = 今["code"].map(收盤)
+        明細 = 明細.sort_values("權重%", ascending=False)
+        出清 = 今變[今變["type"] == "出清"] if len(今變) else pd.DataFrame()
+        樣式 = 上色(明細).format({"權重%": "{:.2f}", "張數": "{:,.0f}", "張數變化": "{:+,.0f}", "扣申贖": "{:+,.0f}",
+                                "權重變化": "{:+.2f}", "現價": "{:,.2f}"}, na_rep="—")
+        if "動作" in 明細:
+            樣式 = 樣式.map(lambda v: f"color:{類型色.get(v, '#EDEDED')}", subset=["動作"]).map(
+                lambda v: f"color:{漲跌色(v)}", subset=["張數變化", "扣申贖", "權重變化"])
+        點選表(明細, 樣式, "ETF明細表", height=min(35 * (len(明細) + 1) + 3, 700), column_config={"代號": None})
+        if len(出清):
+            st.markdown("**今天出清：** " + "、".join(f"{c} {名稱.get(c, n)}（{張(s):,.0f} 張）"
+                                                for c, n, s in zip(出清.index, 出清["name"], 出清["prev_shares"])))
+        if len(今變):
+            st.caption(f"和前一份（{今變['prev_date'].iloc[0]:%m/%d}）比較。扣申贖＝扣掉基金申購買回造成的等比例增減，"
+                       "才是經理人主動加減碼；變化不到 0.5% 視為沒有調整。")
+    with 分頁[1]:
+        if 變.empty:
+            st.info("要有兩天以上的資料才能比較，明天起就會出現。")
+        else:
+            紀 = 變[變["type"] != "持平"].sort_values(["date", "adj_amount"], ascending=[False, False])
+            紀 = pd.DataFrame({"日期": 紀["date"].dt.strftime("%m/%d"), "代號": 紀["code"],
+                              "股票": 紀["code"] + " " + 紀["code"].map(名稱).fillna(紀["name"]), "動作": 紀["type"],
+                              "張數變化": 張(紀["delta"]), "扣申贖": 張(紀["adj_delta"]),
+                              "金額(萬)": 紀["adj_amount"] / 1e4, "權重%": 紀["weight"]})
+            點選表(紀, 上色(紀).format({"張數變化": "{:+,.0f}", "扣申贖": "{:+,.0f}", "金額(萬)": "{:+,.0f}", "權重%": "{:.2f}"},
+                                    na_rep="—").map(lambda v: f"color:{類型色.get(v, '#EDEDED')}", subset=["動作"])
+                   .map(lambda v: f"color:{漲跌色(v)}", subset=["張數變化", "扣申贖", "金額(萬)"]),
+                   "ETF異動表", height=min(35 * (len(紀) + 1) + 3, 600), column_config={"代號": None})
+            st.caption(f"近 {變['date'].nunique()} 個資料日的新增、加碼、減碼、出清（扣除申贖後）。")
+    with 分頁[2]:
+        史 = 持股[持股["etf"] == 選]
+        前十 = 今.nlargest(10, "weight")["code"].tolist()
+        圖 = go.Figure()
+        for c in 前十:
+            t = 史[史["code"] == c].sort_values("date")
+            圖.add_trace(go.Scatter(x=t["date"], y=t["weight"], mode="lines+markers", name=f"{c} {名稱.get(c, '')}"))
+        圖.update_yaxes(title="權重%")
+        st.plotly_chart(圖表外觀(圖, 360), width="stretch")
+        st.caption("目前前十大持股的權重變化。")
+    with 分頁[3]:
+        if len(資) >= 2:
+            圖 = make_subplots(specs=[[{"secondary_y": True}]])
+            圖.add_trace(go.Bar(x=資["date"], y=資["aum"] / 1e8, name="規模(億)", marker_color=青, opacity=.5))
+            圖.add_trace(go.Scatter(x=資["date"], y=資["nav"], name="淨值", line=dict(color="#FFC24B", width=2)), secondary_y=True)
+            st.plotly_chart(圖表外觀(圖, 320), width="stretch")
+        else:
+            st.info("資料累積兩天以上後會出現規模走勢。")
+
+    段落("STOCK // 個股被哪些主動式 ETF 持有")
+    全部 = 最新持股.groupby("code").agg(檔數=("etf", "nunique"), 張數=("shares", lambda v: v.sum() / 1000),
+                                     名稱=("name", "first")).reset_index().sort_values("檔數", ascending=False)
+    股選項 = (全部["code"] + " " + 全部["code"].map(名稱).fillna(全部["名稱"])).tolist()
+    預設 = next((i for i, v in enumerate(股選項) if v.startswith("2330 ")), 0)
+    股 = st.selectbox("選擇股票（依被持有檔數排序）", 股選項, index=預設, key="ETF反查").split()[0]
+    有 = 最新持股[最新持股["code"] == 股]
+    股變 = 最新變化[最新變化["code"] == 股].set_index("etf") if len(最新變化) else pd.DataFrame()
+    反 = pd.DataFrame({"ETF": 有["etf"] + " " + 有["etf"].map(名稱).fillna(""), "權重%": 有["weight"].values,
+                      "張數": 張(有["shares"]).values}, index=有["etf"].values)
+    if len(股變):
+        反["扣申贖"] = 張(股變["adj_delta"].reindex(反.index))
+        反["動作"] = 股變["type"].reindex(反.index).replace("持平", "")
+        出 = 股變[股變["type"] == "出清"]
+        for e in 出.index:
+            反.loc[e] = {"ETF": f"{e} {名稱.get(e, '')}", "權重%": 0, "張數": 0, "扣申贖": 張(-出.loc[e, "prev_shares"]), "動作": "出清"}
+    反 = 反.sort_values("權重%", ascending=False)
+    現 = 收盤.get(股, np.nan)
+    卡片格([卡片("持有的主動式 ETF", f"{(反['張數'] > 0).sum()} 檔"), 卡片("合計持有", f"{反['張數'].sum():,.0f} 張",
+                f"約 {反['張數'].sum() * 1000 * 現 / 1e8:,.1f} 億" if pd.notna(現) else ""),
+           卡片("最新一天", f"{反['扣申贖'].sum():+,.0f} 張" if "扣申贖" in 反 else "—", "扣除申贖後合計",
+                漲跌色(反["扣申贖"].sum()) if "扣申贖" in 反 else "#EDEDED")])
+    樣式 = 上色(反).format({"權重%": "{:.2f}", "張數": "{:,.0f}", "扣申贖": "{:+,.0f}"}, na_rep="—")
+    if "動作" in 反:
+        樣式 = 樣式.map(lambda v: f"color:{類型色.get(v, '#EDEDED')}", subset=["動作"]).map(
+            lambda v: f"color:{漲跌色(v)}", subset=["扣申贖"])
+    st.dataframe(樣式, hide_index=True, width="stretch", height=35 * (len(反) + 1) + 3)
+    史 = 持股[持股["code"] == 股].groupby("date")["shares"].sum() / 1000
+    if len(史) >= 2:
+        圖 = go.Figure(go.Scatter(x=史.index, y=史.values, mode="lines+markers", line=dict(color=青, width=2), name="合計張數"))
+        st.plotly_chart(圖表外觀(圖, 260), width="stretch")
+        st.caption("所有主動式 ETF 合計持有張數（含申購買回造成的增減）。")
+    if st.button(f"到個股查詢看 {股}", key="ETF到個股"):
+        前往(股)
+        st.rerun()
+    st.caption("資料來源：野村、統一、群益、復華投信官網每日持股；其他投信取自公開彙整 nctuwanglin.github.io/active-etf"
+               "（整理自各投信官網申購買回清單）。僅供研究參考，不構成投資建議。")
 
 st.markdown(f'<div class="sub" style="color:{灰};font-family:JetBrains Mono;font-size:11px;margin-top:30px">'
             '僅供個人研究，不構成投資建議 // DATA: TWSE · TPEx</div>', unsafe_allow_html=True)

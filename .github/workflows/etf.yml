@@ -1,0 +1,40 @@
+name: 主動式 ETF 持股
+
+on:
+  schedule:
+    - cron: "40 10,14 * * 1-5"   # 週一到週五 台灣時間 18:40、22:40（投信多在晚上公布當天持股）
+    - cron: "40 0 * * 2-6"       # 隔天早上 08:40 再補一次（有的投信隔天才公布）
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "官網有歷史的 ETF 回補幾天"
+        default: "7"
+
+permissions:
+  contents: write
+
+concurrency: etf-update
+
+jobs:
+  etf:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pandas requests openpyxl
+      - run: python etf_data.py --days ${{ github.event.inputs.days || 7 }}
+      - name: 存回 GitHub
+        run: |
+          git config user.name "stock-bot"
+          git config user.email "stock-bot@users.noreply.github.com"
+          git add -A data/etf
+          git diff --cached --quiet && exit 0
+          git commit -m "更新主動式 ETF 持股 $(TZ=Asia/Taipei date +%F)"
+          for i in 1 2 3 4; do
+            git pull --rebase origin main && git push && exit 0
+            sleep $((i * 10))
+          done
+          exit 1

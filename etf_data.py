@@ -81,6 +81,7 @@ _統一連線 = None
 
 
 def 統一(基金, 日期):
+    """日期是申購買回清單日（PostDate），TranDate 才是持股日（前一個交易日）。"""
     global _統一連線
     if _統一連線 is None:  # 先開一次網頁拿 cookie
         _統一連線 = requests.Session()
@@ -112,7 +113,7 @@ def 統一(基金, 日期):
 
 
 def 群益(基金, 日期):
-    """群益的日期參數是「申購買回清單適用日」（持股日的下一個交易日），回傳的 date2 才是持股日。"""
+    """群益的日期參數是「申購買回清單日」（持股日的下一個交易日），回傳的 date2 才是持股日。"""
     r = requests.post("https://www.capitalfund.com.tw/CFWeb/api/etf/buyback", json={"fundId": 基金, "date": 日期.isoformat()},
                       headers={**標頭, "Accept": "application/json",
                                "Referer": f"https://www.capitalfund.com.tw/etf/product/detail/{基金}/portfolio"}, timeout=30)
@@ -202,36 +203,42 @@ def main():
     參數.add_argument("--days", type=int, default=7, help="官網有歷史的 ETF 回補幾天")
     天數 = 參數.parse_args().days
     今天 = dt.datetime.now(台北時區).date()
-    日們 = [今天 - dt.timedelta(days=i) for i in range(天數 + 1)]
+    日們 = [今天 + dt.timedelta(days=1 - i) for i in range(天數 + 2)]
     日們 = [d for d in 日們 if d.weekday() < 5]
     資訊們, 筆數 = [], 0
     for 代號, (投信, 基金) in 官網.items():
         已有 = {d for d in 日們 if 持股檔(d).exists()
               and (pd.read_csv(持股檔(d), dtype={"etf": str}, usecols=["etf", "source"])
                    .query("etf == @代號 and source == '官網'").shape[0] > 0)}
-        失敗 = 0
+        失敗, 抓到 = 0, set()
         for d in 日們:
-            查詢日 = d + dt.timedelta(days=1) if 投信 == "群益" else d  # 群益要用下一天查
-            if d in 已有 and d < 今天 - dt.timedelta(days=3):
+            # 統一、群益查的是「申購買回清單日」，拿到的是前一個交易日的持股；野村、復華查的就是持股日
+            對應日 = d - dt.timedelta(days=3 if d.weekday() == 0 else 1) if 投信 in ("統一", "群益") else d
+            if 對應日 in 已有 and d < 今天 - dt.timedelta(days=3):
+                continue
+            if d > 今天 and 投信 not in ("統一", "群益"):
                 continue
             try:
-                結果 = 抓官網[投信](基金, 查詢日)
+                結果 = 抓官網[投信](基金, d)
+                失敗 = 0
             except Exception as e:
                 失敗 += 1
                 print(f"{代號} {投信} {d}：{type(e).__name__} {str(e)[:120]}")
-                if 失敗 >= 3:
+                if 失敗 >= 5:
                     break
+                time.sleep(2)
                 continue
             time.sleep(0.3)
             if not 結果 or 結果[1].empty:
                 continue
             資料日, 持股, 資訊 = 結果
-            if 資料日 > 今天:
+            if 資料日 > 今天 or 資料日 in 抓到:
                 continue
             存持股(代號, 資料日, 持股, "官網")
             資訊們.append({"etf": 代號, "date": 資料日.isoformat(), "issuer": 投信, "source": "官網", **資訊})
-            已有.add(資料日)
+            抓到.add(資料日)
             筆數 += 1
+        已有 |= 抓到
         print(f"{代號} {投信}：已有 {len(已有)} 天")
     try:
         for 代號, 投信, 資料日, 持股, 資訊 in 彙整來源():
@@ -318,9 +325,12 @@ def 每日變化(持股, 資訊):
             return "減碼"
         return "持平"
     變["type"] = [類型(x) for x in 變.itertuples()]
+    全進出 = 變["type"].isin(["新增", "出清"])
+    變.loc[全進出, "adj_delta"] = 變.loc[全進出, "delta"]
     價格 = {d: 收盤價(d) for d in 變["date"].unique()}
     變["price"] = [價格[d].get(c, float("nan")) for d, c in zip(變["date"], 變["code"])]
     變["amount"] = 變["delta"] * 變["price"]
+    變["adj_amount"] = 變["adj_delta"] * 變["price"]
     return 變
 
 
