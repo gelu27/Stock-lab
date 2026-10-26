@@ -47,6 +47,17 @@ jobs:
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
           HOLDINGS: ${{ secrets.HOLDINGS }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: AI 收盤解讀（有設定 GEMINI_API_KEY 才會執行）
+        continue-on-error: true
+        run: |
+          pip install -q anthropic
+          python notify.py brief 收盤
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: 資料來源健康檢查（有問題才 LINE 通知）
         if: always()
         continue-on-error: true

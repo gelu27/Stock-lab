@@ -1,0 +1,33 @@
+name: AI 大盤解讀
+
+on:
+  schedule:
+    - cron: "30 0 * * 1-5"   # 台灣時間 08:30 盤前解讀
+    - cron: "0 14 * * 1-5"   # 台灣時間 22:00 夜盤與美股解讀
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "盤前、收盤或夜盤"
+        default: "盤前"
+
+permissions:
+  contents: write
+
+jobs:
+  brief:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pandas requests pyarrow anthropic
+      - name: 寫大盤解讀（收盤解讀在「更新資料庫」最後一步）
+        run: python notify.py brief ${{ github.event.inputs.mode || (github.event.schedule == '30 0 * * 1-5' && '盤前' || '夜盤') }}
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
