@@ -2327,6 +2327,33 @@ def ETF資料(_版本):
     return 持股, 資訊, etf_data.每日變化(持股, 資訊)
 
 
+def 色階(樣式, 表, 欄們):
+    """明細色階：成長率、EPS、ROE 正的越大越紅、負的越大越綠；營收、市值越大底色越藍（用對數，才不會只有前幾名有顏色）。"""
+    上限 = {"月增%": 100, "年增%": 100, "累計年增%": 100, "ROE%": 30}
+    def 漲跌底(v, 頂):
+        if pd.isna(v) or v == 0 or not 頂:
+            return ""
+        強 = min(abs(v) / 頂, 1) * 0.55 + 0.08
+        r, g, b = (255, 59, 92) if v > 0 else (0, 214, 143)
+        return f"background-color:rgba({r},{g},{b},{強:.2f})"
+    def 大小底(v, 低, 高):
+        if pd.isna(v) or v <= 0 or 高 <= 低:
+            return ""
+        強 = (np.log10(v) - 低) / (高 - 低)
+        return f"background-color:rgba(0,229,255,{min(max(強, 0), 1) * 0.45:.2f})"
+    for c in 欄們:
+        if c not in 表 or 表[c].dropna().empty:
+            continue
+        if c in ("營收(億)", "市值(億)"):
+            對數 = np.log10(表[c][表[c] > 0])
+            低, 高 = (對數.quantile(0.05), 對數.quantile(0.99)) if len(對數) else (0, 0)
+            樣式 = 樣式.map(lambda v, 低=低, 高=高: 大小底(v, 低, 高), subset=[c])
+        else:
+            頂 = 上限.get(c) or 表[c].abs().quantile(0.9)
+            樣式 = 樣式.map(lambda v, 頂=頂: 漲跌底(v, 頂), subset=[c])
+    return 樣式
+
+
 @st.cache_data(max_entries=4, show_spinner=False)
 def 月營收資料(月份, _資料版本):
     表, 月份們 = engine.月營收總表(月份)
@@ -2345,13 +2372,16 @@ if 頁面 == 頁面們[4]:
     查 = b.text_input("查代號", placeholder="如 2408 或名稱", key="營收查詢").strip()
     公告日們 = sorted(營收["公告日"].dropna().loc[lambda s: s != ""].unique(), reverse=True)
     公告 = c.selectbox("公告日", ["全部"] + list(公告日們), key="營收公告日")
-    a, b, c = st.columns([1, 1, 1])
+    a, b, c, d = st.columns([1, 1, 1, 1])
     新高 = a.checkbox("近 5 年新高 ★", key="營收新高")
     排除 = b.checkbox("排除基期過低", value=True, key="營收排除基期",
                      help="上個月（或去年同期）營收不到 1,000 萬時，成長率會出現幾萬 % 的極端值，勾選後這些百分比顯示「—」並排到最後。")
     產業們 = sorted(x for x in engine._股本表()["產業"].dropna().unique() if x)
     產業 = c.selectbox("產業", ["全部"] + 產業們, key="營收產業")
-    欄位們 = {"營收": ["營收(億)"], "月增": ["月增%"], "年增": ["年增%"], "累計": ["累計年增%"], "EPS": ["近四季EPS"],
+    規模 = d.selectbox("規模", ["全部", "大型股", "中型股", "小型股", "微型股"], key="營收規模",
+                     help="依上市櫃公司市值排名：大型股＝前 50 名（約等於台灣 50）、中型股＝51～150 名（約等於中型 100）、"
+                          "小型股＝151～500 名、微型股＝500 名以後。")
+    欄位們 = {"營收": ["營收(億)"], "市值": ["市值(億)"], "月增": ["月增%"], "年增": ["年增%"], "累計": ["累計年增%"], "EPS": ["近四季EPS"],
             "EPS試算": ["單月EPS試算", "今年EPS試算"], "ROE": ["ROE%"]}
     顯示 = st.pills("欄位", list(欄位們), selection_mode="multi", default=["營收", "月增", "年增"],
                   key="營收欄位", label_visibility="collapsed") or ["營收"]
@@ -2363,6 +2393,9 @@ if 頁面 == 頁面們[4]:
     淨值比 = 今日.set_index("代號")["淨值比"] if "淨值比" in 今日.columns else pd.Series(dtype=float)
     每股淨值 = (收盤 / 淨值比.where(淨值比 > 0)).reindex(表.index)
     表["ROE%"] = (表["近四季EPS"] / 每股淨值 * 100).round(1)
+    表["市值(億)"] = (收盤.reindex(表.index) * 股本["發行股數"].reindex(表.index) / 1e8).round(0)
+    名次 = 表["市值(億)"].rank(ascending=False, method="first")
+    表["規模"] = pd.cut(名次, [0, 50, 150, 500, np.inf], labels=["大型股", "中型股", "小型股", "微型股"]).astype(str)
     if 排除:
         表.loc[表["月增基期低"], "月增"] = np.nan
         表.loc[表["年增基期低"], "年增"] = np.nan
@@ -2380,6 +2413,8 @@ if 頁面 == 頁面們[4]:
         表 = 表[表["五年新高"]]
     if 產業 != "全部":
         表 = 表[表["產業"] == 產業]
+    if 規模 != "全部":
+        表 = 表[表["規模"] == 規模]
 
     卡片格([卡片(f"{月份} 已公布", f"{全部家數} 家", f"上市＋上櫃"),
            卡片("年增為正", f"{(營收['年增'] > 0).mean() * 100:.0f}%", "已公布家數中的比例",
@@ -2394,10 +2429,9 @@ if 頁面 == 頁面們[4]:
     st.caption(f"符合 {len(表)} 檔")
     輸出 = 表[["代號", "名稱"] + 欄]
     百分比 = [c for c in ("月增%", "年增%", "累計年增%") if c in 欄]
-    樣式 = (輸出.style.map(lambda v: f"color:{漲跌色(v)}", subset=百分比)
-            .format({"營收(億)": "{:,.1f}", "近四季EPS": "{:,.2f}", "ROE%": "{:,.1f}", "單月EPS試算": "{:,.2f}",
-                     "今年EPS試算": "{:,.2f}",
-                     **{c: "{:+,.1f}" for c in 百分比}}, na_rep="—"))
+    樣式 = 色階(輸出.style, 輸出, 欄).format(
+        {"市值(億)": "{:,.0f}", "營收(億)": "{:,.1f}", "近四季EPS": "{:,.2f}", "ROE%": "{:,.1f}",
+         "單月EPS試算": "{:,.2f}", "今年EPS試算": "{:,.2f}", **{c: "{:+,.1f}" for c in 百分比}}, na_rep="—")
     點選表(輸出, 樣式, "營收表", height=min(35 * (len(輸出) + 1) + 3, 700))
     最新季 = EPS表["EPS季度"].mode()
     st.caption(
