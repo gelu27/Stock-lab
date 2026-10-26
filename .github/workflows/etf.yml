@@ -24,7 +24,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install pandas requests openpyxl
+      - run: pip install pandas requests openpyxl beautifulsoup4
       - run: python etf_data.py --days ${{ github.event.inputs.days || 7 }}
       - name: 存回 GitHub
         run: |
@@ -38,3 +38,10 @@ jobs:
             sleep $((i * 10))
           done
           exit 1
+      - name: 斷線檢查（早上那次才跑，超過 2 個交易日沒更新就 LINE 通知）
+        if: github.event.schedule == '40 0 * * 2-6'
+        continue-on-error: true
+        run: python etf_data.py --health
+        env:
+          LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}

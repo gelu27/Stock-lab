@@ -1,0 +1,19 @@
+name: 暫時-測試ETF資料來源
+on:
+  push:
+    branches: [claude/project-thread-cz1twa]
+    paths: [etf_probe.py, etf_data.py, .github/workflows/etf_probe.yml]
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pandas requests openpyxl beautifulsoup4 playwright && python -m playwright install --with-deps chromium
+      - name: 抓一次（不存回）
+        run: python etf_data.py --days 3 && python etf_data.py --health
+      - name: 第二彙整格式
+        run: python -c "import requests;r=requests.get('https://zdsetf.com/api/etfs/00406A/snapshot',headers={'User-Agent':'Mozilla/5.0','Accept':'application/json'},timeout=30);print(r.status_code,r.text[:1500])"
+      - run: python etf_probe.py
