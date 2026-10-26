@@ -2764,3 +2764,167 @@ def 市場狀態(加權, 今日, 每日, 情緒=None, 日程=None):
         下一步.append(f"季線 {數['MA60']:,.0f} 是中期多空分界")
     下一步.append("外資現貨與期貨方向是否一致（同買＝偏多確認、同賣＝偏空確認）")
     return {"狀態": 狀態, "分數": 分數, "支持": 支持, "反向": 反向, "待觀察": 待觀察, "下一步": 下一步, "大盤": 大}
+
+
+# ========== 21. 美股 → 台股族群連動、AI 大盤解讀 ==========
+連動美股 = ["費城半導體", "那斯達克", "輝達", "蘋果", "台積電 ADR"]
+
+
+def 族群日報酬(指標, 分類="產業"):
+    """每個族群每天的市值加權報酬（%）。分類＝產業 或 概念股。回傳 DataFrame（日期 × 族群）。"""
+    t = 指標[["date", "代號", "收盤", "日報酬"]].copy()
+    股 = _股本表()
+    t["權重"] = t["收盤"].astype(float) * t["代號"].map(股["發行股數"]).astype(float)
+    if 分類 == "概念股":
+        t = t.merge(讀取概念().rename(columns={"code": "代號", "concept": "族群"}), on="代號")
+    else:
+        t["族群"] = t["代號"].map(股["產業"])
+        t = t[~t["代號"].str.startswith("0") & (t["族群"].fillna("") != "")]
+    t = t[t["權重"] > 0]
+    t["加權"] = t["日報酬"].astype(float) * t["權重"]
+    群 = t.groupby(["date", "族群"])
+    return (群["加權"].sum() / 群["權重"].sum() * 100).unstack()
+
+
+def 美股連動(指標, 分類="產業", 天數=120, 最少檔數=5):
+    """台股各族群跟「前一晚美股」的連動程度。
+    回傳 (表, 美股最新)：表的 index＝族群，欄位有 各美股的相關係數、對費半的敏感度（費半漲 1% 族群平均漲幾 %）、
+    今天實際漲跌、依昨晚費半推估的漲跌、落差（實際 − 推估）、明天推估（用最新一晚的費半，若美股比台股新）。"""
+    美 = 讀取美股()
+    if 美 is None:
+        return pd.DataFrame(), {}
+    族 = 族群日報酬(指標, 分類)
+    if 分類 == "產業":
+        家數 = 指標[指標["date"] == 指標["date"].max()]["代號"].map(_股本表()["產業"]).value_counts()
+        族 = 族[[c for c in 族.columns if 家數.get(c, 0) >= 最少檔數]]
+    美報酬 = 美[[c for c in 連動美股 if c in 美]].pct_change(fill_method=None) * 100
+    # 台股 t 日對應「t 日之前最後一個美股交易日」（台股收盤時美股還沒開，所以用前一晚）
+    美報酬 = 美報酬.dropna(how="all")
+    前晚 = pd.merge_asof(pd.DataFrame({"date": 族.index}), 美報酬.rename_axis("date").reset_index(), on="date",
+                         direction="backward", allow_exact_matches=False).set_index("date")
+    近 = 族.tail(天數)
+    前 = 前晚.reindex(近.index)
+    表 = pd.DataFrame(index=近.columns)
+    for c in 前.columns:
+        表[c] = 近.corrwith(前[c]).round(2)
+    if "費城半導體" in 前:
+        x = 前["費城半導體"]
+        表["費半敏感度"] = (近.apply(lambda y: y.cov(x)) / x.var()).round(2)
+        今 = 族.index[-1]
+        表["今天實際%"] = 族.loc[今].round(2)
+        表["依昨晚費半推估%"] = (表["費半敏感度"] * 前晚.loc[今, "費城半導體"]).round(2)
+        表["落差%"] = (表["今天實際%"] - 表["依昨晚費半推估%"]).round(2)
+        最新美 = 美報酬["費城半導體"].dropna()
+        if len(最新美) and 最新美.index[-1] >= 今:
+            表["明天推估%"] = (表["費半敏感度"] * 最新美.iloc[-1]).round(2)
+    最新 = {c: (美報酬[c].dropna().index[-1], 美報酬[c].dropna().iloc[-1]) for c in 美報酬.columns if 美報酬[c].notna().any()}
+    return 表.sort_values(表.columns[0], ascending=False), 最新
+
+
+解讀模式 = {
+    "盤前": "台股開盤前（08:30）的盤前解讀：昨晚美股與台指期夜盤怎麼走、今天可能受影響的族群、今天要注意的事件與風險、開盤觀察重點。",
+    "收盤": "台股收盤後的收盤分析：今天盤勢結構（指數、權值股撐盤或拖盤、漲跌家數）、強勢與弱勢族群、資金流向（外資、投信、融資、期貨）、領頭羊、明天觀察重點。",
+    "夜盤": "晚上 22:00 的夜盤與美股解讀：美股開盤表現、台指期夜盤、國際事件，提出隔天的族群觀察、偏多或偏空的條件與風險控管。",
+}
+大盤解讀提示 = """你是台灣股市的研究助理，替一位剛開始學投資、可能用手機看的個人投資者寫大盤解讀。
+規則：
+- 全部用繁體中文、白話，專有名詞第一次出現要用一句話解釋。
+- 只根據提供的數據寫，不要編造沒有給的數字；資料缺的就說「資料不足」。關聯不要寫成因果。
+- 用 Markdown，600 字以內，分成：## 一句話結論、## 盤勢重點（3～5 點）、## 族群與資金、## 接下來觀察（含偏多與偏空的條件）、## 風險提醒。
+- 最後一行固定寫「（AI 依規則數據整理，僅供研究參考，不是買賣建議）」。"""
+
+
+def 大盤摘要(指標, 加權, 國際=None, 期貨=None):
+    """把網站上的大盤數據整理成一段文字，給 AI 寫大盤解讀用。"""
+    最新 = 指標["date"].max()
+    今日 = 加基本面(指標[指標["date"] == 最新], 讀取基本面())
+    行 = [f"資料日期：{最新:%Y-%m-%d}（台股最新收盤）"]
+    if 加權 is not None and len(加權):
+        r = 加權.iloc[-1]
+        行.append(f"加權指數 {r['close']:,.0f}，漲跌 {r['change']:+,.0f} 點（{r['change'] / (r['close'] - r['change']) * 100:+.2f}%）")
+    股 = 今日[今日["代號"].str.fullmatch(r"\d{4}")]
+    行.append(f"上漲 {(股['漲跌'] > 0).sum()} 家、下跌 {(股['漲跌'] < 0).sum()} 家，成交 {今日['成交值億'].sum():,.0f} 億")
+    try:
+        權, 摘 = 權值貢獻(今日, 加權)
+        行.append("撐盤：" + "、".join(f"{r['名稱']} {r['貢獻點數']:+.0f} 點" for _, r in 權.head(5).iterrows()))
+        行.append("拖盤：" + "、".join(f"{r['名稱']} {r['貢獻點數']:+.0f} 點" for _, r in 權.tail(5).iloc[::-1].iterrows()))
+    except Exception:
+        pass
+    for 名, 來源 in (("產業", 今日), ("概念股", 概念展開(今日))):
+        try:
+            族, _ = 族群資料(來源)
+            行.append(f"強勢{名}：" + "、".join(f"{k} {v:+.1f}%（{r['上漲']}/{r['家數']} 檔漲）" for k, r in 族.head(4).iterrows() for v in [r["漲跌幅"]]))
+            行.append(f"弱勢{名}：" + "、".join(f"{k} {v:+.1f}%" for k, r in 族.tail(4).iloc[::-1].iterrows() for v in [r["漲跌幅"]]))
+        except Exception:
+            pass
+    if "外資買超" in 今日:
+        金 = lambda 欄: (今日[欄] * 1000 * 今日["收盤"]).sum() / 1e8
+        行.append(f"法人買賣超：外資 {金('外資買超'):+,.0f} 億、投信 {金('投信買超'):+,.0f} 億、自營商 {金('自營買超'):+,.0f} 億")
+        融 = 指標.groupby("date")["融資餘額"].sum()
+        if len(融) > 5:
+            行.append(f"融資餘額 {融.iloc[-1]:,.0f} 張，5 日 {(融.iloc[-1] / 融.iloc[-6] - 1) * 100:+.1f}%")
+    維 = 融資維持率(指標[指標["date"] >= 最新 - pd.Timedelta(days=10)])
+    if 維 is not None and len(維):
+        行.append(f"上市融資維持率約 {維.iloc[-1]:.0f}%")
+    期 = 讀取期貨未平倉()
+    if 期 is not None and len(期) > 5:
+        行.append(f"外資台指期淨部位 {期['foreign_oi'].iloc[-1]:+,.0f} 口（5 日變化 {期['foreign_oi'].iloc[-1] - 期['foreign_oi'].iloc[-6]:+,.0f}）")
+    try:
+        情 = 情緒指數(指標, 加權).dropna(how="all", subset=["散戶", "法人"]).iloc[-1]
+        行.append("情緒分數（0～100）：" + "、".join(f"{k} {情[k]:.0f}" for k in ("法人", "散戶", "資金溫度", "全球") if pd.notna(情[k]))
+                 + f"；法人×散戶象限：{情緒象限(情['散戶'], 情['法人'])}")
+    except Exception:
+        pass
+    if 國際:
+        行.append("國際行情（最新）：" + "、".join(f"{k} {v['價']:,.2f}（{v['幅度']:+.2f}%，{v['時間']:%m/%d %H:%M}）" for k, v in 國際.items()))
+    if 期貨:
+        行.append("台指期：" + "、".join(f"{k} {v['價']:,.0f}（{v['漲跌']:+,.0f}，{v['時間']}）" for k, v in 期貨.items()))
+    try:
+        日程 = 經濟日程(天數=5)
+        日程 = 日程[日程["重要性"] == "高"].head(8)
+        if len(日程):
+            行.append("未來 5 天重要事件：" + "；".join(f"{r['日期']:%m/%d} {r['時間']} {r['事件']}" for _, r in 日程.iterrows()))
+    except Exception:
+        pass
+    return "\n".join(行)
+
+
+def AI大盤解讀(摘要, 模式, 設定):
+    """用 Gemini（有 GEMINI_API_KEY）或 Claude 寫大盤解讀。回傳 (Markdown, 模型名稱)。"""
+    import datetime as dt
+    現在 = dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).strftime("%Y-%m-%d %H:%M")
+    問題 = f"現在是台灣時間 {現在}。請寫「{模式}」解讀：{解讀模式[模式]}\n\n以下是最新數據：\n{摘要}"
+    if str(設定.get("GEMINI_API_KEY", "")).strip():
+        內容 = {"systemInstruction": {"parts": [{"text": 大盤解讀提示}]},
+                "contents": [{"role": "user", "parts": [{"text": 問題}]}]}
+        回應, 模型 = Gemini呼叫(內容, 清理金鑰(設定["GEMINI_API_KEY"]), str(設定.get("GEMINI_MODEL", "gemini-flash-latest")))
+        候選 = (回應.json().get("candidates") or [{}])[0]
+        文字 = "".join(p.get("text", "") for p in (候選.get("content") or {}).get("parts", [])).strip()
+    elif str(設定.get("ANTHROPIC_API_KEY", "")).strip():
+        import anthropic
+        模型 = str(設定.get("AI_MODEL", "claude-opus-5-5"))
+        回應 = anthropic.Anthropic(api_key=清理金鑰(設定["ANTHROPIC_API_KEY"])).messages.create(
+            model=模型, max_tokens=4000, system=大盤解讀提示, messages=[{"role": "user", "content": 問題}])
+        文字 = "".join(b.text for b in 回應.content if b.type == "text").strip()
+    else:
+        raise RuntimeError("沒有設定 GEMINI_API_KEY 或 ANTHROPIC_API_KEY。")
+    if not 文字:
+        raise RuntimeError("AI 沒有產生內容，請稍後再試。")
+    return 文字, 模型
+
+
+def 讀取大盤解讀(設定):
+    """ai-reports 分支的 briefs.json：{"YYYY-MM-DD_模式": {時間, 模式, 內容, 模型}}。"""
+    try:
+        return 讀取設定檔(設定, "briefs.json") or {}
+    except Exception:
+        return {}
+
+
+def 儲存大盤解讀(設定, 模式, 內容, 模型, 保留=60):
+    import datetime as dt
+    現在 = dt.datetime.now(dt.timezone(dt.timedelta(hours=8)))
+    全部 = 讀取大盤解讀(設定)
+    全部[f"{現在:%Y-%m-%d}_{模式}"] = {"時間": f"{現在:%Y-%m-%d %H:%M}", "模式": 模式, "內容": 內容, "模型": 模型}
+    全部 = dict(sorted(全部.items())[-保留:])
+    return 儲存設定檔(設定, "briefs.json", 全部, f"{模式}大盤解讀 {現在:%m/%d}")

@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import io
 import os
+import re
 import threading
 import urllib.parse
 
@@ -463,6 +464,18 @@ if "s" in st.query_params:  # 排行榜的連結：?s=2330
 st.session_state.pop("要跳轉", None)
 if st.session_state.get("頁面") not in 頁面們:
     st.session_state["頁面"] = 頁面們[0]
+
+
+def _搜尋跳轉():
+    選 = st.session_state.get("全站搜尋")
+    if 選:
+        前往(選.split()[0])
+    st.session_state["全站搜尋"] = None
+
+
+if st.session_state.get("頁面") != 頁面們[2]:  # 個股查詢頁本身就有搜尋框
+    st.selectbox("搜尋股票", 股票選項, index=None, key="全站搜尋", on_change=_搜尋跳轉, label_visibility="collapsed",
+                 placeholder="🔍 輸入代號或名稱，直接跳到個股查詢（例如 2330、台積電）")
 頁面 = st.segmented_control("頁面", 頁面們, key="頁面", label_visibility="collapsed") or 頁面們[0]
 
 
@@ -1751,7 +1764,88 @@ def 行事曆區():
                "台灣央行理監事會每季一次（3、6、9、12 月），日期請以央行公告為準。")
 
 
-首頁區塊 = ["市場", "狀態", "焦點", "國際", "加權指數", "權值", "資金", "情緒", "族群", "行事曆", "排行"]
+def 連動區():
+    段落("GLOBAL → TAIWAN // 美股與台股族群連動")
+    分類 = st.segmented_control("連動分類", ["產業", "概念股"], default="概念股", key="連動分類",
+                              label_visibility="collapsed") or "概念股"
+    表, 最新 = 美股連動資料(_版本, 分類)
+    if 表.empty:
+        st.info("美股歷史資料（data/us_daily.csv）下次資料更新後就會出現。")
+        return
+    卡片格([卡片(f"{名} · {日:%m/%d}", f"{v:+.2f}%", "美股前一晚", 漲跌色(v)) for 名, (日, v) in 最新.items()][:6])
+    if "落差%" in 表:
+        跟漲 = 表[表["費城半導體"] >= 0.3]
+        if len(跟漲):
+            落後 = 跟漲.nsmallest(3, "落差%")
+            超前 = 跟漲.nlargest(3, "落差%")
+            st.markdown("**今天跟美股連動高、但走得比推估弱：** " + "、".join(f"{k}（{v:+.1f}%）" for k, v in 落後["落差%"].items())
+                        + "　**比推估強：** " + "、".join(f"{k}（{v:+.1f}%）" for k, v in 超前["落差%"].items()))
+    顯示 = 表.reset_index(names="族群")
+    相關欄 = [c for c in 連動欄 if c in 顯示]
+    百分欄 = [c for c in ("今天實際%", "依昨晚費半推估%", "落差%", "明天推估%") if c in 顯示]
+    樣式 = 顯示.style.map(lambda v: f"background:rgba(255,59,92,{min(abs(v), 1) * 0.6:.2f})" if pd.notna(v) and v > 0
+                  else (f"background:rgba(0,214,143,{min(abs(v), 1) * 0.6:.2f})" if pd.notna(v) else ""), subset=相關欄)
+    樣式 = 樣式.map(lambda v: f"color:{漲跌色(v)}", subset=百分欄).format(
+        {**{c: "{:+.2f}" for c in 相關欄}, **{c: "{:+.2f}" for c in 百分欄}, "費半敏感度": "{:.2f}"}, na_rep="—")
+    st.dataframe(樣式, hide_index=True, width="stretch", height=min(35 * (len(顯示) + 1) + 3, 460))
+    st.caption("相關係數：近 120 個交易日，台股族群當天漲跌和「前一晚」美股漲跌的關聯（1＝完全同向、0＝沒關係、越紅越同向）。"
+               "費半敏感度＝費半漲 1% 時族群平均漲幾 %；推估＝敏感度 × 昨晚費半漲跌；落差＝今天實際 − 推估。"
+               "相關不代表因果，只是過去的統計。明天推估在美股比台股新一天時才會出現。")
+
+
+連動欄 = ["費城半導體", "那斯達克", "輝達", "蘋果", "台積電 ADR"]
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def 美股連動資料(_資料版本, 分類):
+    return engine.美股連動(指標, 分類)
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def 大盤解讀紀錄(_快取鍵):
+    return engine.讀取大盤解讀(_設定())
+
+
+def AI解讀區():
+    段落("AI BRIEF // AI 大盤解讀")
+    設定 = _設定()
+    紀錄 = 大盤解讀紀錄(st.session_state.get("_解讀版本", 0))
+    分頁 = st.tabs(["收盤", "盤前", "夜盤"])
+    for 模式, 頁 in zip(["收盤", "盤前", "夜盤"], 分頁):
+        with 頁:
+            這類 = [v for k, v in sorted(紀錄.items()) if v.get("模式") == 模式]
+            if not 這類:
+                st.caption(f"還沒有{模式}解讀。" + {"收盤": "每個交易日資料更新後（約 18:30）自動產生",
+                                                 "盤前": "每個交易日 08:30 自動產生", "夜盤": "每個交易日 22:00 自動產生"}[模式]
+                           + "（要在 GitHub 的 Actions secrets 設定 GEMINI_API_KEY）。")
+                continue
+            選 = 這類[-1]
+            if len(這類) > 1:
+                時間們 = [v["時間"] for v in 這類][::-1]
+                t = st.selectbox("看哪一天", 時間們, key=f"解讀日{模式}", label_visibility="collapsed")
+                選 = next(v for v in 這類 if v["時間"] == t)
+            st.caption(f"🕒 {選['時間']}　·　{選.get('模型', '')}")
+            st.markdown(re.sub(r"^#{1,3}\s+", "##### ", 選["內容"], flags=re.M))  # 標題縮小，手機比較好讀
+    有金鑰 = str(設定.get("GEMINI_API_KEY", "")).strip() or str(設定.get("ANTHROPIC_API_KEY", "")).strip()
+    if 有金鑰 and 可編輯():
+        a, b = st.columns([1, 2])
+        模式 = a.selectbox("模式", ["收盤", "盤前", "夜盤"], key="解讀模式", label_visibility="collapsed")
+        if b.button("🧠 現在產生一份", key="產生解讀"):
+            with st.spinner("AI 撰寫中，約 30～60 秒…"):
+                try:
+                    國際, 期貨 = 抓國際()
+                    摘要 = engine.大盤摘要(指標, 加權, 國際, 期貨)
+                    內容, 模型 = engine.AI大盤解讀(摘要, 模式, 設定)
+                    engine.儲存大盤解讀(設定, 模式, 內容, 模型)
+                    st.session_state["_解讀版本"] = st.session_state.get("_解讀版本", 0) + 1
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"產生失敗：{e}")
+    st.caption("AI 只根據網站的大盤數據（指數、權值股、族群、法人、融資、期貨、情緒、國際行情、行事曆）撰寫，不會上網找新聞；"
+               "僅供研究參考，不是買賣建議。")
+
+
+首頁區塊 = ["市場", "狀態", "AI解讀", "焦點", "國際", "連動", "加權指數", "權值", "資金", "情緒", "族群", "行事曆", "排行"]
 
 if 頁面 == 頁面們[0]:
     隱藏 = [x for x in st.query_params.get("hide", "").split(",") if x in 首頁區塊]
@@ -1769,6 +1863,8 @@ if 頁面 == 頁面們[0]:
         市場卡片()
     if "狀態" in 顯示:
         狀態區()
+    if "AI解讀" in 顯示:
+        AI解讀區()
     if "焦點" in 顯示:
         焦點區()
     if "國際" in 顯示:
@@ -1776,6 +1872,8 @@ if 頁面 == 頁面們[0]:
             國際行情()
         except Exception:
             st.caption("國際行情暫時無法顯示。")
+    if "連動" in 顯示:
+        連動區()
     if "加權指數" in 顯示 and 加權 is not None and len(加權) > 1:
         加權圖()
     if "權值" in 顯示:
