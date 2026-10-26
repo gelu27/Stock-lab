@@ -215,19 +215,31 @@ def 提醒事項(代號們):
 
 
 def 營收新高提醒(代號們, 狀態):
-    """庫存、自選股公布的月營收創近 5 年新高（每檔每個月只通知一次）。月初上個月和上上個月都可能還在公布，兩個月都看。"""
+    """庫存、自選股公布月營收就通知（每檔每個月只通知一次），創近 5 年新高的加 🏆。
+    月初上個月和上上個月都可能還在公布，兩個月都看。第一次執行只記下已公布的，不通知，免得一次洗版。"""
     import engine
     _, 月份們 = engine.月營收總表()
+    初次 = "營收公布_啟用" not in 狀態
+    今天 = dt.datetime.now(台北).strftime("%Y-%m-%d")
     行們 = []
     for 月 in 月份們[:2 if dt.datetime.now(台北).day <= 12 else 1]:
         t, _ = engine.月營收總表(月)
         for c in dict.fromkeys(代號們):
-            鍵 = f"營收新高_{c}_{月}"
-            if c in t.index and bool(t.at[c, "五年新高"]) and 鍵 not in 狀態:
-                r = t.loc[c]
-                行們.append(f"🏆 {c} {月[5:]} 月營收 {r['營收'] / 1e5:,.1f} 億，近 5 年新高（年增 {r['年增']:+.1f}%）")
-                狀態[鍵] = dt.datetime.now(台北).strftime("%Y-%m-%d")
-    return (["", "💰 月營收創新高"] + 行們) if 行們 else []
+            鍵 = f"營收公布_{c}_{月}"
+            if c not in t.index or 鍵 in 狀態 or f"營收新高_{c}_{月}" in 狀態:
+                continue
+            狀態[鍵] = 今天
+            if 初次:
+                continue
+            r = t.loc[c]
+            def 幅(v, 低):
+                return "—" if pd.isna(v) or 低 else f"{v:+.1f}%"
+            新高 = bool(r["五年新高"])
+            行們.append(f"{'🏆' if 新高 else '•'} {c} {月[5:]} 月 {r['營收'] / 1e5:,.1f} 億，"
+                       f"月增 {幅(r['月增'], r['月增基期低'])}、年增 {幅(r['年增'], r['年增基期低'])}"
+                       + ("，近 5 年新高" if 新高 else ""))
+    狀態["營收公布_啟用"] = 狀態.get("營收公布_啟用", 今天)
+    return (["", "💰 月營收公布（庫存＋自選）"] + 行們) if 行們 else []
 
 
 def ETF共識提醒(代號們, 狀態, 門檻=3):
