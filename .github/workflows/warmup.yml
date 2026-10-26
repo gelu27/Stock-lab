@@ -1,0 +1,22 @@
+name: 網站預熱
+
+on:
+  workflow_run:
+    workflows: ["更新資料庫"]
+    types: [completed]
+  workflow_dispatch:
+
+jobs:
+  warmup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install playwright && python -m playwright install --with-deps chromium
+      - name: 等網站重新部署（資料更新會讓網站重新啟動）
+        run: sleep 180
+      - name: 打開網站，讓它先讀好資料
+        run: python tests/warmup.py "${{ vars.SITE_URL || 'https://taisc-stock.streamlit.app' }}"

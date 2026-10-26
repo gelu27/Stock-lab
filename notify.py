@@ -140,6 +140,11 @@ def 收盤摘要(強制=False):
                 行們.append(f"{r['name']} {r['close']:,.2f} {r['幅度']:+.2f}%")
 
     try:
+        行們 += 提醒事項(([] if not 持股 else h["代號"].tolist()) + 代號們)
+    except Exception as e:
+        print("日程／警示失敗：", repr(e))
+
+    try:
         行們 += 評分摘要(持股)
     except Exception as e:  # 評分失敗不影響其他摘要
         print("評分計算失敗：", repr(e))
@@ -158,6 +163,39 @@ def 收盤摘要(強制=False):
     if 到價:
         行們 += ["", "🔔 到價"] + 到價
     推播("\n".join(行們))
+
+
+def 提醒事項(代號們):
+    """庫存、自選股的處置／注意股，以及未來 3 天內的法說會、營收與財報期限。"""
+    import engine
+    行們 = []
+    警 = engine.讀取警示()
+    警示 = [f"{c} {警[c]}" for c in dict.fromkeys(代號們) if c in 警]
+    if 警示:
+        行們 += ["", "⚠️ 處置／注意股"] + 警示
+    # AI 報告今天剛達標或停損
+    try:
+        報告們 = engine.列出AI報告({"GITHUB_TOKEN": os.environ.get("GITHUB_TOKEN", ""), "AI_REPO": 倉庫})
+        價 = engine.讀取資料庫(最近天數=60, 代號=list(報告們))
+        結案 = []
+        if 價 is not None:
+            價 = 價.rename(columns={"code": "代號", "close": "收盤"})
+            最新 = 價["date"].max()
+            for c, 紀錄們 in 報告們.items():
+                if 紀錄們:
+                    驗 = engine.驗收AI報告(紀錄們[0], 價[價["代號"] == c])
+                    if 驗["結果"] in ("達標", "停損") and 驗["日期"] == 最新:
+                        結案.append(f"{'🎯' if 驗['結果'] == '達標' else '🛑'} {c} AI 報告{驗['結果']}"
+                                  f"（目標 {驗['目標']:g}、停損 {驗['停損']:g}）")
+        if 結案:
+            行們 += ["", "🤖 AI 報告驗收"] + 結案
+    except Exception as e:
+        print("AI 報告驗收失敗：", repr(e))
+    日程 = engine.重要日程(set(代號們), 天數=3)
+    if len(日程):
+        行們 += ["", "📅 近 3 天日程"] + [f"{r['日期']:%m/%d} {r['類型']} {r['股票'] if r['代號'] else ''} {r['說明'][:40]}".replace("  ", " ")
+                                        for _, r in 日程.iterrows()]
+    return 行們
 
 
 def 評分摘要(持股):
@@ -262,6 +300,9 @@ def 健康檢查():
         return pd.read_csv(f, usecols=[欄])[欄].astype(str).max() if f.exists() else None
 
     太舊("集保股權分散（每週）", _最新檔日("tdcc"), 10)
+    借 = _最新檔日("sbl")
+    if 價 and 借 and 借 < 價:
+        問題.append(f"借券賣出資料落後（最新 {借:%m/%d}，股價 {價:%m/%d}）")
     fx = 讀("fx.csv", "date")
     太舊("美元匯率", fx and pd.Timestamp(fx).date(), 5)
     # 月營收次月 10 日前公布、內部人持股次月 15 日前、季報最晚季後 75～90 天
