@@ -349,7 +349,9 @@ def 抓基本面():
             "rev_cum_yoy": 表["累計營業收入-前期比較增減(%)"].map(轉數字),
         }))
     if 營收們:
-        pd.concat(營收們).round(2).to_csv(資料夾 / "fundamental" / "revenue.csv", index=False)
+        營收 = pd.concat(營收們).round(2)
+        營收.to_csv(資料夾 / "fundamental" / "revenue.csv", index=False)
+        記公告日(營收)
         print("月營收完成")
     EPS們 = []
     for 網址, 市場 in (("https://openapi.twse.com.tw/v1/opendata/t187ap14_L", "上市"),
@@ -611,11 +613,27 @@ def 抓股本():
         print("股本完成")
 
 
+def 記公告日(營收):
+    """官方沒有每家的公告日，改記「第一次抓到這家這個月營收」的日期（每天 18:00 更新，晚上才公布的會記成隔天）。"""
+    檔案 = 資料夾 / "fundamental" / "revenue_announce.csv"
+    舊 = pd.read_csv(檔案, dtype={"code": str}) if 檔案.exists() else pd.DataFrame(columns=["code", "month", "date"])
+    新 = 營收.dropna(subset=["revenue"])[["code", "month"]].drop_duplicates()
+    新 = 新.merge(舊[["code", "month"]], how="left", indicator=True)
+    新 = 新[新["_merge"] == "left_only"].drop(columns="_merge")
+    if len(新):
+        # 第一次建檔時已經公布的不知道哪天公布，留空
+        新["date"] = dt.datetime.now(台北時區).strftime("%Y-%m-%d") if 檔案.exists() else ""
+        表 = pd.concat([舊, 新]).sort_values(["month", "date", "code"])
+        表[表["month"] >= f"{int(表['month'].max()[:4]) - 1}-01"].to_csv(檔案, index=False)  # 只留近兩年
+        print(f"營收公告日：新增 {len(新)} 筆")
+
+
 def 抓歷史營收(月數=60):
     """公開資訊觀測站每月營收彙總 CSV；已經有的月份不重抓（最近 2 個月會重抓，因為有公司晚公布）。"""
     檔案 = 資料夾 / "fundamental" / "revenue_history.csv"
     舊 = pd.read_csv(檔案, dtype={"code": str}) if 檔案.exists() else pd.DataFrame(columns=["code", "month", "revenue"])
-    已有 = set(舊["month"])
+    家數 = 舊.groupby("month")["code"].nunique()
+    已有 = set(家數[家數 >= 家數.median() * 0.9].index) if len(家數) else set()  # 家數明顯偏少（漏抓上市或上櫃）的月份重抓
     今天 = dt.date.today()
     年, 月 = 今天.year, 今天.month
     新們 = []
