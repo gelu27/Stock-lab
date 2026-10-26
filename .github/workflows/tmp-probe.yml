@@ -1,0 +1,11 @@
+name: tmp probe
+on:
+  push:
+    branches: [claude/project-thread-vmuckf]
+    paths: [".github/workflows/tmp-probe.yml", "tests/probe_sources.py"]
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install requests && python tests/probe_sources.py
