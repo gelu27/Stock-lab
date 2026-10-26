@@ -3,6 +3,7 @@
 #   python notify.py alert   盤中檢查到價提醒（同一個提醒一天只通知一次）
 #   python notify.py test    傳一則測試訊息
 #   python notify.py health  檢查各資料來源有沒有正常更新，有問題才通知（休市日不算問題）
+#   python notify.py weekly  每週六週報（大盤、庫存、自選股一週表現，主動式 ETF 一週加減碼，下週日程）
 #
 # 需要在 GitHub 專案 Settings → Secrets and variables → Actions 設定：
 #   LINE_TOKEN    LINE Messaging API 的 Channel access token（必填）
@@ -145,7 +146,7 @@ def 收盤摘要(強制=False):
         print("日程／警示失敗：", repr(e))
 
     try:
-        行們 += 評分摘要(持股)
+        行們 += 評分摘要(持股, 代號們)
     except Exception as e:  # 評分失敗不影響其他摘要
         print("評分計算失敗：", repr(e))
 
@@ -191,6 +192,21 @@ def 提醒事項(代號們):
             行們 += ["", "🤖 AI 報告驗收"] + 結案
     except Exception as e:
         print("AI 報告驗收失敗：", repr(e))
+    狀態, sha = 讀設定("alert_state.json")
+    舊狀態 = dict(狀態)
+    try:
+        行們 += 營收新高提醒(代號們, 狀態)
+    except Exception as e:
+        print("營收新高失敗：", repr(e))
+    try:
+        行們 += ETF共識提醒(代號們, 狀態)
+    except Exception as e:
+        print("ETF 共識失敗：", repr(e))
+    if 狀態 != 舊狀態:
+        try:
+            寫設定("alert_state.json", 狀態, sha)
+        except Exception as e:
+            print("提醒狀態存檔失敗：", repr(e))
     日程 = engine.重要日程(set(代號們), 天數=3)
     if len(日程):
         行們 += ["", "📅 近 3 天日程"] + [f"{r['日期']:%m/%d} {r['類型']} {r['股票'] if r['代號'] else ''} {r['說明'][:40]}".replace("  ", " ")
@@ -198,7 +214,51 @@ def 提醒事項(代號們):
     return 行們
 
 
-def 評分摘要(持股):
+def 營收新高提醒(代號們, 狀態):
+    """庫存、自選股公布的月營收創近 5 年新高（每檔每個月只通知一次）。月初上個月和上上個月都可能還在公布，兩個月都看。"""
+    import engine
+    _, 月份們 = engine.月營收總表()
+    行們 = []
+    for 月 in 月份們[:2 if dt.datetime.now(台北).day <= 12 else 1]:
+        t, _ = engine.月營收總表(月)
+        for c in dict.fromkeys(代號們):
+            鍵 = f"營收新高_{c}_{月}"
+            if c in t.index and bool(t.at[c, "五年新高"]) and 鍵 not in 狀態:
+                r = t.loc[c]
+                行們.append(f"🏆 {c} {月[5:]} 月營收 {r['營收'] / 1e5:,.1f} 億，近 5 年新高（年增 {r['年增']:+.1f}%）")
+                狀態[鍵] = dt.datetime.now(台北).strftime("%Y-%m-%d")
+    return (["", "💰 月營收創新高"] + 行們) if 行們 else []
+
+
+def ETF共識提醒(代號們, 狀態, 門檻=3):
+    """最新一天有 門檻 家以上主動式 ETF 一起新增／加碼的股票（每個資料日只通知一次）。"""
+    import etf_data
+    持股 = etf_data.讀持股(天數=8)
+    if 持股.empty:
+        return []
+    變 = etf_data.每日變化(持股, etf_data.讀資訊())
+    if 變.empty:
+        return []
+    日 = 變["date"].max()
+    鍵 = f"ETF共識_{日:%Y%m%d}"
+    if 鍵 in 狀態:
+        return []
+    今 = 變[變["date"] == 日]
+    買 = 今[今["type"].isin(["新增", "加碼"])].groupby("code").agg(家數=("etf", "nunique"), 名稱=("name", "first"),
+                                                              金額=("adj_amount", "sum"))
+    賣 = 今[今["type"].isin(["減碼", "出清"])].groupby("code")["etf"].nunique()
+    買["淨家數"] = 買["家數"] - 賣.reindex(買.index).fillna(0)
+    共識 = 買[買["家數"] >= 門檻].sort_values(["家數", "金額"], ascending=False).head(8)
+    狀態[鍵] = dt.datetime.now(台北).strftime("%Y-%m-%d")
+    if 共識.empty:
+        return []
+    自選 = set(代號們)
+    return ["", f"🏦 主動式 ETF 共識加碼（{日:%m/%d}，{門檻} 家以上）"] + [
+        f"{'⭐' if c in 自選 else ''}{c} {r['名稱']} {r['家數']:.0f} 家" + (f"（{r['金額'] / 1e8:+.1f} 億）" if pd.notna(r["金額"]) else "")
+        for c, r in 共識.iterrows()]
+
+
+def 評分摘要(持股, 自選們=()):
     """大盤分數、庫存每檔分數、高分榜前 5（規則計分，跟網站「每日評分」頁同一套）。"""
     import engine
     原始 = engine.讀取資料庫(最近天數=260)  # 52 週高點要用到約一年的資料
@@ -214,6 +274,12 @@ def 評分摘要(持股):
         if len(庫):
             行們.append("💼 庫存：")
             行們 += [f"{r['名稱']} {r['總分']:.0f} {r['看法']} {變(r['較昨日'])}".rstrip() for _, r in 庫.iterrows()]
+    庫存們 = pd.read_csv(io.StringIO(持股), dtype={"代號": str})["代號"].str.strip().tolist() if 持股 else []
+    大變 = 分.reindex(list(dict.fromkeys(庫存們 + list(自選們)))).dropna(subset=["總分", "較昨日"])
+    大變 = 大變[大變["較昨日"].abs() >= 10].sort_values("較昨日")
+    if len(大變):
+        行們.append("📈 評分大變動（一天 ±10 分以上）：" + "、".join(
+            f"{r['名稱']} {r['總分'] - r['較昨日']:.0f}→{r['總分']:.0f}" for _, r in 大變.iterrows()))
     高 = 分[(分["5日均量"] >= 500) & ~分.index.str.startswith("00")].sort_values("總分", ascending=False).head(5)
     行們.append("🔝 高分股：" + "、".join(f"{r['名稱']} {r['總分']:.0f}" for _, r in 高.iterrows()))
     行們.append("（規則計分，僅供參考，非投資建議）")
@@ -303,6 +369,10 @@ def 健康檢查():
     借 = _最新檔日("sbl")
     if 價 and 借 and 借 < 價:
         問題.append(f"借券賣出資料落後（最新 {借:%m/%d}，股價 {價:%m/%d}）")
+    for 名稱, 檔 in (("融資金額（融資維持率用）", "margin_total.csv"), ("外資台指期未平倉", "futures_oi.csv")):
+        最新 = 讀(檔, "date")
+        if 價 and 最新 and (價 - pd.Timestamp(最新).date()).days > 4:
+            問題.append(f"{名稱}落後（最新 {pd.Timestamp(最新):%m/%d}，股價 {價:%m/%d}）")
     fx = 讀("fx.csv", "date")
     太舊("美元匯率", fx and pd.Timestamp(fx).date(), 5)
     # 月營收次月 10 日前公布、內部人持股次月 15 日前、季報最晚季後 75～90 天
@@ -330,6 +400,72 @@ def 健康檢查():
         print("資料來源全部正常")
 
 
+def 週報():
+    """這週（最近 5 個交易日）的大盤、庫存、自選股表現，主動式 ETF 一週加減碼，下週日程。"""
+    import engine
+    檔們 = sorted((資料夾 / "prices").glob("*/*.csv.gz"))[-6:]
+    if len(檔們) < 2:
+        print("資料不夠，不傳週報")
+        return
+    讀 = lambda f: pd.read_csv(f, dtype={"code": str}, usecols=["code", "name", "close"]).set_index("code")
+    本週, 上週 = 讀(檔們[-1]), 讀(檔們[0])
+    起, 迄 = pd.Timestamp(檔們[1].name[:8]), pd.Timestamp(檔們[-1].name[:8])
+    週漲 = (本週["close"] / 上週["close"].reindex(本週.index) - 1) * 100
+    行們 = [f"🗓 台股週報 {起:%m/%d}～{迄:%m/%d}"]
+    指數 = pd.concat(pd.read_csv(f) for f in sorted((資料夾 / "index").glob("*.csv"))[-2:]).drop_duplicates("date")
+    指數 = 指數.set_index("date")["close"]
+    基 = 指數[指數.index < f"{起:%Y-%m-%d}"]
+    if len(基):
+        行們.append(f"加權 {指數.iloc[-1]:,.0f}，本週 {(指數.iloc[-1] / 基.iloc[-1] - 1) * 100:+.2f}%")
+    上 = 週漲.dropna()
+    上 = 上[上.index.str.fullmatch(r"\d{4}")]
+    行們.append(f"本週上漲 {(上 > 0).sum()} 檔／下跌 {(上 < 0).sum()} 檔")
+
+    持股 = os.environ.get("HOLDINGS", "").strip()
+    庫存們 = []
+    if 持股:
+        h = pd.read_csv(io.StringIO(持股), dtype={"代號": str})
+        h["代號"] = h["代號"].str.strip()
+        h = h.join(本週["close"].rename("今"), on="代號").join(上週["close"].rename("前"), on="代號").dropna(subset=["今", "前"])
+        庫存們 = h["代號"].tolist()
+        損益 = ((h["今"] - h["前"]) * h["股數"]).sum()
+        行們 += ["", f"💼 庫存本週 {損益:+,.0f} 元（{損益 / (h['前'] * h['股數']).sum() * 100:+.2f}%）"]
+        g = h.assign(幅=(h["今"] / h["前"] - 1) * 100).groupby("代號")["幅"].first().sort_values(ascending=False)
+        行們.append("　" + "、".join(f"{本週.at[c, 'name']} {v:+.1f}%" for c, v in g.items()))
+
+    自選, _ = 讀設定("watchlist.json")
+    群們 = {k: v for k, v in 自選.items() if not k.startswith("_")}
+    自選們 = list(dict.fromkeys(c for v in 群們.values() for c in v))
+    if 自選們:
+        行們 += ["", "⭐ 自選股本週"]
+        for 群, v in 群們.items():
+            幅 = 週漲.reindex(v).dropna()
+            if len(幅):
+                強 = 幅.sort_values(ascending=False)
+                行們.append(f"{群}（平均 {幅.mean():+.1f}%）：" + "、".join(f"{本週.at[c, 'name']} {x:+.1f}%" for c, x in 強.head(8).items()))
+
+    try:
+        import etf_data
+        變 = etf_data.每日變化(etf_data.讀持股(天數=8), etf_data.讀資訊())
+        週 = 變[(變["date"] >= 起) & (變["date"] <= 迄)] if not 變.empty else 變
+        if not 週.empty:
+            金 = 週.groupby("code").agg(名稱=("name", "first"), 金額=("adj_amount", "sum")).dropna()
+            加 = 金.nlargest(5, "金額")
+            減 = 金.nsmallest(5, "金額")
+            行們 += ["", "🏦 主動式 ETF 本週合計（扣除申贖）",
+                    "加碼：" + "、".join(f"{c} {r['名稱']} {r['金額'] / 1e8:+.1f} 億" for c, r in 加.iterrows() if r["金額"] > 0),
+                    "減碼：" + "、".join(f"{c} {r['名稱']} {r['金額'] / 1e8:+.1f} 億" for c, r in 減.iterrows() if r["金額"] < 0)]
+    except Exception as e:
+        print("ETF 週統計失敗：", repr(e))
+
+    日程 = engine.重要日程(set(庫存們 + 自選們), 天數=9)
+    if len(日程):
+        行們 += ["", "📅 下週日程"] + [f"{r['日期']:%m/%d} {r['類型']} {r['股票'] if r['代號'] else ''} {r['說明'][:40]}".replace("  ", " ")
+                                     for _, r in 日程.iterrows()]
+    行們.append("（僅供參考，非投資建議）")
+    推播("\n".join(行們))
+
+
 if __name__ == "__main__":
     模式 = sys.argv[1] if len(sys.argv) > 1 else "daily"
     if 模式 == "test":
@@ -338,5 +474,7 @@ if __name__ == "__main__":
         盤中提醒()
     elif 模式 == "health":
         健康檢查()
+    elif 模式 == "weekly":
+        週報()
     else:
         收盤摘要(強制=模式 == "daily-force")

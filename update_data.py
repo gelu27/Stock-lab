@@ -446,6 +446,77 @@ def 抓借券(天數=60):
         f.unlink()
 
 
+def 抓融資金額(天數=120):
+    """上市融資金額（信用交易統計）→ data/margin_total.csv，網站拿來估算大盤融資維持率。缺的日子往回補。"""
+    檔 = 資料夾 / "margin_total.csv"
+    舊 = pd.read_csv(檔, dtype={"date": str}) if 檔.exists() else pd.DataFrame(columns=["date", "margin_lots", "margin_amount"])
+    有 = set(舊["date"])
+    日們 = sorted(d for d, 狀態 in 讀狀態().items() if 狀態 == "ok")[-天數:]
+    新們 = []
+    for 日 in reversed(日們):
+        if f"{日[:4]}-{日[4:6]}-{日[6:]}" in 有:
+            continue
+        回應 = 證交所(f"https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN?date={日}&selectType=MS&response=json")
+        列們 = {}
+        for _, 欄, 列 in 取得表格(回應 or {}):
+            for x in 列:
+                if x and str(x[0]).startswith(("融資(交易單位)", "融資金額")):
+                    列們[str(x[0])[:4]] = 轉數字(x[-1])
+        if "融資金額" in 列們:
+            新們.append({"date": f"{日[:4]}-{日[4:6]}-{日[6:]}", "margin_lots": 列們.get("融資(交"), "margin_amount": 列們["融資金額"]})
+        else:
+            print(f"融資金額 {日} 沒有資料")
+    if 新們:
+        表 = pd.concat([舊, pd.DataFrame(新們)]).drop_duplicates("date", keep="last").sort_values("date")
+        表.to_csv(檔, index=False)
+        print(f"融資金額完成，新增 {len(新們)} 天")
+
+
+def 抓期貨未平倉(天數=400):
+    """期交所三大法人台指期（大台）未平倉 → data/futures_oi.csv。第一次補近 天數 天，之後只補新的日子。"""
+    檔 = 資料夾 / "futures_oi.csv"
+    舊 = pd.read_csv(檔) if 檔.exists() else pd.DataFrame()
+    有資料 = [d for d, 狀態 in 讀狀態().items() if 狀態 == "ok"]
+    if not 有資料:
+        return
+    今天 = pd.Timestamp(max(有資料)).date()  # 查詢區間超過最新交易日，期交所會回錯誤頁
+    起 = (pd.Timestamp(舊["date"].max()).date() + dt.timedelta(days=1)) if len(舊) else 今天 - dt.timedelta(days=天數)
+    列們 = []
+    while 起 <= 今天:
+        迄 = min(起 + dt.timedelta(days=30), 今天)
+        t = None
+        for 第幾次 in range(3):
+            time.sleep(5 + 10 * 第幾次)
+            try:
+                r = requests.post("https://www.taifex.com.tw/cht/3/futContractsDateDown", headers=標頭, timeout=60,
+                                  data={"queryStartDate": f"{起:%Y/%m/%d}", "queryEndDate": f"{迄:%Y/%m/%d}", "commodityId": "TXF"})
+                r.encoding = "big5"
+                if r.text.lstrip().startswith("日期"):
+                    t = pd.read_csv(io.StringIO(r.text))
+                    break
+                print(f"期貨未平倉 {起}～{迄} 回傳不是資料：{r.text[:120]!r}")
+            except Exception as 錯誤:
+                print(f"期貨未平倉 {起}～{迄} 失敗：{錯誤}")
+        if t is None:
+            break  # 中間缺一段就先停，下次從缺的那天接著補，才不會留下空洞
+        列們.append(t)
+        起 = 迄 + dt.timedelta(days=1)
+    if not 列們:
+        print("期貨未平倉沒有新資料")
+        return
+    t = pd.concat(列們)
+    t = t[t["商品名稱"].astype(str).str.contains("臺股期貨")]
+    t["date"] = pd.to_datetime(t["日期"]).dt.strftime("%Y-%m-%d")
+    身份 = {"外資及陸資": "foreign", "投信": "trust", "自營商": "dealer"}
+    t["who"] = t["身份別"].astype(str).str.strip().map(身份)
+    寬 = t.dropna(subset=["who"]).pivot_table(index="date", columns="who", values="多空未平倉口數淨額", aggfunc="sum")
+    寬.columns = [f"{c}_oi" for c in 寬.columns]
+    寬 = 寬.reset_index()
+    表 = pd.concat([舊, 寬]).drop_duplicates("date", keep="last").sort_values("date")
+    表.to_csv(檔, index=False)
+    print(f"期貨未平倉完成，共 {len(表)} 天（最新 {表['date'].max()}）")
+
+
 def 抓法說會():
     """公開資訊觀測站「法人說明會一覽表」本月與下月 → data/calendar.csv。"""
     今天 = dt.datetime.now(台北時區).date()
@@ -806,7 +877,7 @@ def main():
             print(f"{日} 休市")
 
     if not 參數.skip_latest:
-        for 工作 in (抓分時, 抓興櫃, 抓基本面, 抓匯率, 抓處置注意, 抓借券, 抓法說會):  # 這些出問題不影響主資料庫
+        for 工作 in (抓分時, 抓興櫃, 抓基本面, 抓匯率, 抓處置注意, 抓借券, 抓法說會, 抓融資金額, 抓期貨未平倉):  # 這些出問題不影響主資料庫
             try:
                 工作()
             except Exception as 錯誤:

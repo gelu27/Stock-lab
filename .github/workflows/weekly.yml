@@ -1,0 +1,23 @@
+name: LINE 週報
+
+on:
+  schedule:
+    - cron: "0 2 * * 6"   # 每週六 台灣時間 10:00
+  workflow_dispatch:
+
+jobs:
+  weekly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pandas requests pyarrow
+      - run: python notify.py weekly
+        env:
+          LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          HOLDINGS: ${{ secrets.HOLDINGS }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
