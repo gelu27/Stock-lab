@@ -320,15 +320,44 @@ def 近四季EPS表():
     t = pd.read_csv(f, dtype={"code": str})
     t = t.dropna(subset=["eps"]).sort_values(["code", "quarter"]).copy()
     t["序"] = t["quarter"].str[:4].astype(int) * 4 + t["quarter"].str[-1].astype(int)
-    前 = t.groupby("code")[["序", "eps"]].shift()
+    前 = t.groupby("code")[["序", "eps", "revenue"]].shift()
     第一季 = t["quarter"].str[-1] == "1"
-    t["單季"] = np.where(第一季, t["eps"], np.where(前["序"] == t["序"] - 1, t["eps"] - 前["eps"], np.nan))
+    連續 = 前["序"] == t["序"] - 1
+    t["單季"] = np.where(第一季, t["eps"], np.where(連續, t["eps"] - 前["eps"], np.nan))
+    t["單季營收"] = np.where(第一季, t["revenue"], np.where(連續, t["revenue"] - 前["revenue"], np.nan))
     # 連續四季才加總：往回第 3 筆的季序要剛好差 3
-    t["近四季"] = t.groupby("code")["單季"].transform(lambda s: s.rolling(4).sum())
-    t.loc[t.groupby("code")["序"].shift(3) != t["序"] - 3, "近四季"] = np.nan
+    斷 = t.groupby("code")["序"].shift(3) != t["序"] - 3
+    for 欄, 新欄 in (("單季", "近四季"), ("單季營收", "近四季營收")):
+        t[新欄] = t.groupby("code")[欄].transform(lambda s: s.rolling(4).sum())
+        t.loc[斷, 新欄] = np.nan
     最新 = t.groupby("code").tail(1).set_index("code")
     return pd.DataFrame({"近四季EPS": 最新["近四季"].round(2), "EPS季度": 最新["quarter"],
-                         "單季EPS": 最新["單季"].round(2)})
+                         "單季EPS": 最新["單季"].round(2), "累計EPS": 最新["eps"],
+                         "近四季營收": 最新["近四季營收"]})
+
+
+def EPS試算(營收表, EPS表, 月份):
+    """用月營收試算還沒出財報月份的 EPS：每 1 元營收賺多少 EPS 用近四季（近四季 EPS ÷ 近四季營收），
+    乘上當月營收得「單月 EPS 試算」；今年已公布的累計 EPS 加上之後各月試算得「今年累計 EPS 試算」。
+    金融股沒有營收資料，不試算。2025Q4～2026Q2 回測：和實際單季 EPS 相關 0.74～0.91，EPS ≥ 1 元的股票誤差中位數約 2～4 成。"""
+    寬 = 營收表
+    年, 月 = int(月份[:4]), int(月份[5:])
+    e = EPS表.reindex(寬.index)
+    每元 = (e["近四季EPS"] / e["近四季營收"]).where(e["近四季營收"] > 0)
+    單月 = (寬[月份] * 每元).round(2) if 月份 in 寬 else pd.Series(np.nan, index=寬.index)
+    季年 = e["EPS季度"].str[:4].astype(float)
+    季末月 = e["EPS季度"].str[-1].astype(float) * 3
+    同年 = (季年 == 年) & (季末月 < 月)
+    去年底 = (季年 == 年 - 1) & (季末月 == 12)
+    起 = np.where(同年, 季末月 + 1, 1)
+    底 = np.where(同年, e["累計EPS"], 0.0)
+    今年 = pd.DataFrame({m: 寬[f"{年}-{m:02d}"] if f"{年}-{m:02d}" in 寬 else np.nan for m in range(1, 月 + 1)})
+    月號 = np.arange(1, 月 + 1)
+    範圍 = 月號[None, :] >= 起[:, None]
+    營收和 = np.where(範圍, 今年.fillna(0).values, 0).sum(axis=1)
+    缺 = (範圍 & 今年.isna().values).any(axis=1)
+    累計 = pd.Series(np.where((同年 | 去年底) & ~缺, 底 + 營收和 * 每元, np.nan), index=寬.index).round(2)
+    return pd.DataFrame({"單月EPS試算": 單月, "累計EPS試算": 累計})
 
 
 def 月營收總表(月份=None, 基期下限=10000):
@@ -390,6 +419,10 @@ def 月營收總表(月份=None, 基期下限=10000):
         表["公告日"] = 公.reindex(表.index)
     else:
         表["公告日"] = np.nan
+    if 月份 >= max(寬.columns):  # 只有最新月份才試算（之前的月份財報多半已經出了）
+        表 = 表.join(EPS試算(寬.reindex(本.index), 近四季EPS表(), 月份))
+    else:
+        表["單月EPS試算"] = 表["累計EPS試算"] = np.nan
     表.index.name = "code"
     return 表, 月份們
 
