@@ -6,7 +6,7 @@
 # 資料來源（都是公開、免費的），同一天同一檔依序取第一個抓得到的：
 #   1. 投信官網：野村、統一、群益、復華、第一金可以查歷史日期；富邦、凱基、摩根、台新、永豐、聯博只有最新一天
 #   2. 公開彙整 nctuwanglin.github.io/active-etf（逐家抓投信官網 PCF 後整理），只有最新一天
-#   3. 第二彙整 zdsetf.com（同上，第一個彙整停掉時的備案）
+#   3. 第二彙整 github.com/janeytu/tw-etf-pages 的每日快照（第一個彙整停掉、或國泰、兆豐這種擋 GitHub 的才用）
 #
 # 資料夾結構
 #   data/etf/holdings/2026-10/20261022.csv.gz   當天各主動式 ETF 的持股（etf, code, name, shares, weight, source）
@@ -36,17 +36,18 @@ import requests
 官網 = {
     "00980A": ("野村", "00980A"), "00985A": ("野村", "00985A"), "00999A": ("野村", "00999A"),
     "00981A": ("統一", "49YTW"), "00403A": ("統一", "63YTW"), "00988A": ("統一", "61YTW"),
-    "00982A": ("群益", "399"), "00992A": ("群益", "500"),
+    "00982A": ("群益", "399"), "00992A": ("群益", "500"), "00415A": ("群益", "504"),
+    "00406A": ("中信", "E0038"), "00995A": ("中信", "E0036"),
     "00991A": ("復華", "ETF23"),
     "00994A": ("第一金", "182"), "00408A": ("第一金", "183"),
 }
 # 官網只有最新一天的 ETF：代號 → (投信, 官網基金代碼)
 官網最新 = {
     "00405A": ("富邦", "00405A"), "00407A": ("凱基", "J024"), "00401A": ("摩根", "TW00000401A1"),
-    "00987A": ("台新", "00987A"), "00986A": ("台新", "00986A"), "00410A": ("永豐", "00410A"),
-    "00404A": ("聯博", "TW00000404A5"),
+    "00987A": ("台新", "00987A"), "00410A": ("永豐", "00410A"),
+    "00404A": ("聯博", "TW00000404A5"), "00984A": ("安聯", "E0001"), "00993A": ("安聯", "E0002"),
 }
-第二彙整網址 = "https://zdsetf.com/api/etfs/{}/snapshot"
+第二彙整網址 = "https://raw.githubusercontent.com/janeytu/tw-etf-pages/main/data/snapshots/{}/{}.json"
 
 
 def 數字(值):
@@ -171,7 +172,10 @@ def 第一金(基金, 日期):
                                "Origin": "https://www.fsitc.com.tw", "Referer": "https://www.fsitc.com.tw/FundDetail.aspx"},
                       timeout=30)
     r.raise_for_status()
-    資料 = r.json().get("d")
+    try:
+        資料 = r.json().get("d")
+    except ValueError:  # 假日、還沒公布時回的是網頁
+        return None
     if isinstance(資料, str):
         if 資料.lstrip().startswith("<"):
             return None
@@ -186,6 +190,34 @@ def 第一金(基金, 日期):
 
 
 抓官網["第一金"] = 第一金
+_中信連線 = None
+
+
+def 中信(基金, 日期):
+    global _中信連線
+    if _中信連線 is None:
+        s = requests.Session()
+        s.headers.update({**標頭, "Origin": "https://www.ctbcinvestments.com", "Referer": "https://www.ctbcinvestments.com/"})
+        權杖 = s.post("https://www.ctbcinvestments.com.tw/API/home/AuthToken?token=www.ctbcinvestments.com",
+                    json={"token": "www.ctbcinvestments.com"}, timeout=30).json()["Data"]["token"]
+        _中信連線 = (s, 權杖)
+    s, 權杖 = _中信連線
+    r = s.post("https://www.ctbcinvestments.com.tw/API/etf/ETFHoldingWeight", params={"token": 權杖}, timeout=30,
+               json={"token": 權杖, "FID": 基金, "StartDate": f"{日期.isoformat()}T00:00:00.000Z"})
+    r.raise_for_status()
+    資料 = r.json().get("Data") or {}
+    資產 = (資料.get("FundAssets") or [{}])[0]
+    m = re.fullmatch(r"(\d{4})/(\d\d)/(\d\d)", str(資產.get("資料日期", "")))
+    if not m:
+        return None
+    資料日 = dt.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    列們 = [(x.get("code_"), x.get("name_"), 數字(x.get("qty_")), 數字(x.get("weights_")))
+           for 類 in 資料.get("FundAssetsDetail") or [] if 類.get("Code") == "STOCK" for x in 類.get("Data") or []]
+    return 資料日, 整理持股(列們), {"nav": 數字(資產.get("基金每單位淨值")), "aum": 數字(資產.get("基金淨資產")),
+                               "units": 數字(資產.get("基金在外流通單位數"))}
+
+
+抓官網["中信"] = 中信
 
 
 # ---------- 官網只有最新一天的（網頁表格或 Excel） ----------
@@ -265,7 +297,7 @@ def 摩根(基金):
     基金頭, 基金值, 股頭 = [str(x).strip() for x in 列們[0]], 列們[1], [str(x).strip() for x in 列們[2]]
     基 = dict(zip(基金頭, 基金值))
     估值日 = dt.datetime.strptime(str(基.get("Valuation Date"))[:8], "%Y%m%d").date()
-    資料日 = 估值日 - dt.timedelta(days=3 if 估值日.weekday() == 0 else 1)  # 估值日是下一個交易日
+    資料日 = 前一交易日(估值日)  # 估值日是下一個交易日
     總值 = 數字(基.get("Estimated Total Market Value"))
     i = {k: 股頭.index(k) for k in ("Constituent Ticker", "Constituent Description", "Shares or PAR Amount",
                                      "Market Value Base", "Record Type")}
@@ -278,7 +310,10 @@ def 摩根(基金):
 def 台新(基金):
     網, 文字 = _網頁(f"https://www.tsit.com.tw/ETF/Home/Pcf/{基金}")
     資料日 = _日期(文字, r"(20\d{2})/(\d{1,2})/(\d{1,2})\s*每基數")
-    列們 = [(x[0].split(" ")[0], x[1], 數字(x[2]), 數字(x[3])) for x in _表格列(網, ["股數", "權重"]) if len(x) >= 4]
+    def 代號(文字):
+        段 = 文字.split()
+        return 段[0] if len(段) == 1 or 段[1] == "TT" else " ".join(段[:2])
+    列們 = [(代號(x[0]), x[1], 數字(x[2]), 數字(x[3])) for x in _表格列(網, ["股數", "權重"]) if len(x) >= 4]
     return 資料日, 整理持股(列們), _基金資訊(文字)
 
 
@@ -312,7 +347,30 @@ def 聯博(基金):
     return 資料日, 整理持股(列們), {}
 
 
-抓最新 = {"富邦": 富邦, "凱基": 凱基, "摩根": 摩根, "台新": 台新, "永豐": 永豐, "聯博": 聯博}
+def 安聯(基金):
+    s = requests.Session()
+    s.headers.update({**標頭, "Origin": "https://etf.allianzgi.com.tw", "Accept": "application/json, text/plain, */*",
+                      "Referer": f"https://etf.allianzgi.com.tw/etf-info/{基金}?tab=4"})
+    權杖 = s.get("https://etf.allianzgi.com.tw/webapi/api/AntiForgery/GetAntiForgeryToken", timeout=30).json()["token"]
+    r = s.post("https://etf.allianzgi.com.tw/webapi/api/Fund/GetFundAssets", json={"FundID": 基金},
+               headers={"X-XSRF-TOKEN": 權杖}, timeout=30)
+    r.raise_for_status()
+    資料 = ((r.json() or {}).get("Entries") or {}).get("Data") or {}
+    資產 = 資料.get("FundAsset") or {}
+    if not 資產.get("NavDate"):
+        return None
+    資料日 = dt.datetime.strptime(資產["NavDate"], "%Y/%m/%d").date()
+    列們 = []
+    for t in 資料.get("Table") or []:
+        欄 = [c.get("Name") for c in t.get("Columns") or []]
+        if not str(t.get("TableTitle", "")).startswith("股票") or "股票代號" not in 欄:
+            continue
+        i = {k: 欄.index(k) for k in ("股票代號", "股票名稱", "股數", "權重(%)") if k in 欄}
+        列們 += [(x[i["股票代號"]], x[i["股票名稱"]], 數字(x[i["股數"]]), 數字(x[i["權重(%)"]])) for x in t.get("Rows") or []]
+    return 資料日, 整理持股(列們), {"nav": 數字(資產.get("Nav")), "aum": 數字(資產.get("Aum")), "units": 數字(資產.get("Units"))}
+
+
+抓最新 = {"安聯": 安聯, "富邦": 富邦, "凱基": 凱基, "摩根": 摩根, "台新": 台新, "永豐": 永豐, "聯博": 聯博}
 
 
 def 彙整來源():
@@ -331,20 +389,21 @@ def 彙整來源():
     return 結果
 
 
-def 第二彙整(代號):
-    """zdsetf.com 的單檔快照（第一個彙整沒有、或沒更新時才用）。"""
-    r = requests.get(第二彙整網址.format(代號), headers={**標頭, "Accept": "application/json"}, timeout=30)
-    if r.status_code != 200 or not r.text.lstrip().startswith("{"):
-        return None
-    v = r.json()
-    v = v.get("data") if isinstance(v.get("data"), dict) else v
-    日 = str(v.get("data_date") or v.get("date") or v.get("as_of") or "")[:10]
-    if not re.fullmatch(r"20\d\d-\d\d-\d\d", 日):
-        return None
-    持股 = 整理持股([(x.get("code") or x.get("stock_code"), x.get("name") or x.get("stock_name"),
-                   數字(x.get("shares")), 數字(x.get("weight"))) for x in v.get("holdings") or []])
-    淨值, 規模 = 數字(v.get("nav")), 數字(v.get("aum") or v.get("scale"))
-    return dt.date.fromisoformat(日), 持股, {"nav": 淨值, "aum": 規模, "units": 數字(v.get("units"))}
+def 第二彙整(代號, 今天):
+    """janeytu/tw-etf-pages 每天存的快照（檔名日期各投信意義不同，所以用抓取時間推算持股日）。"""
+    for i in range(-2, 6):
+        日 = 今天 - dt.timedelta(days=i)
+        r = requests.get(第二彙整網址.format(代號, 日.isoformat()), headers=標頭, timeout=30)
+        if r.status_code != 200:
+            continue
+        v = r.json()
+        抓取 = dt.datetime.fromisoformat(str(v.get("fetched_at"))).astimezone(台北時區)
+        # 下午 3 點前抓的是前一個交易日的持股，之後抓的可能是當天的；保守取前一個交易日
+        資料日 = 前一交易日(抓取.date() + dt.timedelta(days=1)) if 抓取.hour >= 18 else 前一交易日(抓取.date())
+        持股 = 整理持股([(x.get("stock_code"), x.get("stock_name"), 數字(x.get("shares")), 數字(x.get("weight_pct")))
+                       for x in v.get("holdings") or [] if not x.get("is_placeholder")])
+        return 資料日, 持股, {}
+    return None
 
 
 # ---------- 存檔 ----------
@@ -402,7 +461,7 @@ def main():
         for d in 日們:
             # 統一、群益、第一金查的是「申購買回清單日」，拿到的是前一個交易日的持股；野村、復華查的就是持股日
             清單日 = 投信 in ("統一", "群益", "第一金")
-            對應日 = d - dt.timedelta(days=3 if d.weekday() == 0 else 1) if 清單日 else d
+            對應日 = 前一交易日(d) if 清單日 else d
             if 對應日 in 已有 and d < 今天 - dt.timedelta(days=3):
                 continue
             if d > 今天 and not 清單日:
@@ -461,7 +520,7 @@ def main():
         if 最近交易日 and 最新日.get(代號) == 最近交易日:
             continue
         try:
-            結果 = 第二彙整(代號)
+            結果 = 第二彙整(代號, 今天)
         except Exception as e:
             print(f"{代號} 第二彙整：{type(e).__name__} {str(e)[:120]}")
             continue
@@ -488,6 +547,17 @@ def 通知斷線():
     print(文字)
     import notify
     notify.推播(文字)
+
+
+def 前一交易日(日期):
+    """日期之前最近的交易日：跳過週末和 data/status 記為休市（closed）的日子。"""
+    休市 = set()
+    for f in (價格資料夾.parent / "status").glob("*.txt"):
+        休市 |= {x.split(",")[0] for x in f.read_text().split() if x.endswith(",closed")}
+    d = 日期 - dt.timedelta(days=1)
+    while d.weekday() >= 5 or f"{d:%Y%m%d}" in 休市:
+        d -= dt.timedelta(days=1)
+    return d
 
 
 def 主動式清單():
