@@ -420,12 +420,12 @@ if st.session_state.get("頁面") not in 頁面們:
 頁面 = st.segmented_control("頁面", 頁面們, key="頁面", label_visibility="collapsed") or 頁面們[0]
 
 
-def 點選表(表, 樣式, key, **參數):
-    """可以點選列的表格：點一下就跳到那檔股票的個股查詢。"""
+def 點選表(表, 樣式, key, 動作=None, **參數):
+    """可以點選列的表格：點一下就跳到那檔股票的個股查詢（或改做 動作(代號)）。"""
     def 點了():
         列們 = st.session_state[key].selection.rows
         if 列們:
-            前往(表.iloc[列們[0]]["代號"])
+            (動作 or 前往)(表.iloc[列們[0]]["代號"])
     if st.session_state.get("精簡表格"):
         留 = [c for c in 表.columns if c in 精簡欄位]
         if len(留) >= 3:
@@ -2575,6 +2575,37 @@ def 色階(樣式, 表, 欄們):
     return 樣式
 
 
+def 營收走勢圖(代號, 月份):
+    """月營收明細點一列：近 24 個月營收（柱）與年增率（線）。"""
+    歷史 = engine.讀取營收歷史(代號)
+    if 歷史 is None or 歷史.empty:
+        return
+    歷史 = 歷史[歷史["month"] <= 月份].copy()
+    歷史["去年"] = 歷史["month"].map(lambda m: f"{int(m[:4]) - 1}{m[4:]}").map(dict(zip(歷史["month"], 歷史["revenue"])))
+    歷史["年增"] = np.where(歷史["去年"] >= 1000, (歷史["revenue"] / 歷史["去年"] - 1) * 100, np.nan)
+    近 = 歷史.tail(24)
+    名 = 市場名稱.get(代號, "")
+    a, b = st.columns([3, 1])
+    a.markdown(f"**📊 {代號} {名}　近 {len(近)} 個月營收**")
+    if b.button("看個股頁 →", key="營收前往個股", width="stretch"):
+        前往(代號)
+        st.rerun()
+    圖 = make_subplots(specs=[[{"secondary_y": True}]])
+    最高 = 歷史["revenue"].iloc[:-1].tail(60).max() if len(歷史) > 1 else np.nan
+    色們 = [紅 if (i == len(近) - 1 and v > 最高) else 青 for i, v in enumerate(近["revenue"])]
+    圖.add_trace(go.Bar(x=近["month"], y=近["revenue"] / 1e5, name="營收(億)", marker_color=色們, opacity=0.75,
+                        hovertemplate="%{x}<br>營收 %{y:,.1f} 億<extra></extra>"), secondary_y=False)
+    圖.add_trace(go.Scatter(x=近["month"], y=近["年增"], name="年增%", mode="lines+markers",
+                            line=dict(color="#FFB020", width=2), hovertemplate="年增 %{y:+.1f}%<extra></extra>"),
+                 secondary_y=True)
+    圖表外觀(圖, 高=320)
+    圖.update_yaxes(title_text="億", secondary_y=False, gridcolor="#151515")
+    圖.update_yaxes(title_text="年增%", secondary_y=True, showgrid=False, zeroline=True, zerolinecolor="#444")
+    圖.update_layout(hovermode="x unified", bargap=0.25)
+    st.plotly_chart(圖, width="stretch", config={"displayModeBar": False})
+    st.caption("最後一根紅色＝創近 5 年新高。黃線是年增率（去年同月營收不到 100 萬時不畫）。")
+
+
 @st.cache_data(max_entries=4, show_spinner=False)
 def _月營收資料(月份, _資料版本, 程式版本):
     表, 月份們 = engine.月營收總表(月份)
@@ -2669,15 +2700,19 @@ if 頁面 == 頁面們[4]:
         排序 = a.selectbox("排序", 欄, key="營收排序") if len(欄) > 1 else 欄[0]
         方向 = b.segmented_control("順序", ["大→小", "小→大"], default="大→小", key="營收順序") or "大→小"
         表 = 表.sort_values(排序, ascending=方向 == "小→大", na_position="last")
-        st.caption(f"符合 {len(表)} 檔　·　點一列看個股")
+        st.caption(f"符合 {len(表)} 檔　·　點一列看近 24 個月營收走勢")
         輸出 = 表.assign(股票=表["代號"] + " " + 表["名稱"], 規模=表["規模"].str[0].replace("n", "—"))[["代號", "股票", "規模"] + 欄]
         百分比 = [c for c in ("月增%", "年增%", "近3月年增%", "累計年增%") if c in 欄]
         樣式 = 色階(輸出.style, 輸出, 欄).format(
             {"市值(億)": "{:,.0f}", "營收(億)": "{:,.1f}", "近四季EPS": "{:,.2f}", "ROE%": "{:,.1f}", "連增月數": "{:.0f}",
              "單月EPS試算": "{:,.2f}", "今年EPS試算": "{:,.2f}", **{c: "{:+,.1f}" for c in 百分比}}, na_rep="—")
-        點選表(輸出, 樣式, "營收表", height=min(35 * (len(輸出) + 1) + 3, 700),
+        def 選了(代號):
+            st.session_state["營收走勢"] = 代號
+        點選表(輸出, 樣式, "營收表", 動作=選了, height=min(35 * (len(輸出) + 1) + 3, 700),
                column_config={"代號": None, "規模": st.column_config.TextColumn("規模", width="small",
                               help="市值排名：大＝前 50、中＝51～150、小＝151～500、微＝500 名以後")})
+        if st.session_state.get("營收走勢"):
+            營收走勢圖(st.session_state["營收走勢"], 月份)
     with 產業頁:
         群 = 範圍[範圍["產業"] != ""].groupby("產業")
         概況 = pd.DataFrame({
