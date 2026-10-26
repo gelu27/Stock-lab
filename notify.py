@@ -4,6 +4,7 @@
 #   python notify.py test    傳一則測試訊息
 #   python notify.py health  檢查各資料來源有沒有正常更新，有問題才通知（休市日不算問題）
 #   python notify.py weekly  每週六週報（大盤、庫存、自選股一週表現，主動式 ETF 一週加減碼，下週日程）
+#   python notify.py brief 盤前|收盤|夜盤  AI 大盤解讀（要設定 GEMINI_API_KEY 或 ANTHROPIC_API_KEY），存到 ai-reports 並傳 LINE
 #
 # 需要在 GitHub 專案 Settings → Secrets and variables → Actions 設定：
 #   LINE_TOKEN    LINE Messaging API 的 Channel access token（必填）
@@ -478,6 +479,40 @@ def 週報():
     推播("\n".join(行們))
 
 
+def 大盤解讀(模式):
+    """AI 大盤解讀：整理網站同一套大盤數據＋即時國際行情，請 AI 寫成白話解讀，存到 ai-reports 分支 briefs.json 並傳 LINE。"""
+    import re
+    import engine
+    設定 = {k: os.environ.get(k, "") for k in ("GEMINI_API_KEY", "GEMINI_MODEL", "ANTHROPIC_API_KEY", "AI_MODEL", "GITHUB_TOKEN")}
+    設定 = {k: v for k, v in 設定.items() if v}
+    設定["AI_REPO"] = 倉庫
+    if not (設定.get("GEMINI_API_KEY") or 設定.get("ANTHROPIC_API_KEY")):
+        print("沒有設定 GEMINI_API_KEY 或 ANTHROPIC_API_KEY，略過 AI 大盤解讀")
+        return
+    if 模式 == "收盤":
+        日期, _ = 最新行情()
+        if 日期.date() != dt.datetime.now(台北).date():
+            print(f"最新資料是 {日期:%m/%d}，今天休市，不寫收盤解讀")
+            return
+    原始 = engine.讀取資料庫(最近天數=130)
+    指標 = engine.計算指標(原始)
+    del 原始
+    try:
+        國際, 期貨 = engine.國際行情(), engine.台指期()
+    except Exception as e:
+        print("國際行情失敗：", repr(e))
+        國際, 期貨 = {}, {}
+    摘要 = engine.大盤摘要(指標, engine.讀取加權指數(), 國際, 期貨)
+    print(摘要)
+    內容, 模型 = engine.AI大盤解讀(摘要, 模式, 設定)
+    try:
+        engine.儲存大盤解讀(設定, 模式, 內容, 模型)
+    except Exception as e:
+        print("存檔失敗：", repr(e))
+    文字 = re.sub(r"^#+\s*", "▍", 內容, flags=re.M).replace("**", "")
+    推播(f"🧠 {模式}大盤解讀（{dt.datetime.now(台北):%m/%d %H:%M}）\n\n{文字}")
+
+
 if __name__ == "__main__":
     模式 = sys.argv[1] if len(sys.argv) > 1 else "daily"
     if 模式 == "test":
@@ -488,5 +523,7 @@ if __name__ == "__main__":
         健康檢查()
     elif 模式 == "weekly":
         週報()
+    elif 模式 == "brief":
+        大盤解讀(sys.argv[2] if len(sys.argv) > 2 else "收盤")
     else:
         收盤摘要(強制=模式 == "daily-force")
