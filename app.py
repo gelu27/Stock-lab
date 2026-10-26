@@ -2108,10 +2108,12 @@ if 頁面 == 頁面們[6]:
             卡們.append(卡片(名, f"{人:,} 人", f"瀏覽 {次:,} 次"))
         卡片格(卡們)
         近 = 日表[日表["日期"] > 今 - pd.Timedelta(days=30)]
-        圖 = go.Figure([go.Bar(x=近["日期"], y=近["瀏覽"], name="瀏覽次數", marker_color=青),
-                        go.Scatter(x=近["日期"], y=近["訪客"], name="訪客人數", mode="lines+markers",
+        日 = 近["日期"].dt.strftime("%m/%d")
+        圖 = go.Figure([go.Bar(x=日, y=近["瀏覽"], name="瀏覽次數", marker_color=青),
+                        go.Scatter(x=日, y=近["訪客"], name="訪客人數", mode="lines+markers",
                                    line=dict(color="#FFC24B", width=2))])
         圖.update_layout(hovermode="x unified", legend=dict(orientation="h", y=1.1))
+        圖.update_xaxes(type="category")
         st.plotly_chart(圖表外觀(圖, 280), width="stretch")
         st.caption("瀏覽＝打開網站的次數（重新整理也算一次）；訪客＝不同網路位址（同一個 Wi-Fi 下的人會算成一位）。"
                    f"都不含你自己登入後的瀏覽（你自己共 {int(日表['自己'].sum()):,} 次）。"
@@ -2129,15 +2131,18 @@ if 頁面 == 頁面們[6]:
         if not 紀錄們:
             continue
         新 = 紀錄們[0]
-        _, 建議 = engine.拆解AI建議(新.get("內容", ""))
-        try:
-            當時 = float(新.get("收盤"))
-        except (TypeError, ValueError):
-            當時 = np.nan
+        建議 = 新.get("建議") or engine.拆解AI建議(新.get("內容", ""))[1] or {}
+        def 數值(v):
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return np.nan
+        當時, 目標 = 數值(新.get("收盤")), 數值(建議.get("目標價合理"))
         現 = 現價["收盤"].get(代號, np.nan)
-        列們.append({"名稱": 現價["名稱"].get(代號, 代號), "報告次數": len(紀錄們), "最新報告": 新.get("時間", ""),
-                    "AI 看法": (建議 or {}).get("看法") or "—", "當時收盤": 當時, "現在股價": 現,
-                    "報告後漲跌%": round((現 / 當時 - 1) * 100, 2) if 當時 else np.nan,
+        列們.append({"股票": f"{代號} {現價['名稱'].get(代號, '')}".strip(), "報告次數": len(紀錄們),
+                    "最新報告": 新.get("時間", ""), "AI 看法": 建議.get("看法") or "—",
+                    "當時收盤": 當時, "現在股價": 現, "報告後漲跌%": round((現 / 當時 - 1) * 100, 2) if 當時 else np.nan,
+                    "AI 目標價": 目標, "距目標價%": round((目標 / 現 - 1) * 100, 1) if pd.notna(目標) and 現 else np.nan,
                     "引擎": 新.get("引擎", ""), "代號": 代號})
     if not 列們:
         st.info("還沒有產生過 AI 報告。")
@@ -2146,9 +2151,12 @@ if 頁面 == 頁面們[6]:
         卡片格([卡片("產生過報告的個股", f"{len(表)} 檔"), 卡片("報告總數", f"{int(表['報告次數'].sum())} 份"),
                卡片("報告後平均漲跌", f"{表['報告後漲跌%'].mean():+.2f}%", "以最新一份報告的收盤價起算",
                     漲跌色(表["報告後漲跌%"].mean()))])
-        點選表(表, 上色(表).format({"報告後漲跌%": "{:+.2f}"}, na_rep="—"), "AI報告表",
-               height=35 * (len(表) + 1) + 3)
-        st.caption("點一下股票可到個股查詢的「🤖 AI 分析」分頁看完整報告。")
+        點選表(表, 上色(表).format({"報告後漲跌%": "{:+.2f}", "距目標價%": "{:+.1f}", "當時收盤": "{:,.0f}",
+                                 "現在股價": "{:,.0f}", "AI 目標價": "{:,.0f}"}, na_rep="—")
+               .map(lambda v: f"color:{漲跌色(v)}", subset=["距目標價%"]), "AI報告表",
+               height=35 * (len(表) + 1) + 3, column_config={"代號": None})
+        st.caption("AI 目標價＝報告裡的「合理目標價」，距目標價% ＝ 目標價比現在股價高（紅）或低（綠）多少。"
+                   "舊版報告沒有目標價，到個股的「🤖 AI 分析」分頁打開一次就會自動補上。點一下股票可到個股查詢。")
 
 st.markdown(f'<div class="sub" style="color:{灰};font-family:JetBrains Mono;font-size:11px;margin-top:30px">'
             '僅供個人研究，不構成投資建議 // DATA: TWSE · TPEx</div>', unsafe_allow_html=True)
