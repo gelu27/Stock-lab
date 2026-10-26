@@ -5,6 +5,7 @@ import datetime as dt
 import hashlib
 import hmac
 import io
+import os
 import threading
 import urllib.parse
 
@@ -2575,9 +2576,14 @@ def 色階(樣式, 表, 欄們):
 
 
 @st.cache_data(max_entries=4, show_spinner=False)
-def 月營收資料(月份, _資料版本):
+def _月營收資料(月份, _資料版本, 程式版本):
     表, 月份們 = engine.月營收總表(月份)
     return 表, 月份們, engine.近四季EPS表()
+
+
+def 月營收資料(月份, 資料版本):
+    """程式（engine.py）更新後要重算，不然網站沿用舊暫存會少欄位。"""
+    return _月營收資料(月份, 資料版本, os.path.getmtime(engine.__file__))
 
 
 if 頁面 == 頁面們[4]:
