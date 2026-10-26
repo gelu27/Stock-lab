@@ -476,7 +476,10 @@ def 抓期貨未平倉(天數=400):
     """期交所三大法人台指期（大台）未平倉 → data/futures_oi.csv。第一次補近 天數 天，之後只補新的日子。"""
     檔 = 資料夾 / "futures_oi.csv"
     舊 = pd.read_csv(檔) if 檔.exists() else pd.DataFrame()
-    今天 = dt.datetime.now(台北時區).date()
+    有資料 = [d for d, 狀態 in 讀狀態().items() if 狀態 == "ok"]
+    if not 有資料:
+        return
+    今天 = pd.Timestamp(max(有資料)).date()  # 查詢區間超過最新交易日，期交所會回錯誤頁
     起 = (pd.Timestamp(舊["date"].max()).date() + dt.timedelta(days=1)) if len(舊) else 今天 - dt.timedelta(days=天數)
     列們 = []
     while 起 <= 今天:
