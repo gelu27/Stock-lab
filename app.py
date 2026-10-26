@@ -1258,17 +1258,25 @@ def 國際行情():
 
 def 族群熱力圖():
     段落("SECTOR // 族群熱力圖")
-    a, b = st.columns(2)
-    期間 = a.segmented_control("漲跌期間", list(engine.族群期間), default="今日", key="族群期間") or "今日"
-    大小 = b.segmented_control("方塊大小", ["市值", "成交值"], default="市值", key="族群大小") or "市值"
-    族群, 個股 = engine.族群資料(今日, 期間, 大小)
+    a, b, c = st.columns(3)
+    分類 = a.segmented_control("分類", ["產業", "概念股"], default="產業", key="族群分類") or "產業"
+    期間 = b.segmented_control("漲跌期間", list(engine.族群期間), default="今日", key="族群期間") or "今日"
+    大小 = c.segmented_control("方塊大小", ["市值", "成交值"], default="市值", key="族群大小") or "市值"
+    來源 = engine.概念展開(今日) if 分類 == "概念股" else 今日
+    if 來源.empty:
+        st.info("還沒有概念股清單（data/concepts.csv）。")
+        return
+    族群, 個股 = engine.族群資料(來源, 期間, 大小)
     界 = {"今日": 5, "5 日": 10, "20 日": 20}[期間]
     熱分頁, 泡分頁 = st.tabs(["熱力圖", "輪動氣泡圖"])
     with 泡分頁:
         輪動氣泡圖(族群, 期間)
     with 熱分頁:
         族群樹圖(族群, 個股, 界, 大小)
-    族群排行(族群, 期間)
+    族群排行(族群, 期間, 來源)
+    if 分類 == "概念股":
+        st.caption("概念股是自己整理的題材清單（data/concepts.csv，約 25 個題材），一檔股票可以同時屬於好幾個概念；"
+                   "想增刪可以直接在 GitHub 編輯這個檔案。")
 
 
 def 輪動氣泡圖(族群, 期間):
@@ -1323,7 +1331,7 @@ def 族群樹圖(族群, 個股, 界, 大小):
                "點一下族群可放大看裡面的股票，點上方路徑可返回。族群漲跌是依" + 大小 + "加權平均。")
 
 
-def 族群排行(族群, 期間):
+def 族群排行(族群, 期間, 來源):
     表 = 族群.reset_index().rename(columns={"產業": "族群"})[
         ["族群", "漲跌幅", "上漲", "下跌", "成交值億", "領漲股"]]
     st.markdown("**族群排行**　點一下族群，下方會列出成分股")
@@ -1335,7 +1343,7 @@ def 族群排行(族群, 期間):
     if 列們:
         族 = 表.iloc[列們[0]]["族群"]
         欄 = engine.族群期間[期間]
-        成分 = 今日[(今日["產業"] == 族) & (今日["收盤"] > 0)].sort_values(欄, ascending=False)
+        成分 = 來源[(來源["產業"] == 族) & (來源["收盤"] > 0)].sort_values(欄, ascending=False)
         成分 = 成分[["名稱", "收盤", "漲跌幅", "5日漲幅", "20日漲幅", "成交張數", "本益比", "代號"]].rename(
             columns={"收盤": "股價"})
         st.markdown(f"**{族}**　{len(成分)} 檔，依{期間}漲跌排序，點股票可看個股查詢")
@@ -1612,7 +1620,138 @@ def 焦點區():
                + "只看成交 500 張以上的股票。點一下可到個股查詢。")
 
 
-首頁區塊 = ["市場", "焦點", "國際", "加權指數", "權值", "資金", "族群", "排行"]
+@st.cache_resource(max_entries=1, show_spinner="計算市場情緒中…")
+def 情緒資料(_資料版本):
+    return engine.情緒指數(指標, 加權)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def 經濟日程資料(_資料版本, 天數=14, 往前=0):
+    市值 = (今日["收盤"] * 今日["發行股數"]).where(~今日["代號"].str.startswith("0"))
+    大型 = tuple(今日.loc[市值.nlargest(50).index, "代號"])
+    表 = engine.經濟日程(天數=天數, 往前=往前, 大型股=大型)
+    表["事件"] = [e.replace(" 除權息", f" {市場名稱.get(e.split()[0], '')} 除權息") if e.endswith(" 除權息") else e
+                for e in 表["事件"]]
+    return 表
+
+
+def 狀態區():
+    段落("REGIME // 市場狀態判讀")
+    try:
+        情緒 = 情緒資料(_版本)
+    except Exception:
+        情緒 = None
+    判 = engine.市場狀態(加權, 今日, 市場每日(_版本), 情緒, 經濟日程資料(_版本, 7))
+    色 = 紅 if "多" in 判["狀態"] else (綠 if "空" in 判["狀態"] else "#EDEDED")
+    卡片格([卡片("目前判讀", 判["狀態"], f"支持 {len(判['支持'])} 項・反向 {len(判['反向'])} 項", 色),
+           卡片("大盤評分", f"{判['大盤']['分數']}", 判["大盤"]["看法"], 分數色(判["大盤"]["分數"])),
+           卡片("資料日期", f"{最新日:%m/%d}", "收盤後規則判讀")])
+    a, b, c = st.columns(3)
+    for 欄, 名, 項, 符 in ((a, "🔴 支持因素", 判["支持"], "▲"), (b, "🟢 反向因素", 判["反向"], "▼"),
+                          (c, "⏳ 待觀察（未來 7 天大事）", 判["待觀察"], "・")):
+        欄.markdown(f"**{名}**" + ("".join(f"\n- {x}" for x in 項) if 項 else "\n- 目前沒有"))
+    st.markdown("**👀 下一步觀察**：" + "；".join(判["下一步"]))
+    st.caption("用規則整理均線、漲跌家數、外資現貨與期貨、融資、情緒指數與重要行事曆，支持比反向多 3 項以上＝偏多、少 3 項以上＝偏空。"
+               "僅供研究參考，不是買賣建議。")
+
+
+def 情緒區():
+    段落("SENTIMENT // 市場情緒：法人 × 散戶 × 國際 × 資金")
+    情 = 情緒資料(_版本)
+    if 情.empty or 情[["散戶", "法人", "資金溫度", "全球"]].dropna(how="all").empty:
+        st.info("情緒指數資料累積中。")
+        return
+    最後 = 情.dropna(how="all", subset=["散戶", "法人", "資金溫度", "全球"]).iloc[-1]
+    前 = 情.shift(5).loc[最後.name] if len(情) > 5 else None
+    卡們 = []
+    for 名 in ("法人", "散戶", "資金溫度", "全球"):
+        v = 最後[名]
+        差 = "" if 前 is None or pd.isna(前[名]) or pd.isna(v) else f"　5 日前 {前[名]:.0f}"
+        卡們.append(卡片(f"{名}情緒" if 名 != "資金溫度" else 名, "—" if pd.isna(v) else f"{v:.0f}",
+                       engine.情緒說明(v) + 差, 紅 if v >= 60 else (綠 if v <= 40 else "#EDEDED") if pd.notna(v) else 灰))
+    象 = engine.情緒象限(最後["散戶"], 最後["法人"])
+    卡們.append(卡片("法人 × 散戶", 象, f"{最後.name:%m/%d}", 青))
+    卡片格(卡們)
+    分頁 = st.tabs(["趨勢", "四象限"])
+    with 分頁[0]:
+        選 = st.pills("情緒指標", ["法人", "散戶", "資金溫度", "全球"], selection_mode="multi", default=["法人", "散戶"],
+                     key="情緒選", label_visibility="collapsed") or ["法人"]
+        近 = 情.tail(180)
+        圖 = make_subplots(specs=[[{"secondary_y": True}]])
+        if "加權" in 近:
+            圖.add_trace(go.Scatter(x=近.index, y=近["加權"], name="加權指數", line=dict(color="#3A3A3A", width=1.4),
+                                    fill="tozeroy", fillcolor="rgba(120,120,120,0.06)"), secondary_y=True)
+        色們 = {"法人": "#4DA3FF", "散戶": "#FFB020", "資金溫度": "#FF00E5", "全球": 青}
+        for 名 in 選:
+            圖.add_trace(go.Scatter(x=近.index, y=近[名], name=名, line=dict(color=色們[名], width=2), connectgaps=False))
+        圖.update_yaxes(range=[0, 100], secondary_y=False)
+        if "加權" in 近:
+            圖.update_yaxes(range=[近["加權"].min() * 0.97, 近["加權"].max() * 1.01], secondary_y=True, showgrid=False)
+        圖.add_hrect(y0=80, y1=100, fillcolor=紅, opacity=0.06, line_width=0)
+        圖.add_hrect(y0=0, y1=20, fillcolor=綠, opacity=0.06, line_width=0)
+        st.plotly_chart(圖表外觀(圖, 360), width="stretch")
+    with 分頁[1]:
+        軌 = 情[["散戶", "法人"]].dropna().tail(20)
+        圖 = go.Figure()
+        for x0, x1, y0, y1, 字, 色 in ((0, 50, 50, 100, "法人吸籌", 紅), (50, 100, 50, 100, "全市場過熱", "#FFB020"),
+                                       (0, 50, 0, 50, "系統恐慌", 綠), (50, 100, 0, 50, "法人出貨", "#9B9B9B")):
+            圖.add_shape(type="rect", x0=x0, x1=x1, y0=y0, y1=y1, fillcolor=色, opacity=0.06, line_width=0)
+            圖.add_annotation(x=(x0 + x1) / 2, y=y1 - 5, text=字, showarrow=False, font=dict(color=色, size=12))
+        if len(軌):
+            圖.add_trace(go.Scatter(x=軌["散戶"], y=軌["法人"], mode="lines+markers", line=dict(color="#555", width=1),
+                                    marker=dict(size=np.linspace(4, 10, len(軌)), color=np.linspace(0, 1, len(軌)),
+                                                colorscale=[[0, "#333"], [1, 青]]),
+                                    text=[f"{d:%m/%d}" for d in 軌.index],
+                                    hovertemplate="%{text}<br>散戶 %{x:.0f}・法人 %{y:.0f}<extra></extra>"))
+            圖.add_trace(go.Scatter(x=[軌["散戶"].iloc[-1]], y=[軌["法人"].iloc[-1]], mode="markers+text",
+                                    marker=dict(size=16, color=青, line=dict(color="#FFF", width=2)),
+                                    text=["今天"], textposition="bottom center", hoverinfo="skip"))
+        圖.update_xaxes(title="散戶情緒（左恐慌 → 右貪婪）", range=[0, 100])
+        圖.update_yaxes(title="法人情緒（下偏空 → 上偏多）", range=[0, 100])
+        圖表外觀(圖, 460).update_layout(showlegend=False, hovermode="closest")
+        st.plotly_chart(圖, width="stretch", config={"displayModeBar": False})
+        st.caption("點越大越新，線條是近 20 個交易日的移動軌跡。左上「法人吸籌」常是較好的研究時機，右上「全市場過熱」要小心追高。")
+    with st.expander("ℹ️ 情緒分數怎麼算？"):
+        st.markdown(
+            "每個項目先看「今天的數字在過去一年排第幾」換成 0～100 分，再把同一類平均：\n"
+            "- **法人**：三大法人近 5 日買賣超金額、外資台指期淨部位\n"
+            "- **散戶**：融資 20 日增減、融資維持率（越高＝散戶越積極）\n"
+            "- **資金溫度**：成交金額比 60 日均量、近 5 日上漲家數比例\n"
+            "- **全球**：VIX 恐慌指數（反向）、費城半導體 20 日漲跌（看前一晚美股）\n\n"
+            "資料不夠的項目直接不算，不會補 0。80 以上＝極度樂觀、20 以下＝極度悲觀；散戶情緒常是反向指標。")
+
+
+def 行事曆區():
+    段落("CALENDAR // 國內外重要行事曆")
+    a, b = st.columns([1, 2])
+    範圍 = a.segmented_control("範圍", ["本週", "下週", "未來 30 天"], default="本週", key="行事曆範圍",
+                             label_visibility="collapsed") or "本週"
+    類別們 = ["經濟數據", "央行會議", "美股財報", "期貨結算", "法說會", "除權息", "月營收", "財報"]
+    選 = b.pills("類別", 類別們, selection_mode="multi", default=類別們, key="行事曆類別", label_visibility="collapsed")
+    今天 = pd.Timestamp(dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).date())
+    週一 = 今天 - pd.Timedelta(days=今天.weekday())
+    表 = 經濟日程資料(_版本, 35, 7)
+    if 範圍 == "本週":
+        表 = 表[(表["日期"] >= 週一) & (表["日期"] < 週一 + pd.Timedelta(days=7))]
+    elif 範圍 == "下週":
+        表 = 表[(表["日期"] >= 週一 + pd.Timedelta(days=7)) & (表["日期"] < 週一 + pd.Timedelta(days=14))]
+    else:
+        表 = 表[(表["日期"] >= 今天) & (表["日期"] <= 今天 + pd.Timedelta(days=30))]
+    表 = 表[表["類別"].isin(選 or 類別們)]
+    if 表.empty:
+        st.caption("這段期間沒有符合的事件（國際經濟數據每天收盤後更新本週與下週）。")
+        return
+    顯示 = 表.assign(日期=表["日期"].map(lambda d: f"{d:%m/%d}（{'一二三四五六日'[d.weekday()]}）"),
+                   重要性=表["重要性"].map({"高": "🔴 高", "中": "🟡 中"}))[["日期", "時間", "類別", "事件", "重要性", "說明"]]
+    st.dataframe(顯示.style.apply(lambda r: ["background:#14080B" if "高" in r["重要性"] else "" for _ in r], axis=1),
+                 hide_index=True, width="stretch", height=min(35 * (len(顯示) + 1) + 3, 520),
+                 column_config={"說明": st.column_config.TextColumn(width="large")})
+    st.caption("時間為台灣時間。國際經濟數據與央行會議來自 ForexFactory（只列美、中、日、歐、英的中高重要性），"
+               "美股財報來自 Nasdaq（只列台股供應鏈相關龍頭，「盤後」＝台灣隔天早上公布），法說會與除權息只列市值前 50 大。"
+               "台灣央行理監事會每季一次（3、6、9、12 月），日期請以央行公告為準。")
+
+
+首頁區塊 = ["市場", "狀態", "焦點", "國際", "加權指數", "權值", "資金", "情緒", "族群", "行事曆", "排行"]
 
 if 頁面 == 頁面們[0]:
     隱藏 = [x for x in st.query_params.get("hide", "").split(",") if x in 首頁區塊]
@@ -1628,6 +1767,8 @@ if 頁面 == 頁面們[0]:
             st.query_params.pop("hide", None)
     if "市場" in 顯示:
         市場卡片()
+    if "狀態" in 顯示:
+        狀態區()
     if "焦點" in 顯示:
         焦點區()
     if "國際" in 顯示:
@@ -1641,8 +1782,12 @@ if 頁面 == 頁面們[0]:
         權值區()
     if "資金" in 顯示:
         資金面區()
+    if "情緒" in 顯示:
+        情緒區()
     if "族群" in 顯示:
         族群熱力圖()
+    if "行事曆" in 顯示:
+        行事曆區()
     if "排行" in 顯示:
         排行區()
 
@@ -1977,6 +2122,9 @@ if 頁面 == 頁面們[2]:
     色 = 漲跌色(r["漲跌"])
 
     段落(f"PROFILE // {代號} {r['名稱']}")
+    概念們 = engine.個股概念(代號)
+    if 概念們:
+        st.caption("🏷️ 概念股：" + "、".join(概念們))
     if 警示表(_版本).get(代號):
         st.warning("⚠️ " + 警示表(_版本)[代號] + "　（處置股要先付款／交券才能下單，注意股代表近期交易異常）")
     if not 可編輯():
