@@ -17,6 +17,9 @@
 #   data/fundamental/dividend.csv          近 6 年除權息紀錄；dividend_upcoming.csv 除權息預告
 #   data/tdcc/20261022.csv.gz             集保每週股權分散（千張大戶、400 張大戶、散戶比例），每週累積
 #   data/fx.csv                           美元兌台幣匯率
+#   data/warning.csv                      處置股、注意股（交易所每日公告）
+#   data/sbl/20261022.csv.gz              借券賣出餘額（上市＋上櫃，單位：張，保留約一年）
+#   data/calendar.csv                     法說會日程（公開資訊觀測站，本月與下月）
 
 import argparse
 import datetime as dt
@@ -377,6 +380,97 @@ def 抓基本面():
     抓集保()
 
 
+def 抓處置注意():
+    """處置股（還在處置期間的）與今天的注意股 → data/warning.csv。"""
+    今天 = dt.datetime.now(台北時區).date()
+    列們 = []
+
+    def 迄日(文字):
+        日們 = re.findall(r"(\d{2,3})/?(\d{2})/?(\d{2})", str(文字).replace("～", "~"))
+        return dt.date(int(日們[-1][0]) + 1911, int(日們[-1][1]), int(日們[-1][2])) if 日們 else None
+
+    for r in 證交所("https://openapi.twse.com.tw/v1/announcement/punish") or []:
+        if r.get("Code"):
+            列們.append({"code": r["Code"].strip(), "type": "處置", "market": "上市", "date": 民國轉西元(r["Date"]),
+                       "end": 迄日(r.get("DispositionPeriod")), "reason": f"{r.get('DispositionMeasures', '')}（{r.get('ReasonsOfDisposition', '')}）"})
+    for r in 櫃買("https://www.tpex.org.tw/openapi/v1/tpex_disposal_information") or []:
+        if r.get("SecuritiesCompanyCode"):
+            列們.append({"code": r["SecuritiesCompanyCode"].strip(), "type": "處置", "market": "上櫃",
+                       "date": 民國轉西元(r["Date"]), "end": 迄日(r.get("DispositionPeriod")),
+                       "reason": r.get("DispositionReasons", "")})
+    for r in 證交所("https://openapi.twse.com.tw/v1/announcement/notice") or []:
+        if r.get("Code"):
+            列們.append({"code": r["Code"].strip(), "type": "注意", "market": "上市", "date": 民國轉西元(r["Date"]),
+                       "end": None, "reason": r.get("TradingInfoForAttention", "")})
+    for r in 櫃買("https://www.tpex.org.tw/openapi/v1/tpex_trading_warning_information") or []:
+        if r.get("SecuritiesCompanyCode"):
+            列們.append({"code": r["SecuritiesCompanyCode"].strip(), "type": "注意", "market": "上櫃",
+                       "date": 民國轉西元(r["Date"]), "end": None, "reason": r.get("TradingInformation", "")})
+    表 = pd.DataFrame(列們, columns=["code", "type", "market", "date", "end", "reason"])
+    表["end"] = pd.to_datetime(表["end"])
+    表 = 表[表["code"].astype(str).str.fullmatch(代號格式) & (表["end"].isna() | (表["end"] >= pd.Timestamp(今天)))]
+    表["reason"] = 表["reason"].astype(str).str.replace(r"\s+", " ", regex=True).str.slice(0, 120)
+    表.to_csv(資料夾 / "warning.csv", index=False)
+    print(f"處置／注意股完成：處置 {(表['type'] == '處置').sum()} 檔、注意 {(表['type'] == '注意').sum()} 檔")
+
+
+def 抓借券(天數=60):
+    """借券賣出餘額（信用額度總量管制餘額表的右半部）→ data/sbl/YYYYMMDD.csv.gz，缺的日子往回補到近 天數 個交易日。"""
+    資料 = 資料夾 / "sbl"
+    資料.mkdir(exist_ok=True)
+    日們 = sorted({f.name[:8] for f in (資料夾 / "prices").glob("*/*.csv.gz")})[-天數:]
+    for 日 in reversed(日們):
+        if (資料 / f"{日}.csv.gz").exists():
+            continue
+        表們 = []
+        for 網址, 下載 in ((f"https://www.twse.com.tw/rwd/zh/marginTrading/TWT93U?date={日}&response=json", 證交所),
+                         (f"https://www.tpex.org.tw/www/zh-tw/margin/sbl?date={日[:4]}%2F{日[4:6]}%2F{日[6:]}&response=json", 櫃買)):
+            回應 = 下載(網址)
+            for _, 欄, 列 in 取得表格(回應 or {}):
+                if len(欄) >= 14:
+                    t = pd.DataFrame([x[:15] for x in 列])
+                    表們.append(pd.DataFrame({"code": t[0].astype(str).str.strip(),
+                                            "sbl_sell": t[9].map(轉數字) / 1000, "sbl_return": t[10].map(轉數字) / 1000,
+                                            "sbl_balance": t[12].map(轉數字) / 1000, "sbl_limit": t[13].map(轉數字) / 1000}))
+                    break
+        if not 表們:
+            print(f"借券 {日} 沒有資料")
+            continue
+        表 = pd.concat(表們)
+        表 = 表[表["code"].str.fullmatch(代號格式)].round(1)
+        存壓縮檔(表, 資料 / f"{日}.csv.gz")
+        print(f"借券 {日} 完成（{len(表)} 檔）")
+    for f in sorted(資料.glob("*.csv.gz"))[:-260]:  # 保留約一年
+        f.unlink()
+
+
+def 抓法說會():
+    """公開資訊觀測站「法人說明會一覽表」本月與下月 → data/calendar.csv。"""
+    今天 = dt.datetime.now(台北時區).date()
+    月們 = [(今天.year, 今天.month), (今天.year + 今天.month // 12, 今天.month % 12 + 1)]
+    列們 = []
+    for 年, 月 in 月們:
+        for 類 in ("sii", "otc"):
+            try:
+                r = requests.post("https://mopsov.twse.com.tw/mops/web/ajax_t100sb02_1", headers=標頭, timeout=30,
+                                  data={"encodeURIComponent": 1, "step": 1, "firstin": 1, "off": 1, "TYPEK": 類,
+                                        "year": str(年 - 1911), "month": f"{月:02d}", "co_id": ""})
+            except requests.RequestException as 錯誤:
+                print(f"法說會 {年}-{月} {類} 失敗：{錯誤}")
+                continue
+            for 列 in re.findall(r"<tr[^>]*>(.*?)</tr>", r.text, re.S | re.I):
+                格 = [re.sub(r"<[^>]+>|&nbsp;|\s+", " ", c).strip()
+                     for c in re.findall(r"<td[^>]*>(.*?)</td>", 列, re.S | re.I)]
+                if len(格) >= 6 and re.fullmatch(r"\d{4}", 格[0]) and re.fullmatch(r"\d{2,3}/\d{2}/\d{2}", 格[2]):
+                    列們.append({"code": 格[0], "name": 格[1], "date": 民國轉西元(格[2].replace("/", "")),
+                               "time": 格[3], "place": 格[4][:60], "summary": 格[5][:120]})
+            time.sleep(3)
+    if 列們:
+        表 = pd.DataFrame(列們).drop_duplicates(["code", "date", "time"]).sort_values(["date", "time", "code"])
+        表.to_csv(資料夾 / "calendar.csv", index=False)
+        print(f"法說會完成，共 {len(表)} 場")
+
+
 def _民國日期(文字):
     """「114年01月02日」「114/01/02」「1140102」都轉成 2025-01-02，看不懂就回傳 None。"""
     數字 = re.sub(r"\D", "", str(文字))
@@ -694,7 +788,7 @@ def main():
             print(f"{日} 休市")
 
     if not 參數.skip_latest:
-        for 工作 in (抓分時, 抓興櫃, 抓基本面, 抓匯率):  # 這些出問題不影響主資料庫
+        for 工作 in (抓分時, 抓興櫃, 抓基本面, 抓匯率, 抓處置注意, 抓借券, 抓法說會):  # 這些出問題不影響主資料庫
             try:
                 工作()
             except Exception as 錯誤:

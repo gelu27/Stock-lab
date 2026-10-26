@@ -1572,6 +1572,12 @@ def 讀取除權息(代號):
     return 歷史, 預告
 
 
+def 讀取全部除權息(預告=False):
+    f = 資料夾 / "fundamental" / ("dividend_upcoming.csv" if 預告 else "dividend.csv")
+    return pd.read_csv(f, dtype={"code": str}, parse_dates=["date"]) if f.exists() else pd.DataFrame(
+        columns=["code", "date", "type", "value", "cash"])
+
+
 def 填息(除權息, 價格):
     """價格：該檔每日 date、收盤（原始價）。每次除權息後，收盤回到除權息前收盤價要幾個交易日。"""
     結果 = []
@@ -2092,3 +2098,87 @@ def 記錄來訪(設定, 自己=False, 訪客碼=""):
 
 def 讀取來訪(設定):
     return 讀取設定檔(設定, "stats.json") or {}
+
+
+# ========== 17. 處置／注意股、借券賣出、重要日程 ==========
+def 讀取警示():
+    """{代號: "⚠️ 處置中（至 10/27）：第二次處置…"}，處置優先於注意。"""
+    f = 資料夾 / "warning.csv"
+    if not f.exists():
+        return {}
+    t = pd.read_csv(f, dtype={"code": str}, parse_dates=["date", "end"])
+    結果 = {}
+    for _, r in t.sort_values("type", key=lambda s: s.map({"處置": 0, "注意": 1})).iterrows():
+        if r["code"] in 結果:
+            continue
+        if r["type"] == "處置":
+            結果[r["code"]] = f"處置中（至 {r['end']:%m/%d}）：{r['reason']}" if pd.notna(r["end"]) else f"處置中：{r['reason']}"
+        else:
+            結果[r["code"]] = f"注意股（{r['date']:%m/%d} 公告）：{r['reason']}"
+    return 結果
+
+
+def 讀取借券(代號, 天數=120):
+    """這檔每天的借券賣出（張）：date、sbl_sell 當日借券賣出、sbl_return 當日還券、sbl_balance 餘額、sbl_limit 可借券賣出限額。"""
+    表們 = []
+    for f in sorted((資料夾 / "sbl").glob("*.csv.gz"))[-天數:]:
+        t = pd.read_csv(f, dtype={"code": str})
+        t = t[t["code"] == 代號]
+        if len(t):
+            表們.append(t.assign(date=pd.Timestamp(f.name[:8])))
+    return pd.concat(表們, ignore_index=True) if 表們 else None
+
+
+def 重要日程(代號們=None, 天數=30, 今天=None):
+    """近 天數 天的法說會（代號們給了就只看這些）＋月營收、財報公布期限。回傳 DataFrame（日期、類型、股票、說明）。"""
+    import datetime as dt
+    今天 = pd.Timestamp(今天 or dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).date())
+    迄 = 今天 + pd.Timedelta(days=天數)
+    列們 = []
+    f = 資料夾 / "calendar.csv"
+    if f.exists():
+        t = pd.read_csv(f, dtype={"code": str}, parse_dates=["date"])
+        t = t[(t["date"] >= 今天) & (t["date"] <= 迄)]
+        if 代號們 is not None:
+            t = t[t["code"].isin(list(代號們))]
+        for _, r in t.iterrows():
+            列們.append({"日期": r["date"], "類型": "法說會", "股票": f"{r['code']} {r['name']}", "代號": r["code"],
+                       "說明": f"{r['time']} {r['place']}｜{r['summary']}"})
+    # 固定期限：每月 10 日前公布上月營收；財報 Q1 5/15、Q2 8/14、Q3 11/14、年報 3/31
+    for 月 in pd.period_range(今天, 迄, freq="M"):
+        日 = pd.Timestamp(月.year, 月.month, 10)
+        if 今天 <= 日 <= 迄:
+            列們.append({"日期": 日, "類型": "月營收", "股票": "全部上市櫃", "代號": "",
+                       "說明": f"{(月 - 1).month} 月營收公布期限（多數公司在這之前陸續公布）"})
+    for 年 in {今天.year, 迄.year}:
+        for 月, 日, 名 in ((3, 31, f"{年 - 1} 年報"), (5, 15, "第一季財報"), (8, 14, "第二季財報"), (11, 14, "第三季財報")):
+            d = pd.Timestamp(年, 月, 日)
+            if 今天 <= d <= 迄:
+                列們.append({"日期": d, "類型": "財報", "股票": "全部上市櫃", "代號": "", "說明": f"{名}公布期限"})
+    return pd.DataFrame(列們, columns=["日期", "類型", "股票", "代號", "說明"]).sort_values("日期", ignore_index=True)
+
+
+def 驗收AI報告(紀錄, 價格):
+    """看報告之後股價先碰到目標價還是停損價。價格：這檔每日 date、high、low、收盤。
+    回傳 {"結果": 達標／停損／進行中／無目標價, "日期", "天數"}。"""
+    建議 = 紀錄.get("建議") or 拆解AI建議(紀錄.get("內容", ""))[1] or {}
+    def 數(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return np.nan
+    目標, 停損, 當時 = 數(建議.get("目標價合理")), 數(建議.get("停損")), 數(紀錄.get("收盤"))
+    起 = pd.Timestamp(紀錄.get("資料日期") or str(紀錄.get("時間", ""))[:10])
+    之後 = 價格[價格["date"] > 起].sort_values("date")
+    結果 = {"結果": "無目標價", "日期": pd.NaT, "天數": len(之後), "目標": 目標, "停損": 停損}
+    if pd.isna(目標) or pd.isna(當時):
+        return 結果
+    向上 = 目標 >= 當時
+    for _, r in 之後.iterrows():
+        碰目標 = r["high"] >= 目標 if 向上 else r["low"] <= 目標
+        碰停損 = pd.notna(停損) and (r["low"] <= 停損 if 向上 else r["high"] >= 停損)
+        if 碰停損:  # 同一天兩個都碰到，保守算停損
+            return dict(結果, 結果="停損", 日期=r["date"])
+        if 碰目標:
+            return dict(結果, 結果="達標", 日期=r["date"])
+    return dict(結果, 結果="進行中")

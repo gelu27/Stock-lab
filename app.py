@@ -266,6 +266,7 @@ with b.popover("🔄 更新"):
             (st.success if 成功 else st.error)(說明)
 今日 = engine.加基本面(指標[指標["date"] == 最新日], engine.讀取基本面())
 市場對照 = dict(zip(今日["代號"], 今日["市場"]))
+市場名稱 = dict(zip(今日["代號"], 今日["名稱"]))
 有籌碼 = "法人買超" in 指標.columns
 
 # ---------- 選股條件（04 選股與 05 組合回測共用，原本在左側欄） ----------
@@ -417,6 +418,30 @@ def 點選表(表, 樣式, key, **參數):
         if 列們:
             前往(表.iloc[列們[0]]["代號"])
     st.dataframe(樣式, key=key, on_select=點了, selection_mode="single-row", hide_index=True, width="stretch", **參數)
+
+@st.cache_data(show_spinner=False)
+def 警示表(_資料版本):
+    return engine.讀取警示()
+
+
+def 標警示(表):
+    """名稱前面加 ⚠️（處置股、注意股）。"""
+    警 = 警示表(_版本)
+    if 警 and "代號" in 表.columns and "名稱" in 表.columns:
+        表 = 表.copy()
+        表["名稱"] = [("⚠️ " + n if c in 警 else n) for c, n in zip(表["代號"], 表["名稱"])]
+    return 表
+
+
+@st.cache_data(ttl=43200, show_spinner=False, max_entries=50)
+def 借券資料(代號, _資料版本):
+    return engine.讀取借券(代號)
+
+
+@st.cache_data(show_spinner=False)
+def 日程資料(代號們, _資料版本, 天數=30):
+    return engine.重要日程(代號們, 天數)
+
 
 @st.cache_data(ttl=3600, show_spinner=False, max_entries=100)
 def 抓新聞(代號, 名稱):
@@ -736,6 +761,10 @@ def 我的庫存():
 
     持股 = pd.read_csv(io.StringIO(str(設定["holdings"]).strip()), dtype={"代號": str})
     庫存區(持股)
+    try:
+        庫存歷史區(持股)
+    except Exception as e:
+        st.caption(f"庫存走勢暫時算不出來（{type(e).__name__}）")
     if 密碼:
         a, b = st.columns([4, 1])
         a.caption("已記住登入（網址裡的 k=… 就是通行證，請勿分享登入後的網址）。可把這個網址加入書籤或主畫面。")
@@ -743,6 +772,50 @@ def 我的庫存():
             st.session_state["已解鎖"] = False
             st.query_params.pop("k", None)
             st.rerun()
+
+
+def 庫存歷史區(持股):
+    """以目前持股回推近一年的市值走勢，加上這段期間領到的股利（以目前股數估算）。"""
+    股數 = 持股.assign(代號=持股["代號"].astype(str).str.strip()).groupby("代號")["股數"].sum()
+    價 = 指標[指標["代號"].isin(股數.index)].pivot_table(index="date", columns="代號", values="收盤")
+    價 = 價[價.index >= 價.index.max() - pd.Timedelta(days=365)].ffill()
+    有 = [c for c in 股數.index if c in 價.columns and 價[c].notna().any()]
+    if not 有:
+        return
+    價 = 價[有].bfill()
+    市值 = (價 * 股數[有]).sum(axis=1)
+    除 = engine.讀取全部除權息()
+    除 = 除[除["code"].isin(有) & (除["date"] > 價.index.min()) & (除["date"] <= 價.index.max())]
+    除 = 除.assign(金額=除["value"] * 除["code"].map(股數))
+    累積股利 = 除.groupby("date")["金額"].sum().reindex(市值.index, fill_value=0).cumsum()
+    段落("HISTORY // 庫存市值走勢（以目前持股回推一年）")
+    基準 = 指標[指標["代號"] == "0050"].set_index("date")["還原價"].reindex(市值.index).ffill()
+    卡片格([
+        卡片("一年前市值", f"{市值.iloc[0]:,.0f}", f"{市值.index[0]:%Y/%m/%d}"),
+        卡片("現在市值", f"{市值.iloc[-1]:,.0f}", f"{(市值.iloc[-1] / 市值.iloc[0] - 1) * 100:+.1f}%",
+             漲跌色(市值.iloc[-1] - 市值.iloc[0])),
+        卡片("期間股利（估）", f"{累積股利.iloc[-1]:,.0f}", f"{len(除)} 次除權息，含股票股利換算"),
+        卡片("含息報酬", f"{((市值.iloc[-1] + 累積股利.iloc[-1]) / 市值.iloc[0] - 1) * 100:+.1f}%",
+             f"同期 0050 {(基準.iloc[-1] / 基準.iloc[0] - 1) * 100:+.1f}%" if 基準.notna().all() else ""),
+    ])
+    圖 = go.Figure([go.Scatter(x=市值.index, y=市值 + 累積股利, name="市值＋領到的股利", line=dict(color="#FFC24B", width=1.4)),
+                    go.Scatter(x=市值.index, y=市值, name="股票市值", line=dict(color=青, width=2))])
+    if 基準.notna().all():
+        圖.add_trace(go.Scatter(x=市值.index, y=基準 / 基準.iloc[0] * 市值.iloc[0], name="同金額買 0050（含息）",
+                                line=dict(color=灰, width=1, dash="dot")))
+    圖.update_layout(hovermode="x unified", legend=dict(orientation="h", y=1.12))
+    圖.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+    st.plotly_chart(圖表外觀(圖, 300), width="stretch")
+    預 = engine.讀取全部除權息(預告=True)
+    預 = 預[預["code"].isin(股數.index) & (預["date"] >= pd.Timestamp.now().normalize())]
+    if len(預):
+        st.markdown("**📅 即將除權息**　" + "；".join(
+            f"{r['date']:%m/%d} {市場名稱.get(r['code'], r['code'])} 除{r['type']}"
+            + (f"，現金 {r['cash']:g} 元 × {股數[r['code']]:,.0f} 股 ≈ {r['cash'] * 股數[r['code']]:,.0f} 元" if pd.notna(r["cash"]) and r["cash"] else "")
+            for _, r in 預.sort_values("date").iterrows()))
+    沒 = [c for c in 股數.index if c not in 有]
+    st.caption("假設這一年都持有「目前的股數」回推，不是實際的買賣紀錄；股利以除權息日的權值＋息值 × 目前股數估算。"
+               + (f"沒有歷史股價、未計入：{'、'.join(沒)}" if 沒 else ""))
 
 
 @st.fragment(run_every=30 if engine.盤中時間() else None)
@@ -770,6 +843,7 @@ def 庫存區(持股):
                               default="今日損益", key="庫存排序")
     方向 = b.segmented_control("順序", ["大→小", "小→大"], default="大→小", key="庫存順序")
     明細 = 明細.sort_values(依據 or "今日損益", ascending=(方向 == "小→大"), na_position="last")
+    明細 = 標警示(明細)
     點選表(明細, 上色(明細), "庫存表", height=35 * (len(明細) + 1) + 3)
     if st.session_state.get("要跳轉"):
         st.rerun(scope="app")  # 這裡在自動更新區塊裡，要整頁重跑才會切到個股查詢
@@ -985,6 +1059,7 @@ def 自選表(代號們):
     顯示 = 表[["名稱", "收盤", "漲跌幅", "加入日期", "加入價", "加入至今%", "提醒", "成交張數", "5日漲幅", "20日漲幅",
               "法人買超", "本益比", "殖利率", "代號"]]
     顯示 = 顯示.rename(columns={"收盤": "股價", "法人買超": "法人(張)"})
+    顯示 = 標警示(顯示)
     點選表(顯示, 上色(顯示), "自選表", height=35 * (len(顯示) + 1) + 3)
     if st.session_state.get("要跳轉"):
         st.rerun(scope="app")
@@ -1194,6 +1269,21 @@ if 頁面 == 頁面們[1]:
         自選股區()
     else:
         st.caption("自選股要先輸入上面的密碼解鎖才會顯示。")
+    if 可編輯():
+        關注 = tuple(sorted(set(庫存代號() or []) | {c for v in 自選股清單().values() for c in v}))
+        段落("CALENDAR // 近 30 天重要日程（庫存、自選股）")
+        日程 = 日程資料(關注, _版本)
+        if 日程.empty:
+            st.caption("近 30 天沒有庫存、自選股的法說會。")
+        else:
+            st.dataframe(日程.assign(日期=日程["日期"].dt.strftime("%m/%d（%a）"))[["日期", "類型", "股票", "說明"]],
+                         hide_index=True, width="stretch")
+        警 = {c: 警示表(_版本)[c] for c in 關注 if c in 警示表(_版本)}
+        if 警:
+            段落("WARNING // 處置股、注意股")
+            for c, t in 警.items():
+                st.warning(f"{c} {市場名稱.get(c, '')}：{t}")
+        st.caption("法說會資料：公開資訊觀測站（本月、下月）。每天收盤摘要的 LINE 也會提醒明後天的法說會。")
 
 # ---------- 04 選股 ----------
 if 頁面 == 頁面們[3]:
@@ -1424,6 +1514,8 @@ if 頁面 == 頁面們[2]:
     色 = 漲跌色(r["漲跌"])
 
     段落(f"PROFILE // {代號} {r['名稱']}")
+    if 警示表(_版本).get(代號):
+        st.warning("⚠️ " + 警示表(_版本)[代號] + "　（處置股要先付款／交券才能下單，注意股代表近期交易異常）")
     if not 可編輯():
         with st.popover("☆ 加入自選股"):
             輸入 = st.text_input("自選股有密碼保護，請輸入密碼", type="password", key="自選解鎖")
@@ -1482,6 +1574,10 @@ if 頁面 == 頁面們[2]:
     ])
     分頁 = st.tabs(["📋 總覽", "💰 籌碼", "📊 基本面", "📈 技術", "🤖 AI 分析"])
     with 分頁[0]:
+        法 = 日程資料((代號,), _版本, 60)
+        法 = 法[法["類型"] == "法說會"]
+        if len(法):
+            st.info("📅 " + "；".join(f"{x['日期']:%m/%d} 法說會 {x['說明'][:60]}" for _, x in 法.iterrows()))
         段落("SCORE // 每日評分（大盤、技術、籌碼、基本面規則計分，僅供參考）")
         評分卡片(代號)
 
@@ -1584,6 +1680,32 @@ if 頁面 == 頁面們[2]:
                                     opacity=0.6), secondary_y=True)
                 st.plotly_chart(圖表外觀(圖, 260), width="stretch")
             st.caption("集保結算所每週五公布。大戶比例上升、股東人數下降，通常代表籌碼往大戶集中（表中紅色＝籌碼變集中）。")
+
+        借 = 借券資料(代號, _版本)
+        if 借 is not None and len(借):
+            段落("SBL // 借券賣出（空方籌碼，張）")
+            最 = 借.iloc[-1]
+            前5 = 借.iloc[-6]["sbl_balance"] if len(借) > 5 else np.nan
+            前20 = 借.iloc[-21]["sbl_balance"] if len(借) > 20 else np.nan
+            近5賣 = 借.tail(5)["sbl_sell"].sum()
+            卡片格([
+                卡片(f"借券賣出餘額 · {最['date']:%m/%d}", f"{最['sbl_balance']:,.0f}",
+                     f"佔發行 {數(最['sbl_balance'] * 1000 / 股數 * 100 if pd.notna(股數) else np.nan, '{:.2f}', '%')}"),
+                卡片("較 5 日前", 數(最["sbl_balance"] - 前5, "{:+,.0f}"), "", 漲跌色(-(最["sbl_balance"] - 前5) if pd.notna(前5) else 0)),
+                卡片("較 20 日前", 數(最["sbl_balance"] - 前20, "{:+,.0f}"), "", 漲跌色(-(最["sbl_balance"] - 前20) if pd.notna(前20) else 0)),
+                卡片("近 5 日借券賣出", f"{近5賣:,.0f}", f"約 {近5賣 / max(r['5日均量'] * 5, 1) * 100:.1f}% 成交量"),
+            ])
+            if len(借) >= 5:
+                價 = 個股全史(代號, _版本)[["date", "收盤"]]
+                價 = 價[價["date"] >= 借["date"].min()]
+                圖 = make_subplots(specs=[[{"secondary_y": True}]])
+                圖.add_trace(go.Bar(x=借["date"], y=借["sbl_balance"], name="借券賣出餘額(張)", marker_color="#5A3A8C"))
+                圖.add_trace(go.Scatter(x=價["date"], y=價["收盤"], name="股價", line=dict(color="#FFFFFF", width=1.4)),
+                             secondary_y=True)
+                圖.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+                st.plotly_chart(圖表外觀(圖, 260), width="stretch")
+            st.caption("借券賣出＝法人借股票來放空。餘額增加代表看空的人變多（綠）；減少代表空方回補（紅），"
+                       "股價上漲時空方回補會加大漲勢。")
 
     with 分頁[2]:
         段落("FUNDAMENTAL // 基本面")
@@ -2126,11 +2248,19 @@ if 頁面 == 頁面們[6]:
     except Exception as e:
         報告們 = {}
         st.caption(f"AI 報告暫時讀不到（{type(e).__name__}）")
-    列們 = []
+    列們, 驗收們 = [], []
     現價 = 今日.set_index("代號")
     for 代號, 紀錄們 in 報告們.items():
         if not 紀錄們:
             continue
+        價格 = 指標.loc[指標["代號"] == 代號, ["date", "high", "low", "收盤"]]
+        for 紀 in 紀錄們:
+            驗 = engine.驗收AI報告(紀, 價格)
+            驗收們.append(dict(驗, 代號=代號, 看法=(紀.get("建議") or engine.拆解AI建議(紀.get("內容", ""))[1] or {}).get("看法")))
+        驗 = engine.驗收AI報告(紀錄們[0], 價格)
+        驗收文字 = {"達標": f"🎯 達標 {驗['日期']:%m/%d}" if pd.notna(驗["日期"]) else "🎯 達標",
+                    "停損": f"🛑 停損 {驗['日期']:%m/%d}" if pd.notna(驗["日期"]) else "🛑 停損",
+                    "進行中": f"⏳ 進行中（{驗['天數']} 天）", "無目標價": "—"}[驗["結果"]]
         新 = 紀錄們[0]
         建議 = 新.get("建議") or engine.拆解AI建議(新.get("內容", ""))[1] or {}
         def 數值(v):
@@ -2144,19 +2274,27 @@ if 頁面 == 頁面們[6]:
                     "最新報告": 新.get("時間", ""), "AI 看法": 建議.get("看法") or "—",
                     "當時收盤": 當時, "現在股價": 現, "報告後漲跌%": round((現 / 當時 - 1) * 100, 2) if 當時 else np.nan,
                     "AI 目標價": 目標, "距目標價%": round((目標 / 現 - 1) * 100, 1) if pd.notna(目標) and 現 else np.nan,
-                    "引擎": 新.get("引擎", ""), "代號": 代號})
+                    "驗收": 驗收文字, "停損價": 驗["停損"], "引擎": 新.get("引擎", ""), "代號": 代號})
     if not 列們:
         st.info("還沒有產生過 AI 報告。")
     else:
         表 = pd.DataFrame(列們).sort_values("最新報告", ascending=False)
-        卡片格([卡片("產生過報告的個股", f"{len(表)} 檔"), 卡片("報告總數", f"{int(表['報告次數'].sum())} 份"),
+        驗 = pd.DataFrame(驗收們)
+        達, 損 = int((驗["結果"] == "達標").sum()), int((驗["結果"] == "停損").sum())
+        卡片格([卡片("產生過報告的個股", f"{len(表)} 檔", f"報告共 {int(表['報告次數'].sum())} 份"),
+               卡片("AI 命中率", f"{達 / (達 + 損) * 100:.0f}%" if 達 + 損 else "—",
+                    f"已結案 {達 + 損} 份：達標 {達}、停損 {損}；進行中 {int((驗['結果'] == '進行中').sum())}",
+                    紅 if 達 + 損 and 達 >= 損 else (綠 if 達 + 損 else "#EDEDED")),
                卡片("報告後平均漲跌", f"{表['報告後漲跌%'].mean():+.2f}%", "以最新一份報告的收盤價起算",
                     漲跌色(表["報告後漲跌%"].mean()))])
         點選表(表, 上色(表).format({"報告後漲跌%": "{:+.2f}", "距目標價%": "{:+.1f}", "當時收盤": "{:,.0f}",
-                                 "現在股價": "{:,.0f}", "AI 目標價": "{:,.0f}"}, na_rep="—")
+                                 "現在股價": "{:,.0f}", "AI 目標價": "{:,.0f}",
+                                 "停損價": "{:,.0f}"}, na_rep="—")
                .map(lambda v: f"color:{漲跌色(v)}", subset=["距目標價%"]), "AI報告表",
                height=35 * (len(表) + 1) + 3, column_config={"代號": None})
-        st.caption("AI 目標價＝報告裡的「合理目標價」，距目標價% ＝ 目標價比現在股價高（紅）或低（綠）多少。"
+        st.caption("驗收：報告之後股價先碰到目標價＝🎯達標、先碰到停損價＝🛑停損（同一天都碰到算停損），還沒碰到＝⏳進行中；"
+                   "命中率＝達標 ÷（達標＋停損），統計所有報告（含舊的）。"
+                   "AI 目標價＝報告裡的「合理目標價」，距目標價% ＝ 目標價比現在股價高（紅）或低（綠）多少。"
                    "舊版報告沒有目標價，到個股的「🤖 AI 分析」分頁打開一次就會自動補上。點一下股票可到個股查詢。")
 
 st.markdown(f'<div class="sub" style="color:{灰};font-family:JetBrains Mono;font-size:11px;margin-top:30px">'
