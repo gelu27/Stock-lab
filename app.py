@@ -49,7 +49,7 @@ h1, h2, h3 {{ font-family: 'Space Grotesk', 'Noto Sans TC', sans-serif !importan
 .hero .kicker {{ font-family: 'JetBrains Mono'; color: {青}; font-size: 12px; letter-spacing: .3em; }}
 .hero .title {{ font-size: clamp(34px, 6vw, 72px); font-weight: 900; line-height: .95; margin: 8px 0 6px; }}
 .hero .title span {{ color: {青}; }}
-.hero .sub {{ font-family: 'JetBrains Mono'; color: {灰}; font-size: 12px; }}
+.hero .sub {{ font-family: 'JetBrains Mono'; color: {灰}; font-size: 12px; margin-top: 8px; }}
 .card {{ border: 1px solid #1E1E1E; padding: 14px 16px; background: #070707; height: 100%; }}
 .card .k {{ font-family: 'JetBrains Mono'; font-size: 11px; color: {灰}; letter-spacing: .2em; text-transform: uppercase; }}
 .card .v {{ font-family: 'JetBrains Mono'; font-size: 28px; font-weight: 700; margin-top: 4px; }}
@@ -87,6 +87,44 @@ h1, h2, h3 {{ font-family: 'Space Grotesk', 'Noto Sans TC', sans-serif !importan
 .ticker span {{ font-family: 'JetBrains Mono', 'Noto Sans TC', monospace; font-size: 13px; margin-right: 30px; }}
 .ticker span b {{ color: #9A9A9A; font-weight: 400; margin-right: 6px; font-family: 'Noto Sans TC', sans-serif; }}
 @keyframes tk {{ from {{ transform: translateX(0); }} to {{ transform: translateX(-50%); }} }}
+/* 全站一致：直角、提示框、表頭不換行 */
+.stMain {{ scroll-behavior: smooth; }}
+[data-testid="stExpander"] details, [data-testid="stPopoverBody"], [data-baseweb="select"] > div,
+[data-testid="stTextInput"] input, [data-testid="stNumberInput"] input {{ border-radius: 0 !important; }}
+[data-testid="stExpander"] details {{ border-color: #1E1E1E; background: #050505; }}
+[data-testid="stAlert"] > div {{ border-radius: 0; }}
+[data-testid="stAlertContainer"] {{ border-radius: 0; background: #0A0A0A; border-left: 3px solid {青}; }}
+.rank th {{ white-space: nowrap; }}
+[data-testid="stCaptionContainer"] {{ color: #8A8A8A; }}
+/* 首頁快速跳轉列與回到頂端 */
+.jump {{ display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }}
+.jump a {{ font-family: 'Noto Sans TC', sans-serif; font-size: 13px; color: #BDBDBD; text-decoration: none;
+    border: 1px solid #1E1E1E; padding: 3px 10px; background: #070707; }}
+.jump a:hover {{ border-color: {青}; color: {青}; }}
+.anchor {{ position: relative; top: -70px; height: 0; }}
+[data-testid="stElementContainer"]:has(.anchor) {{ margin-bottom: -1rem; }}
+.totop {{ position: fixed; right: 16px; bottom: 18px; z-index: 999; width: 40px; height: 40px; line-height: 38px;
+    text-align: center; border: 1px solid {青}; background: rgba(0,0,0,.85); color: {青} !important;
+    text-decoration: none !important; font-family: 'JetBrains Mono'; font-size: 18px; }}
+.totop:hover {{ background: {青}; color: #000 !important; }}
+/* 手機：頁首縮小、頁面選單改成一排可左右滑 */
+@media (max-width: 640px) {{
+    .hero {{ padding: 16px 16px 12px; margin-bottom: 10px; }}
+    .hero::after {{ width: 120px; height: 120px; right: -40px; top: -40px; }}
+    .hero .kicker {{ font-size: 10px; letter-spacing: .15em; }}
+    .hero .title {{ font-size: 34px; margin: 4px 0 0; }}
+    .hero .sub, .hide-m {{ display: none; }}
+    .st-key-nav [data-testid="stButtonGroup"] > div {{ display: grid !important; grid-template-columns: repeat(3, 1fr); }}
+    .st-key-nav button {{ width: 100%; margin: 0 !important; border-radius: 0 !important; white-space: nowrap;
+        padding: 2px 4px; min-height: 32px; }}
+    .st-key-nav button p {{ font-size: 13px; }}
+    .jump {{ flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }}
+    .jump a {{ flex: 0 0 auto; }}
+    .sec {{ letter-spacing: .15em; margin-top: 18px; }}
+    .st-key-toolbar [data-testid="stHorizontalBlock"] {{ flex-wrap: wrap; gap: 4px 16px; }}
+    .st-key-toolbar [data-testid="stColumn"] {{ width: auto !important; flex: 0 0 auto !important; min-width: 0 !important; }}
+    .st-key-toolbar [data-testid="stColumn"]:first-child {{ flex: 1 0 100% !important; }}
+}}
 </style>
 """, unsafe_allow_html=True)
 
@@ -94,11 +132,6 @@ h1, h2, h3 {{ font-family: 'Space Grotesk', 'Noto Sans TC', sans-serif !importan
 def 卡片(標題, 數值, 小字="", 顏色="#EDEDED"):
     return (f'<div class="card"><div class="k">{標題}</div>'
             f'<div class="v" style="color:{顏色}">{數值}</div><div class="d" style="color:{顏色}">{小字}</div></div>')
-
-
-def 卡片列(卡們):
-    for 欄, 卡 in zip(st.columns(len(卡們)), 卡們):
-        欄.markdown(卡, unsafe_allow_html=True)
 
 
 def 卡片格(卡們):
@@ -181,7 +214,8 @@ def 段落(文字):
 def 圖表外觀(圖, 高=380):
     圖.update_layout(
         template="plotly_dark", height=高, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=10, r=10, t=10, b=10), font=dict(family="JetBrains Mono", size=11),
+        margin=dict(l=10, r=10, t=10, b=10), font=dict(family="JetBrains Mono, Noto Sans TC, sans-serif", size=11),
+        hoverlabel=dict(bgcolor="#0A0A0A", bordercolor="#333", font=dict(family="JetBrains Mono, Noto Sans TC")),
         legend=dict(orientation="h", y=1.08, x=0), hovermode="x unified",
         xaxis=dict(gridcolor="#151515"), yaxis=dict(gridcolor="#151515"),
     )
@@ -238,7 +272,7 @@ if _目前版本()["版本"] not in (None, _版本):
 _目前版本()["版本"] = _版本
 指標, 加權 = 載入(_版本)
 
-st.markdown("""<div class="hero"><div class="kicker">TAIWAN STOCK EXCHANGE // PERSONAL LAB</div>
+st.markdown("""<div id="top"></div><a class="totop" href="#top" target="_self" title="回到頂端">↑</a><div class="hero"><div class="kicker">TAIWAN STOCK EXCHANGE // PERSONAL LAB</div>
 <div class="title">台股<span>觀測</span>實驗室</div>
 <div class="sub">SCREEN · BACKTEST · OBSERVE — 資料來源：臺灣證券交易所、證券櫃檯買賣中心</div></div>""",
             unsafe_allow_html=True)
@@ -260,8 +294,9 @@ if "精簡表格" not in st.session_state:  # 手機預設精簡
         st.session_state["精簡表格"] = "Mobile" in st.context.headers.get("User-Agent", "")
     except Exception:
         st.session_state["精簡表格"] = False
-a, c, b = st.columns([3, 1, 1])
-a.caption(f"📅 資料日期 {最新日:%Y/%m/%d}　·　資料庫最後更新 {最後更新()}（每個交易日約 18:00 自動更新）")
+a, c, b = st.container(key="toolbar").columns([3, 1, 1], vertical_alignment="center")
+a.caption(f"📅 資料日期 {最新日:%Y/%m/%d}　·　資料庫最後更新 {最後更新()}"
+          '<span class="hide-m">（每個交易日約 18:00 自動更新）</span>', unsafe_allow_html=True)
 c.toggle("📱 精簡表格", key="精簡表格", help="表格只留名稱、股價、漲跌等重點欄位，手機不用左右滑")
 with b.popover("🔄 更新"):
     st.markdown("**重新載入**：資料庫已經更新、但網站顯示的還是舊資料時按。")
@@ -478,7 +513,8 @@ def _搜尋跳轉():
 if st.session_state.get("頁面") != 頁面們[2]:  # 個股查詢頁本身就有搜尋框
     st.selectbox("搜尋股票", 股票選項, index=None, key="全站搜尋", on_change=_搜尋跳轉, label_visibility="collapsed",
                  placeholder="🔍 輸入代號或名稱，直接跳到個股查詢（例如 2330、台積電）")
-頁面 = st.segmented_control("頁面", 頁面們, key="頁面", label_visibility="collapsed") or 頁面們[0]
+with st.container(key="nav"):
+    頁面 = st.segmented_control("頁面", 頁面們, key="頁面", label_visibility="collapsed") or 頁面們[0]
 
 
 def 點選表(表, 樣式, key, 動作=None, **參數):
@@ -996,7 +1032,7 @@ def 庫存區(持股):
     if 即時 is not None and not 即時.empty:
         日期 += f" {即時['time'].dropna().max()} 即時"
     段落(f"PORTFOLIO // 我的庫存　{日期}")
-    卡片列([
+    卡片格([
         卡片(f"今日損益 · {日期}", f"{合計['今日損益']:+,.0f}", f"{合計['今日損益(%)']:+.2f}%",
            漲跌色(合計["今日損益"])),
         卡片("累積損益", f"{合計['累積損益']:+,.0f}", f"{合計['累積損益(%)']:+.2f}%", 漲跌色(合計["累積損益"])),
@@ -1653,10 +1689,13 @@ def 權值區():
     圖表 = 圖表[~圖表.index.duplicated()]
     圖 = go.Figure(go.Bar(x=圖表["貢獻點數"], y=圖表["名稱"] + " " + 圖表["代號"], orientation="h",
                           marker_color=[紅 if v > 0 else 綠 for v in 圖表["貢獻點數"]],
-                          text=圖表["貢獻點數"].map("{:+.1f}".format), textposition="outside",
+                          text=圖表["貢獻點數"].map("{:+.1f}".format), textposition="outside", cliponaxis=False,
                           customdata=np.stack([圖表["幅度"], 圖表["權重"]], axis=1),
                           hovertemplate="%{y}<br>貢獻 %{x:+.1f} 點<br>漲跌 %{customdata[0]:+.2f}%<br>權重 %{customdata[1]:.2f}%<extra></extra>"))
     圖.update_yaxes(type="category", gridcolor="#151515")
+    低, 高 = min(圖表["貢獻點數"].min(), 0), max(圖表["貢獻點數"].max(), 0)
+    留白 = (高 - 低) * 0.12 or 1  # 兩端留空間給數字，避免被切掉
+    圖.update_xaxes(range=[低 - 留白, 高 + 留白])
     圖表外觀(圖, 30 * len(圖表) + 40).update_layout(hovermode="closest", showlegend=False)
     st.plotly_chart(圖, width="stretch", config={"displayModeBar": False})
     族 = 表[表["產業"].fillna("") != ""].groupby("產業")["貢獻點數"].sum().sort_values()
@@ -1933,35 +1972,21 @@ if 頁面 == 頁面們[0]:
             st.query_params["hide"] = 新隱藏
         else:
             st.query_params.pop("hide", None)
-    if "市場" in 顯示:
-        市場卡片()
-    if "狀態" in 顯示:
-        狀態區()
-    if "AI解讀" in 顯示:
-        AI解讀區()
-    if "焦點" in 顯示:
-        焦點區()
-    if "國際" in 顯示:
+    def _國際():
         try:
             國際行情()
         except Exception:
             st.caption("國際行情暫時無法顯示。")
-    if "連動" in 顯示:
-        連動區()
-    if "加權指數" in 顯示 and 加權 is not None and len(加權) > 1:
-        加權圖()
-    if "權值" in 顯示:
-        權值區()
-    if "資金" in 顯示:
-        資金面區()
-    if "情緒" in 顯示:
-        情緒區()
-    if "族群" in 顯示:
-        族群熱力圖()
-    if "行事曆" in 顯示:
-        行事曆區()
-    if "排行" in 顯示:
-        排行區()
+    區塊函式 = {"市場": 市場卡片, "狀態": 狀態區, "AI解讀": AI解讀區, "焦點": 焦點區, "國際": _國際, "連動": 連動區,
+             "加權指數": 加權圖 if 加權 is not None and len(加權) > 1 else None, "權值": 權值區, "資金": 資金面區,
+             "情緒": 情緒區, "族群": 族群熱力圖, "行事曆": 行事曆區, "排行": 排行區}
+    要畫 = [x for x in 首頁區塊 if x in 顯示 and 區塊函式.get(x)]
+    if len(要畫) > 3:  # 首頁很長，上方放一排快速跳轉
+        st.markdown('<div class="jump">' + "".join(f'<a href="#h-{x}" target="_self">{x}</a>' for x in 要畫)
+                    + "</div>", unsafe_allow_html=True)
+    for x in 要畫:
+        st.markdown(f'<div class="anchor" id="h-{x}"></div>', unsafe_allow_html=True)
+        區塊函式[x]()
 
 # ---------- 02 我的股票：庫存、自選股 ----------
 if 頁面 == 頁面們[1]:
@@ -2042,7 +2067,7 @@ if 頁面 == 頁面們[3]:
     with st.expander("⚙️ 選股條件（組合回測也用這組）", expanded=True):
         條件, 範本 = 選股條件區()
     結果 = engine.選股(今日, 條件)
-    卡片列([
+    卡片格([
         卡片("符合條件", f"{len(結果)}", "檔", 青),
         卡片("資料日期", 最新日.strftime("%Y-%m-%d")),
         卡片("排序", 條件["排序"]),
@@ -2873,14 +2898,14 @@ def 評分驗證區():
         st.markdown("**總分由低到高分五組 · 之後 20 日超額報酬**")
         圖 = go.Figure(go.Bar(x=[f"第{x['組']}組" for x in 組], y=[x["超額"] for x in 組],
                               marker_color=[紅 if x["超額"] > 0 else 綠 for x in 組],
-                              text=[f"{x['超額']:+.2f}%" for x in 組], textposition="outside"))
+                              text=[f"{x['超額']:+.2f}%" for x in 組], textposition="outside", cliponaxis=False))
         圖.update_yaxes(ticksuffix="%")
         st.plotly_chart(圖表外觀(圖, 300), width="stretch")
     with b:
         st.markdown("**依看法分 · 之後 20 日超額報酬**")
         圖 = go.Figure(go.Bar(x=[f"{x['看法']}<br>{x['檔次']:,}次" for x in 看], y=[x["超額"] for x in 看],
                               marker_color=[紅 if x["超額"] > 0 else 綠 for x in 看],
-                              text=[f"{x['超額']:+.2f}%" for x in 看], textposition="outside"))
+                              text=[f"{x['超額']:+.2f}%" for x in 看], textposition="outside", cliponaxis=False))
         圖.update_yaxes(ticksuffix="%")
         st.plotly_chart(圖表外觀(圖, 300), width="stretch")
     相 = 驗["相關"]
