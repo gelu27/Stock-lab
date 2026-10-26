@@ -414,6 +414,21 @@ def 月營收總表(月份=None, 基期下限=10000):
     表["累計基期低"] = 表["去年累計"].notna() & (表["去年累計"] < 基期下限 * 月)
     # 近 5 年新高：比這個月之前 60 個月的最高還高（至少要有 12 個月可比）
     以前 = [m for m in 寬.columns if m < 月份][-60:]
+    # 連續年增月數（到這個月為止，年增 > 0 連續幾個月）、近 3 月合計年增（比單月穩，不受春節等月份錯開影響）
+    近月 = [m for m in 寬.columns if m <= 月份][-24:]
+    年增們 = pd.DataFrame({m: 寬[m] / 寬[f"{int(m[:4]) - 1}{m[4:]}"] - 1 for m in 近月
+                        if f"{int(m[:4]) - 1}{m[4:]}" in 寬}).reindex(本.index)
+    倒 = 年增們.iloc[:, ::-1]
+    未斷 = (倒 <= 0).cumsum(axis=1) == 0  # 缺資料的月份（NaN）跳過，不算中斷也不計入
+    表["連增月數"] = ((倒 > 0) & 未斷).sum(axis=1).astype(int)
+    三月 = 近月[-3:]
+    三月去年 = [f"{int(m[:4]) - 1}{m[4:]}" for m in 三月]
+    if all(m in 寬 for m in 三月 + 三月去年):
+        今3, 去3 = 寬[三月].reindex(本.index), 寬[三月去年].reindex(本.index)
+        有 = 今3.notna().all(axis=1) & 去3.notna().all(axis=1) & (去3.sum(axis=1) >= 基期下限 * 3)
+        表["近3月年增"] = ((今3.sum(axis=1) / 去3.sum(axis=1) - 1) * 100).where(有).round(2)
+    else:
+        表["近3月年增"] = np.nan
     以前最高 = 寬[以前].reindex(本.index).max(axis=1)
     可比 = 寬[以前].reindex(本.index).notna().sum(axis=1) >= 12
     表["五年新高"] = 可比 & (本 > 以前最高)
