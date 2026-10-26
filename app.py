@@ -77,6 +77,13 @@ h1, h2, h3 {{ font-family: 'Space Grotesk', 'Noto Sans TC', sans-serif !importan
 .rank td.n a {{ color: inherit; text-decoration: none; }}
 .rank td.t {{ color: #EDEDED; white-space: nowrap; font-size: 13px; }}
 .rank td.t small {{ color: {灰}; margin-left: 4px; font-size: 11px; }}
+.ticker {{ overflow: hidden; white-space: nowrap; border-top: 1px solid #1E1E1E; border-bottom: 1px solid #1E1E1E;
+    margin: -6px 0 14px; padding: 6px 0; }}
+.ticker .tr {{ display: inline-block; animation: tk 70s linear infinite; }}
+.ticker:hover .tr, .ticker:active .tr {{ animation-play-state: paused; }}
+.ticker span {{ font-family: 'JetBrains Mono', 'Noto Sans TC', monospace; font-size: 13px; margin-right: 30px; }}
+.ticker span b {{ color: #9A9A9A; font-weight: 400; margin-right: 6px; font-family: 'Noto Sans TC', sans-serif; }}
+@keyframes tk {{ from {{ transform: translateX(0); }} to {{ transform: translateX(-50%); }} }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -278,6 +285,43 @@ with b.popover("🔄 更新"):
 市場名稱 = dict(zip(今日["代號"], 今日["名稱"]))
 有籌碼 = "法人買超" in 指標.columns
 
+
+@st.cache_data(ttl=300, show_spinner=False)
+def 抓國際():
+    return engine.國際行情(), engine.台指期()
+
+
+def 跑馬燈():
+    """頁首一條會捲動的行情：加權、漲跌家數、台指期、美股、匯率。手指按住（滑鼠移上去）會暫停。"""
+    項們 = []
+    def 加(名, 價, 漲跌, 幅度=None, 格式="{:,.2f}"):
+        色 = 漲跌色(漲跌)
+        尾 = f"{漲跌:+,.2f}" + (f"（{幅度:+.2f}%）" if 幅度 is not None and pd.notna(幅度) else "")
+        項們.append(f'<span><b>{名}</b><font color="{色}">{格式.format(價)} {尾}</font></span>')
+    if 加權 is not None and len(加權):
+        r = 加權.iloc[-1]
+        加("加權", r["close"], r["change"], r["change"] / (r["close"] - r["change"]) * 100)
+    上, 下 = int((今日["漲跌"] > 0).sum()), int((今日["漲跌"] < 0).sum())
+    項們.append(f'<span><b>漲跌家數</b><font color="{紅}">▲{上}</font> <font color="{綠}">▼{下}</font></span>')
+    項們.append(f'<span><b>成交金額</b>{今日["成交值億"].sum():,.0f} 億</span>')
+    try:
+        國際, 期貨 = 抓國際()
+    except Exception:
+        國際, 期貨 = {}, {}
+    for 盤 in ("日盤", "夜盤"):
+        q = 期貨.get(盤)
+        if q:
+            加(f"台指期{盤}", q["價"], q["漲跌"], q["幅度"], "{:,.0f}")
+    for 名 in ("費城半導體", "那斯達克", "道瓊", "S&P 500", "台積電 ADR", "日經 225", "美元/台幣"):
+        q = 國際.get(名)
+        if q:
+            加(名, q["價"], q["漲跌"], q["幅度"], "{:,.3f}" if 名 == "美元/台幣" else "{:,.2f}")
+    內容 = "".join(項們)
+    st.markdown(f'<div class="ticker"><div class="tr">{內容}{內容}</div></div>', unsafe_allow_html=True)
+
+
+跑馬燈()
+
 # ---------- 選股條件（04 選股與 08 組合回測共用，原本在左側欄） ----------
 def 選股條件區():
     """畫出選股條件，回傳 (條件, 範本)。換頁時 Streamlit 會清掉沒顯示的元件狀態，所以另外記一份。"""
@@ -387,7 +431,9 @@ def 憑證有效(k):
 def 登入參數():
     k = st.query_params.get("k")
     隱 = st.query_params.get("hide")
-    return (f"&k={k}" if k and st.session_state.get("已解鎖") else "") + (f"&hide={urllib.parse.quote(隱)}" if 隱 else "")
+    近 = st.query_params.get("r")
+    return ((f"&k={k}" if k and st.session_state.get("已解鎖") else "") + (f"&hide={urllib.parse.quote(隱)}" if 隱 else "")
+            + (f"&r={urllib.parse.quote(近)}" if 近 else ""))
 
 
 if "k" in st.query_params:
@@ -435,7 +481,8 @@ def 點選表(表, 樣式, key, 動作=None, **參數):
 
 # 手機精簡表格只留這些欄（有的才顯示）
 精簡欄位 = {"名稱", "股票", "股價", "收盤", "漲跌幅", "今日損益", "總損益", "報酬率(%)", "總分", "較昨日", "看法",
-          "加入至今%", "驗收", "距目標價%", "20日漲幅", "符合策略", "市值億", "規模", "營收(億)", "年增%"}
+          "加入至今%", "驗收", "距目標價%", "20日漲幅", "符合策略", "市值億", "規模", "營收(億)", "年增%",
+          "理由", "金額(億)", "貢獻點數", "投信(張)"}
 
 @st.cache_data(show_spinner=False)
 def 警示表(_資料版本):
@@ -606,6 +653,18 @@ def 做PDF(代號, r, 建議, 內文, 時間):
 def 評分資料(_資料版本):
     return engine.今昨評分(指標[指標["date"] >= 指標["date"].max() - pd.Timedelta(days=20)],
                          engine.讀取基本面(), 加權)
+
+
+def ETF版本():
+    檔們 = sorted(etf_data.持股資料夾.glob("*/*.csv.gz"))
+    return f"{檔們[-1].name}-{檔們[-1].stat().st_mtime}-{len(檔們)}" if 檔們 else ""
+
+
+@st.cache_data(max_entries=2, ttl=43200, show_spinner="讀取主動式 ETF 持股中…")
+def ETF資料(_版本):
+    持股 = etf_data.讀持股(70)
+    資訊 = etf_data.讀資訊()
+    return 持股, 資訊, etf_data.每日變化(持股, 資訊)
 
 
 def 分數色(分):
@@ -1170,11 +1229,6 @@ def 集保資料(代號):
     return engine.讀取集保(代號)
 
 
-@st.cache_data(ttl=300, show_spinner=False)
-def 抓國際():
-    return engine.國際行情(), engine.台指期()
-
-
 def 國際行情():
     段落("GLOBAL // 國際行情與台指期")
     國際, 期貨 = 抓國際()
@@ -1209,6 +1263,44 @@ def 族群熱力圖():
     大小 = b.segmented_control("方塊大小", ["市值", "成交值"], default="市值", key="族群大小") or "市值"
     族群, 個股 = engine.族群資料(今日, 期間, 大小)
     界 = {"今日": 5, "5 日": 10, "20 日": 20}[期間]
+    熱分頁, 泡分頁 = st.tabs(["熱力圖", "輪動氣泡圖"])
+    with 泡分頁:
+        輪動氣泡圖(族群, 期間)
+    with 熱分頁:
+        族群樹圖(族群, 個股, 界, 大小)
+    族群排行(族群, 期間)
+
+
+def 輪動氣泡圖(族群, 期間):
+    t = 族群[族群["家數"] >= 3].copy()
+    t["廣度"] = t["上漲"] / t["家數"] * 100
+    大 = t["成交值億"].clip(lower=0.1)
+    圖 = go.Figure(go.Scatter(
+        x=t["漲跌幅"], y=t["廣度"], mode="markers+text", text=t.index, textposition="top center",
+        textfont=dict(size=10, color="#CFCFCF", family="Noto Sans TC"),
+        marker=dict(size=大, sizemode="area", sizeref=2 * 大.max() / 55 ** 2, sizemin=4,
+                    color=t["漲跌幅"], colorscale=[[0, "#00A86B"], [0.5, "#555"], [1, "#E0244A"]],
+                    cmid=0, line=dict(color="#000", width=1), opacity=.85),
+        customdata=np.stack([t["上漲"], t["家數"], t["成交值億"], t["領漲股"]], axis=1),
+        hovertemplate="<b>%{text}</b><br>漲跌 %{x:+.2f}%<br>上漲 %{customdata[0]} / %{customdata[1]} 檔（%{y:.0f}%）"
+                      "<br>成交值 %{customdata[2]:,.0f} 億<br>領漲 %{customdata[3]}<extra></extra>"))
+    圖.add_vline(x=0, line=dict(color=灰, width=1, dash="dot"))
+    圖.add_hline(y=50, line=dict(color=灰, width=1, dash="dot"))
+    x界 = max(abs(t["漲跌幅"]).max() * 1.15, 1)
+    for x, y, 字, 色 in ((x界 * .97, 103, "全面走強", 紅), (-x界 * .97, 103, "多數上漲但力道弱", "#BDBDBD"),
+                        (x界 * .97, -3, "少數股撐場", "#FFB020"), (-x界 * .97, -3, "全面走弱", 綠)):
+        圖.add_annotation(x=x, y=y, text=字, showarrow=False, font=dict(color=色, size=11),
+                          xanchor="right" if x > 0 else "left")
+    圖.update_xaxes(title=f"{期間}平均漲跌（%）", range=[-x界, x界], zeroline=False)
+    圖.update_yaxes(title="上漲家數比例（%）", range=[-8, 108])
+    圖表外觀(圖, 520).update_layout(hovermode="closest", showlegend=False)
+    st.plotly_chart(圖, width="stretch", config={"displayModeBar": False})
+    st.caption("往右＝族群漲得多；往上＝族群裡上漲的股票比例高；泡泡越大＝成交值越大。"
+               "右上角是「又強又全面」最值得注意；右下角是「只有一兩檔大漲撐住平均」，持續性通常較差。"
+               "上方的漲跌期間可切換今日、5 日、20 日。")
+
+
+def 族群樹圖(族群, 個股, 界, 大小):
     名們 = list(族群.index)
     圖 = go.Figure(go.Treemap(
         ids=名們 + (個股["產業"] + "/" + 個股["名稱"]).tolist(),
@@ -1230,6 +1322,8 @@ def 族群熱力圖():
     st.caption(f"方塊越大代表{大小}越大；紅漲綠跌，顏色越深漲跌越多（±{界}% 以上最深）。"
                "點一下族群可放大看裡面的股票，點上方路徑可返回。族群漲跌是依" + 大小 + "加權平均。")
 
+
+def 族群排行(族群, 期間):
     表 = 族群.reset_index().rename(columns={"產業": "族群"})[
         ["族群", "漲跌幅", "上漲", "下跌", "成交值億", "領漲股"]]
     st.markdown("**族群排行**　點一下族群，下方會列出成分股")
@@ -1266,6 +1360,9 @@ def 市場每日(_資料版本):
     期 = engine.讀取期貨未平倉()
     if 期 is not None and "foreign_oi" in 期:
         表["外資期貨"] = 期["foreign_oi"].reindex(表.index)
+        for 英, 中 in (("trust_oi", "投信期貨"), ("dealer_oi", "自營期貨")):
+            if 英 in 期:
+                表[中] = 期[英].reindex(表.index)
     if 加權 is not None and not 加權.empty:
         表["加權"] = 加權.set_index("date")["close"].reindex(表.index)
     匯率 = engine.讀取匯率()
@@ -1373,6 +1470,47 @@ def 資金面區():
     st.plotly_chart(圖表外觀(圖, 520), width="stretch")
     st.caption("融資維持率 = 上市股票融資市值 ÷ 融資金額，意思見上方「ℹ️ 融資維持率是什麼」。"
                "外資淨未平倉 = 外資台指期（大台）多單減空單，負的代表偏空避險。")
+    槓桿趨勢()
+
+
+def 槓桿趨勢():
+    """融資餘額、每日增減與三大法人台指期淨部位走勢：看「散戶加槓桿、法人在放空」有沒有同時發生。"""
+    st.markdown("**📈 融資與期貨法人趨勢**")
+    天數 = st.segmented_control("天數", [10, 20, 30, 45, 60], default=30, key="槓桿天數",
+                              format_func=lambda n: f"近 {n} 天", label_visibility="collapsed") or 30
+    每日 = 市場每日(_版本).tail(天數)
+    if "融資" not in 每日:
+        st.caption("沒有融資資料。")
+        return
+    日 = 每日.index.strftime("%m/%d")
+    增減 = 每日["融資"].diff()
+    圖 = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.07,
+                       subplot_titles=("融資餘額（上市櫃合計，張）", "融資每日增減（張）", "三大法人台指期淨部位（口，正＝偏多）"))
+    圖.add_trace(go.Scatter(x=日, y=每日["融資"], mode="lines", line=dict(color="#FFB020", width=2), name="融資餘額"), 1, 1)
+    圖.add_trace(go.Bar(x=日, y=增減, marker_color=[紅 if v > 0 else 綠 for v in 增減.fillna(0)], name="融資增減"), 2, 1)
+    合計 = None
+    for 欄, 名, 色 in (("外資期貨", "外資", "#4DA3FF"), ("投信期貨", "投信", "#FF00E5"), ("自營期貨", "自營商", "#9B9B9B")):
+        if 欄 in 每日:
+            圖.add_trace(go.Scatter(x=日, y=每日[欄], mode="lines", line=dict(color=色, width=1.6), name=名,
+                                    connectgaps=True), 3, 1)
+            合計 = 每日[欄] if 合計 is None else 合計 + 每日[欄]
+    if 合計 is not None:
+        圖.add_trace(go.Scatter(x=日, y=合計, mode="lines", line=dict(color="#FFF", width=2, dash="dot"), name="合計",
+                                connectgaps=True), 3, 1)
+    圖.update_xaxes(type="category", nticks=8)
+    圖.update_annotations(font=dict(size=11, color=灰), x=0, xanchor="left")
+    圖表外觀(圖, 600).update_layout(legend=dict(orientation="h", y=-0.06, x=0), margin=dict(t=24, b=40))
+    st.plotly_chart(圖, width="stretch")
+    if len(每日) >= 2 and "外資期貨" in 每日:
+        融變 = 每日["融資"].iloc[-1] - 每日["融資"].iloc[0]
+        外變 = 每日["外資期貨"].dropna()
+        外變 = 外變.iloc[-1] - 外變.iloc[0] if len(外變) >= 2 else np.nan
+        if 融變 > 0 and pd.notna(外變) and 外變 < 0:
+            st.warning(f"⚠️ 近 {天數} 天融資增加 {融變:+,.0f} 張、外資期貨淨部位減少 {外變:+,.0f} 口："
+                       "散戶加槓桿、外資偏空，兩者同時出現時大盤常較脆弱。")
+        elif 融變 < 0 and pd.notna(外變) and 外變 > 0:
+            st.success(f"近 {天數} 天融資減少 {融變:+,.0f} 張、外資期貨淨部位增加 {外變:+,.0f} 口：籌碼變乾淨、外資轉多。")
+    st.caption("投信台指期多半是替 ETF 避險或加碼的多單，主要看外資的方向；合計＝三者相加。資料來源：證交所、櫃買中心、期交所。")
 
 
 def 排行區():
@@ -1399,7 +1537,82 @@ def 排行區():
                "依 Yahoo 1 分鐘線計算，可能有幾分鐘誤差。")
 
 
-首頁區塊 = ["市場", "國際", "加權指數", "資金", "族群", "排行"]
+def 權值區():
+    段落("WEIGHT // 權值股：今天誰撐盤、誰拖盤")
+    期間 = st.segmented_control("貢獻期間", list(engine.族群期間), default="今日", key="權值期間",
+                              label_visibility="collapsed") or "今日"
+    表, 摘要 = engine.權值貢獻(今日, 加權, 期間)
+    if 表["貢獻點數"].isna().all():
+        st.caption("加權指數資料不足，暫時無法計算。")
+        return
+    前十 = 表.nlargest(10, "權重")
+    卡片格([卡片(f"加權指數{期間}漲跌", f"{摘要['實際漲跌']:+,.0f} 點", f"估算合計 {摘要['估算合計']:+,.0f} 點",
+                漲跌色(摘要["實際漲跌"])),
+           卡片("前 10 大權值股貢獻", f"{前十['貢獻點數'].sum():+,.0f} 點", f"合計權重 {前十['權重'].sum():.1f}%",
+                漲跌色(前十["貢獻點數"].sum())),
+           卡片("台積電貢獻", f"{表.loc[表['代號'] == '2330', '貢獻點數'].sum():+,.0f} 點",
+                f"權重 {表.loc[表['代號'] == '2330', '權重'].sum():.1f}%", 漲跌色(表.loc[表['代號'] == '2330', '貢獻點數'].sum()))])
+    撐 = 表.nlargest(10, "貢獻點數")
+    拖 = 表.nsmallest(10, "貢獻點數").iloc[::-1]
+    圖表 = pd.concat([拖, 撐.iloc[::-1]])
+    圖表 = 圖表[~圖表.index.duplicated()]
+    圖 = go.Figure(go.Bar(x=圖表["貢獻點數"], y=圖表["名稱"] + " " + 圖表["代號"], orientation="h",
+                          marker_color=[紅 if v > 0 else 綠 for v in 圖表["貢獻點數"]],
+                          text=圖表["貢獻點數"].map("{:+.1f}".format), textposition="outside",
+                          customdata=np.stack([圖表["幅度"], 圖表["權重"]], axis=1),
+                          hovertemplate="%{y}<br>貢獻 %{x:+.1f} 點<br>漲跌 %{customdata[0]:+.2f}%<br>權重 %{customdata[1]:.2f}%<extra></extra>"))
+    圖.update_yaxes(type="category", gridcolor="#151515")
+    圖表外觀(圖, 30 * len(圖表) + 40).update_layout(hovermode="closest", showlegend=False)
+    st.plotly_chart(圖, width="stretch", config={"displayModeBar": False})
+    族 = 表[表["產業"].fillna("") != ""].groupby("產業")["貢獻點數"].sum().sort_values()
+    族 = pd.concat([族.head(5), 族.tail(5)])
+    族 = 族[~族.index.duplicated()]
+    st.markdown("**依族群合計**　" + "　".join(
+        f'<font color="{漲跌色(v)}">{k} {v:+.0f}</font>' for k, v in 族.sort_values(ascending=False).items()),
+        unsafe_allow_html=True)
+    with st.expander("前 50 大權值股明細"):
+        明 = 表.nlargest(50, "權重").rename(columns={"幅度": "漲跌幅", "權重": "權重%", "收盤": "股價"})
+        明["股票"] = 明["代號"] + " " + 明["名稱"]
+        明 = 明[["股票", "股價", "漲跌幅", "權重%", "貢獻點數", "市值億", "代號"]]
+        點選表(明, 上色(明).format({"股價": "{:,.2f}", "漲跌幅": "{:+.2f}", "權重%": "{:.2f}", "貢獻點數": "{:+.2f}",
+                                 "市值億": "{:,.0f}"}).map(lambda v: f"color:{漲跌色(v)}", subset=["貢獻點數"]),
+               "權值明細", height=420, column_config={"代號": None})
+    st.caption("權重＝這檔市值 ÷ 上市總市值；貢獻點數＝權重 × 漲跌幅 × 期初指數。"
+               "交易所的官方算法還有除權息、增資等調整，所以估算合計跟實際漲跌會差一點。漲跌期間 5 日、20 日用還原股價計算。")
+
+
+def 焦點區():
+    段落("FOCUS // 今天值得研究、需要防守的股票")
+    try:
+        評分 = 評分資料(_版本)[0]
+    except Exception:
+        評分 = None
+    try:
+        ETF變化 = ETF資料(ETF版本())[2]
+    except Exception:
+        ETF變化 = None
+    我的 = []
+    if 可編輯():
+        我的 = list(庫存代號() or []) + [c for v in 自選股清單().values() for c in v]
+    機會, 風險 = engine.焦點清單(今日, 評分, ETF變化, 警示表(_版本), 我的)
+    左, 右 = st.columns(2)
+    for 欄, 名, 表, 鍵 in ((左, "🔍 值得研究", 機會, "焦點機會"), (右, "🛡️ 需要防守", 風險, "焦點風險")):
+        with 欄:
+            st.markdown(f"**{名}**（{len(表)} 檔）")
+            if 表.empty:
+                st.caption("今天沒有符合的股票。")
+            else:
+                點選表(表, 上色(表).format({"收盤": "{:,.2f}", "漲跌幅": "{:+.2f}", "總分": "{:.0f}"}, na_rep="—"), 鍵,
+                       height=min(35 * (len(表) + 1) + 3, 460), column_config={"代號": None,
+                                                                        "理由": st.column_config.TextColumn(width="large")})
+    st.caption("RESEARCH ONLY 僅供研究：依規則挑出來的名單，不是買賣建議。"
+               "值得研究＝評分大升、營收創新高、帶量突破盤整、外資投信連買、3 檔以上主動式 ETF 同時加碼；"
+               "需要防守＝注意／處置股、評分大跌、跌破十日線且法人賣、融資暴增但股價跌、法人 5 日大賣。"
+               + ("⭐＝你的庫存或自選股，會排在最前面。" if 我的 else "解鎖後你的庫存、自選股會用 ⭐ 標示並排在最前面。")
+               + "只看成交 500 張以上的股票。點一下可到個股查詢。")
+
+
+首頁區塊 = ["市場", "焦點", "國際", "加權指數", "權值", "資金", "族群", "排行"]
 
 if 頁面 == 頁面們[0]:
     隱藏 = [x for x in st.query_params.get("hide", "").split(",") if x in 首頁區塊]
@@ -1415,6 +1628,8 @@ if 頁面 == 頁面們[0]:
             st.query_params.pop("hide", None)
     if "市場" in 顯示:
         市場卡片()
+    if "焦點" in 顯示:
+        焦點區()
     if "國際" in 顯示:
         try:
             國際行情()
@@ -1422,6 +1637,8 @@ if 頁面 == 頁面們[0]:
             st.caption("國際行情暫時無法顯示。")
     if "加權指數" in 顯示 and 加權 is not None and len(加權) > 1:
         加權圖()
+    if "權值" in 顯示:
+        權值區()
     if "資金" in 顯示:
         資金面區()
     if "族群" in 顯示:
@@ -1738,8 +1955,19 @@ if 頁面 == 頁面們[7]:
 if 頁面 == 頁面們[2]:
     if st.session_state.get("個股查詢") not in 股票選項:
         st.session_state["個股查詢"] = next((v for v in 股票選項 if v.startswith("2330 ")), 股票選項[0])
+    最近 = [c for c in st.query_params.get("r", "").split(",") if c in 市場名稱]
+    if 最近:
+        def 切換最近():
+            選 = st.session_state.get("最近看過")
+            if 選:
+                st.session_state["個股查詢"] = next((v for v in 股票選項 if v.split()[0] == 選.split()[0]), st.session_state["個股查詢"])
+            st.session_state["最近看過"] = None
+        st.pills("最近看過", [f"{c} {市場名稱[c]}" for c in 最近], key="最近看過", on_change=切換最近)
     查詢 = st.selectbox("輸入代號或名稱查詢", 股票選項, key="個股查詢")
     代號 = 查詢.split()[0]
+    新最近 = ",".join(([代號] + [c for c in 最近 if c != 代號])[:8])
+    if 新最近 != st.query_params.get("r", ""):
+        st.query_params["r"] = 新最近  # 記在網址，加入書籤或重新整理都還在
     r = 今日[今日["代號"] == 代號].iloc[0]
     股 = engine._股本表()
     if "股本億" not in 今日.columns and 代號 in 股.index:
@@ -2535,18 +2763,6 @@ if 頁面 == 頁面們[8]:
                    "舊版報告沒有目標價，到個股的「🤖 AI 分析」分頁打開一次就會自動補上。點一下股票可到個股查詢。")
 
 # ---------- 05 主動式 ETF ----------
-def ETF版本():
-    檔們 = sorted(etf_data.持股資料夾.glob("*/*.csv.gz"))
-    return f"{檔們[-1].name}-{檔們[-1].stat().st_mtime}-{len(檔們)}" if 檔們 else ""
-
-
-@st.cache_data(max_entries=2, ttl=43200, show_spinner="讀取主動式 ETF 持股中…")
-def ETF資料(_版本):
-    持股 = etf_data.讀持股(70)
-    資訊 = etf_data.讀資訊()
-    return 持股, 資訊, etf_data.每日變化(持股, 資訊)
-
-
 def 色階(樣式, 表, 欄們):
     """明細色階：成長率、EPS、ROE 正的越大越紅、負的越大越綠；營收、市值越大底色越藍（用對數，才不會只有前幾名有顏色）。"""
     上限 = {"月增%": 100, "年增%": 100, "累計年增%": 100, "近3月年增%": 100, "合計年增%": 50, "年增中位數%": 50,
@@ -2749,6 +2965,38 @@ def 張(股):
     return 股 / 1000
 
 
+def 投信拆解區(變化):
+    段落("TRUST // 投信買賣超拆解：主動式 ETF vs 其他投信")
+    日, 表 = engine.投信拆解(指標, 變化)
+    if 日 is None or 表.empty:
+        st.info("要有同一天的法人資料和主動式 ETF 持股才能拆解，資料更新後就會出現。")
+        return
+    合 = 表[["投信金額", "主動ETF金額", "其他投信金額"]].sum()
+    卡片格([卡片(f"投信合計 · {日:%m/%d}", f"{合['投信金額']:+,.1f} 億", "官方三大法人資料", 漲跌色(合["投信金額"])),
+           卡片("其中 主動式 ETF", f"{合['主動ETF金額']:+,.1f} 億", "持股張數變化（含申贖）", 漲跌色(合["主動ETF金額"])),
+           卡片("其他投信", f"{合['其他投信金額']:+,.1f} 億", "一般基金＋被動式 ETF（相減估算）", 漲跌色(合["其他投信金額"]))])
+    看 = st.segmented_control("排行依據", ["投信合計", "主動式 ETF", "其他投信"], default="投信合計", key="投信拆解依據",
+                            label_visibility="collapsed") or "投信合計"
+    欄 = {"投信合計": "投信金額", "主動式 ETF": "主動ETF金額", "其他投信": "其他投信金額"}[看]
+    表 = 表.assign(股票=表["代號"] + " " + 表["名稱"])
+    顯示 = {"股票": "股票", "投信": "投信(張)", "主動ETF": "主動ETF(張)", "主動ETF扣申贖": "其中經理人主動(張)",
+          "其他投信": "其他投信(張)", 欄: "金額(億)", "代號": "代號"}
+    格式 = {"投信(張)": "{:+,.0f}", "主動ETF(張)": "{:+,.0f}", "其中經理人主動(張)": "{:+,.0f}", "其他投信(張)": "{:+,.0f}",
+          "金額(億)": "{:+,.2f}"}
+    左, 右 = st.columns(2)
+    for 位, 名, 段 in ((左, "🔴 買超前 20", 表.nlargest(20, 欄)), (右, "🟢 賣超前 20", 表.nsmallest(20, 欄))):
+        段 = 段[段[欄] > 0] if "買" in 名 else 段[段[欄] < 0]
+        with 位:
+            st.markdown(f"**{名}**（依{看}金額）")
+            t = 段[list(顯示)].rename(columns=顯示)
+            點選表(t, 上色(t).format(格式, na_rep="—").map(lambda v: f"color:{漲跌色(v)}", subset=list(格式)),
+                   f"投信拆解{名}", height=35 * (len(t) + 1) + 3, column_config={"代號": None})
+    st.caption("投信合計是交易所公布的投信買賣超；主動式 ETF 是各檔持股張數的變化加總（含申購買回，因為那也是投信的買賣）；"
+               "其他投信＝合計減主動式 ETF，包含一般基金與 0050 等被動式 ETF（被動式持股沒有每日資料，只能相減估算）。"
+               "「其中經理人主動」是扣掉申贖後的部分。投信合計和主動式 ETF 方向一致時，代表買盤主要來自主動式 ETF；"
+               "其他投信很大時，常是被動式 ETF 申購或一般基金在買。金額＝張數 × 收盤估算。")
+
+
 類型色 = {"新增": 紅, "加碼": "#FF8FA3", "減碼": "#7FE8C1", "出清": 綠, "持平": "#EDEDED"}
 
 
@@ -2837,6 +3085,8 @@ if 頁面 == 頁面們[5]:
                        "ETF共識賣", height=35 * (len(賣) + 1) + 3, column_config={"代號": None})
             st.caption("扣除申贖：基金被申購時經理人要等比例買進全部持股，那不代表看好，所以先扣掉，只看「多買、少買」的部分。"
                        "金額＝張數×當天收盤，海外股票沒有台股價格不算金額。點一下股票可到個股查詢。")
+
+    投信拆解區(變化)
 
     段落("HOLDINGS // 單一 ETF 持股明細")
     選項 = [f"{c} {名稱.get(c, '')}".strip() for c in 總表["ETF"].str.split().str[0]]
