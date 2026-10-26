@@ -481,17 +481,23 @@ def 抓期貨未平倉(天數=400):
     列們 = []
     while 起 <= 今天:
         迄 = min(起 + dt.timedelta(days=30), 今天)
-        try:
-            r = requests.post("https://www.taifex.com.tw/cht/3/futContractsDateDown", headers=標頭, timeout=60,
-                              data={"queryStartDate": f"{起:%Y/%m/%d}", "queryEndDate": f"{迄:%Y/%m/%d}", "commodityId": "TXF"})
-            r.encoding = "big5"
-            t = pd.read_csv(io.StringIO(r.text))
-            if "多空未平倉口數淨額" in t.columns:
-                列們.append(t)
-        except Exception as 錯誤:
-            print(f"期貨未平倉 {起}～{迄} 失敗：{錯誤}")
+        t = None
+        for 第幾次 in range(3):
+            time.sleep(5 + 10 * 第幾次)
+            try:
+                r = requests.post("https://www.taifex.com.tw/cht/3/futContractsDateDown", headers=標頭, timeout=60,
+                                  data={"queryStartDate": f"{起:%Y/%m/%d}", "queryEndDate": f"{迄:%Y/%m/%d}", "commodityId": "TXF"})
+                r.encoding = "big5"
+                if r.text.lstrip().startswith("日期"):
+                    t = pd.read_csv(io.StringIO(r.text))
+                    break
+                print(f"期貨未平倉 {起}～{迄} 回傳不是資料：{r.text[:120]!r}")
+            except Exception as 錯誤:
+                print(f"期貨未平倉 {起}～{迄} 失敗：{錯誤}")
+        if t is None:
+            break  # 中間缺一段就先停，下次從缺的那天接著補，才不會留下空洞
+        列們.append(t)
         起 = 迄 + dt.timedelta(days=1)
-        time.sleep(3)
     if not 列們:
         print("期貨未平倉沒有新資料")
         return
