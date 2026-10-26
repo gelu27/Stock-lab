@@ -312,6 +312,88 @@ def 毛利率表():
     return pd.DataFrame(結果, index=最新.index)
 
 
+def 近四季EPS表():
+    """每檔最新一季往回連續四季的 EPS 合計（income.csv 是今年累計，先換成單季）。回傳 DataFrame（近四季EPS、EPS季度、單季EPS）。"""
+    f = 資料夾 / "fundamental" / "income.csv"
+    if not f.exists():
+        return pd.DataFrame(columns=["近四季EPS", "EPS季度", "單季EPS"])
+    t = pd.read_csv(f, dtype={"code": str})
+    t = t.dropna(subset=["eps"]).sort_values(["code", "quarter"]).copy()
+    t["序"] = t["quarter"].str[:4].astype(int) * 4 + t["quarter"].str[-1].astype(int)
+    前 = t.groupby("code")[["序", "eps"]].shift()
+    第一季 = t["quarter"].str[-1] == "1"
+    t["單季"] = np.where(第一季, t["eps"], np.where(前["序"] == t["序"] - 1, t["eps"] - 前["eps"], np.nan))
+    # 連續四季才加總：往回第 3 筆的季序要剛好差 3
+    t["近四季"] = t.groupby("code")["單季"].transform(lambda s: s.rolling(4).sum())
+    t.loc[t.groupby("code")["序"].shift(3) != t["序"] - 3, "近四季"] = np.nan
+    最新 = t.groupby("code").tail(1).set_index("code")
+    return pd.DataFrame({"近四季EPS": 最新["近四季"].round(2), "EPS季度": 最新["quarter"],
+                         "單季EPS": 最新["單季"].round(2)})
+
+
+def 月營收總表(月份=None, 基期下限=10000):
+    """月營收分頁用：每檔某個月（預設最新）的營收、月增、年增、累計年增、近 5 年新高、公告日。
+    營收單位千元；上月或去年同期營收低於 基期下限（千元，預設 1,000 萬）時另外標記，避免基期近零的爆量百分比。
+    回傳 (表, 可選月份們)。"""
+    來源 = 資料夾 / "fundamental"
+    表們 = [pd.read_csv(來源 / 名, dtype={"code": str}) for 名 in ("revenue_history.csv", "revenue.csv")
+          if (來源 / 名).exists()]
+    if not 表們:
+        return pd.DataFrame(), []
+    最新 = 表們[-1] if len(表們) == 2 else pd.DataFrame(columns=["code", "month"])
+    歷史 = pd.concat([t[["code", "month", "revenue"]] for t in 表們]).dropna()
+    歷史 = 歷史.drop_duplicates(["code", "month"], keep="last")
+    家數 = 歷史.groupby("month")["code"].nunique()
+    月份們 = sorted(家數[家數 >= 50].index, reverse=True)[:13]  # 新月份剛開始公布、家數很少也要能選
+    月份 = 月份 or (月份們[0] if 月份們 else None)
+    if 月份 is None:
+        return pd.DataFrame(), 月份們
+    年, 月 = int(月份[:4]), int(月份[5:])
+    上月 = f"{年 - (月 == 1)}-{12 if 月 == 1 else 月 - 1:02d}"
+    去年 = f"{年 - 1}-{月:02d}"
+    寬 = 歷史.pivot(index="code", columns="month", values="revenue")
+    本 = 寬[月份].dropna()
+    表 = pd.DataFrame({"營收": 本})
+    前值 = 寬[上月].reindex(本.index) if 上月 in 寬 else pd.Series(np.nan, index=本.index)
+    去值 = 寬[去年].reindex(本.index) if 去年 in 寬 else pd.Series(np.nan, index=本.index)
+    表["月增"] = np.where(前值 > 0, (本 / 前值 - 1) * 100, np.nan)
+    表["年增"] = np.where(去值 > 0, (本 / 去值 - 1) * 100, np.nan)
+    今年月 = [f"{年}-{m:02d}" for m in range(1, 月 + 1)]
+    去年月 = [f"{年 - 1}-{m:02d}" for m in range(1, 月 + 1)]
+    if all(m in 寬 for m in 今年月 + 去年月):
+        今累 = 寬[今年月].reindex(本.index)
+        去累 = 寬[去年月].reindex(本.index)
+        完整 = 今累.notna().all(axis=1) & 去累.notna().all(axis=1)
+        表["今年累計"] = 今累.sum(axis=1).where(完整)
+        表["去年累計"] = 去累.sum(axis=1).where(完整)
+        表["累計年增"] = np.where(表["去年累計"] > 0, (表["今年累計"] / 表["去年累計"] - 1) * 100, np.nan)
+    else:
+        表["今年累計"] = 表["去年累計"] = 表["累計年增"] = np.nan
+    # 最新月份優先用交易所公布的百分比（歷史有缺月時自己算不出來）
+    if "rev_yoy" in 最新.columns:
+        官 = 最新[最新["month"] == 月份].drop_duplicates("code", keep="last").set_index("code")
+        for 欄, 官欄 in (("月增", "rev_mom"), ("年增", "rev_yoy"), ("累計年增", "rev_cum_yoy")):
+            表[欄] = 官[官欄].reindex(表.index).combine_first(表[欄])
+    表["上月營收"], 表["去年同月營收"] = 前值, 去值
+    表["月增基期低"] = 前值.fillna(0) < 基期下限
+    表["年增基期低"] = 去值.fillna(0) < 基期下限
+    表["累計基期低"] = 表["去年累計"].notna() & (表["去年累計"] < 基期下限 * 月)
+    # 近 5 年新高：比這個月之前 60 個月的最高還高（至少要有 12 個月可比）
+    以前 = [m for m in 寬.columns if m < 月份][-60:]
+    以前最高 = 寬[以前].reindex(本.index).max(axis=1)
+    可比 = 寬[以前].reindex(本.index).notna().sum(axis=1) >= 12
+    表["五年新高"] = 可比 & (本 > 以前最高)
+    f = 來源 / "revenue_announce.csv"
+    if f.exists():
+        公 = pd.read_csv(f, dtype={"code": str})
+        公 = 公[公["month"] == 月份].drop_duplicates("code").set_index("code")["date"]
+        表["公告日"] = 公.reindex(表.index)
+    else:
+        表["公告日"] = np.nan
+    表.index.name = "code"
+    return 表, 月份們
+
+
 def _近三季EPS(e):
     """交易所公布的是「今年累計」EPS，先換成單季再加最近三季；資料不夠的股票回傳空值。"""
     e = e.copy()
