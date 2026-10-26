@@ -1593,6 +1593,105 @@ def 族群資料(今日, 期間="今日", 大小="市值", 每族群=15):
     return 族群, 個股[["產業", "代號", "名稱", "幅度", "權重"]]
 
 
+def 權值貢獻(今日, 加權, 期間="今日"):
+    """上市股票對加權指數的貢獻點數（估算）。
+    權重＝期初市值 ÷ 上市總市值（期初市值用 今天市值 ÷ (1＋期間漲幅) 推回去），貢獻點數＝權重 × 期間漲幅 × 期初指數。
+    回傳 (表, 摘要)：表有 代號、名稱、產業、收盤、幅度、權重、貢獻點數；摘要有 估算合計、實際漲跌、期初指數。"""
+    欄 = 族群期間[期間]
+    天 = {"今日": 1, "5 日": 5, "20 日": 20}[期間]
+    表 = 今日[(今日["市場"] == "上市") & ~今日["代號"].str.startswith("0") & (今日["收盤"] > 0)
+            & 今日["發行股數"].notna()].copy()
+    表["幅度"] = 表[欄].fillna(0).astype(float)
+    表["市值億"] = 表["收盤"].astype(float) * 表["發行股數"] / 1e8
+    表["期初市值"] = 表["市值億"] / (1 + 表["幅度"] / 100)
+    表["權重"] = 表["期初市值"] / 表["期初市值"].sum() * 100
+    摘要 = {"估算合計": np.nan, "實際漲跌": np.nan, "期初指數": np.nan}
+    if 加權 is not None and len(加權) > 天:
+        期初 = float(加權["close"].iloc[-1 - 天])
+        摘要 = {"期初指數": 期初, "實際漲跌": float(加權["close"].iloc[-1]) - 期初}
+        表["貢獻點數"] = 表["權重"] / 100 * 表["幅度"] / 100 * 期初
+        摘要["估算合計"] = float(表["貢獻點數"].sum())
+    else:
+        表["貢獻點數"] = np.nan
+    表 = 表.sort_values("貢獻點數", ascending=False)
+    return 表[["代號", "名稱", "產業", "收盤", "幅度", "權重", "市值億", "貢獻點數"]].round(
+        {"權重": 3, "市值億": 0, "貢獻點數": 2}), 摘要
+
+
+def 投信拆解(指標, 變化):
+    """把投信買賣超拆成「主動式 ETF」與「其他投信（一般基金、被動式 ETF）」。
+    用 ETF 持股資料和法人資料都有的最新一天；主動式 ETF 用持股張數變化（含申贖，因為申贖造成的買賣也算在投信裡）。
+    回傳 (日期, 表)，表欄位：代號、名稱、收盤、投信、主動ETF、主動ETF扣申贖、其他投信（張）與金額（億）。"""
+    if 變化 is None or len(變化) == 0 or "投信買超" not in 指標.columns:
+        return None, pd.DataFrame()
+    共同 = sorted(set(pd.to_datetime(變化["date"]).unique()) & set(指標["date"].unique()))
+    if not 共同:
+        return None, pd.DataFrame()
+    日 = pd.Timestamp(共同[-1])
+    當日 = 指標[指標["date"] == 日].set_index("代號")
+    變 = 變化[pd.to_datetime(變化["date"]) == 日]
+    彙 = 變.groupby("code").agg(主動ETF=("delta", "sum"), 主動ETF扣申贖=("adj_delta", "sum")) / 1000
+    表 = pd.DataFrame({"名稱": 當日["名稱"], "收盤": 當日["收盤"].astype(float), "投信": 當日["投信買超"].astype(float)})
+    表 = 表.join(彙, how="left").fillna({"主動ETF": 0, "主動ETF扣申贖": 0})
+    表 = 表[(表["投信"].fillna(0) != 0) | (表["主動ETF"] != 0)]
+    表["其他投信"] = 表["投信"] - 表["主動ETF"]
+    for 欄 in ("投信", "主動ETF", "其他投信"):
+        表[f"{欄}金額"] = 表[欄] * 1000 * 表["收盤"] / 1e8
+    return 日, 表.reset_index(names="代號").round(2)
+
+
+def 焦點清單(今日, 評分=None, ETF變化=None, 警示=None, 我的=(), 檔數=15, 最少張數=500):
+    """首頁「值得研究」與「需要防守」兩張清單（規則篩選，僅供研究）。
+    回傳 (機會, 風險)，欄位：代號、股票、理由、收盤、漲跌幅、總分。我的＝庫存＋自選股代號，風險清單會排前面。"""
+    表 = 今日[(今日["收盤"] > 0) & ~今日["代號"].str.startswith("00")].set_index("代號")
+    量夠 = 表["成交張數"].fillna(0) >= 最少張數
+    機會, 風險 = {}, {}
+
+    def 記(字典, 條件, 理由):
+        for c in 條件[條件.fillna(False).astype(bool)].index:
+            字典.setdefault(c, []).append(理由)
+
+    分 = 評分.reindex(表.index) if 評分 is not None else pd.DataFrame(index=表.index, columns=["總分", "較昨日"])
+    記(機會, 量夠 & (分["總分"] >= 70) & (分["較昨日"] >= 10), "評分大升進入強勢")
+    if "營收創新高" in 表:
+        記(機會, 量夠 & (表["營收創新高"] == True) & (表.get("營收年增率", 0) >= 20), "月營收創新高、年增>20%")  # noqa: E712
+    if "箱頂" in 表:
+        記(機會, 量夠 & (表["收盤"] > 表["箱頂"]) & (表["量比"] >= 1.5) & (表["漲跌幅"] > 0),
+           "帶量突破 20 日盤整")
+    if "外資連買" in 表:
+        記(機會, 量夠 & (表["外資連買"] >= 5) & (表["投信連買"] >= 3), "外資、投信連續買超")
+    if ETF變化 is not None and len(ETF變化):
+        最新 = ETF變化[ETF變化["date"] == ETF變化["date"].max()]
+        買 = 最新[最新["adj_delta"] > 0].groupby("code")["etf"].nunique()
+        記(機會, pd.Series(表.index.isin(買[買 >= 3].index), index=表.index), "3 檔以上主動式 ETF 同時加碼")
+
+    if 警示:
+        記(風險, pd.Series(表.index.isin(list(警示)), index=表.index) & 量夠, "注意股／處置股")
+    記(風險, 量夠 & (分["較昨日"] <= -10) & (分["總分"] <= 42), "評分大跌轉弱")
+    if "剛跌破MA10" in 表:
+        記(風險, 量夠 & 表["剛跌破MA10"].astype(bool) & (表.get("法人5日買超", 0) < 0), "跌破十日線、法人 5 日賣超")
+    if "融資5日增減" in 表:
+        記(風險, 量夠 & (表["融資5日增減"] >= 15) & (表["5日漲幅"] < 0), "融資 5 日暴增但股價下跌")
+    if "法人5日買超" in 表:
+        記(風險, 量夠 & (表.get("法人5日買超", 0) <= -5000) & (表["5日漲幅"] < -5), "法人 5 日大賣、股價重挫")
+
+    def 成表(字典, 優先=()):
+        if not 字典:
+            return pd.DataFrame(columns=["代號", "股票", "理由", "收盤", "漲跌幅", "總分"])
+        t = pd.DataFrame({"代號": list(字典), "理由數": [len(v) for v in 字典.values()],
+                          "理由": ["、".join(v) for v in 字典.values()]})
+        t["我的"] = t["代號"].isin(list(優先))
+        t["股票"] = np.where(t["我的"], "⭐", "") + t["代號"] + " " + t["代號"].map(表["名稱"])
+        t["收盤"] = t["代號"].map(表["收盤"]).astype(float)
+        t["漲跌幅"] = t["代號"].map(表["漲跌幅"]).astype(float)
+        t["總分"] = t["代號"].map(分["總分"]).astype(float)
+        t["成交值"] = t["代號"].map(表["成交值億"]).astype(float)
+        t = t.sort_values(["我的", "理由數", "成交值"], ascending=False).head(檔數)
+        return t[["代號", "股票", "理由", "收盤", "漲跌幅", "總分"]].reset_index(drop=True)
+
+    return 成表(機會), 成表(風險, 我的)
+
+
 # ========== 12. 自選股、到價提醒（存到 GitHub 的 ai-reports 分支，跟 AI 報告放一起） ==========
 def _GitHub設定(設定, 檔名):
     權杖 = 清理金鑰(設定.get("GITHUB_TOKEN"))
@@ -2429,3 +2528,239 @@ def 讀取期貨未平倉():
     if not f.exists():
         return None
     return pd.read_csv(f, parse_dates=["date"]).set_index("date")
+
+
+# ========== 20. 概念股、國際行事曆、市場情緒、市場狀態 ==========
+def 讀取概念():
+    """data/concepts.csv（concept, code）：自己整理的題材分類，一檔可以屬於好幾個概念，可直接在 GitHub 上增刪。"""
+    f = 資料夾 / "concepts.csv"
+    if not f.exists():
+        return pd.DataFrame(columns=["concept", "code"])
+    return pd.read_csv(f, dtype=str).dropna().drop_duplicates()
+
+
+def 概念展開(今日):
+    """把 今日 依概念展開（一檔屬於幾個概念就出現幾次），產業 欄換成概念名稱，族群資料() 可以直接用。"""
+    概 = 讀取概念()
+    t = 今日.merge(概.rename(columns={"code": "代號", "concept": "_概念"}), on="代號")
+    return t.assign(產業=t["_概念"]).drop(columns="_概念")
+
+
+def 個股概念(代號):
+    概 = 讀取概念()
+    return 概.loc[概["code"] == str(代號), "concept"].tolist()
+
+
+def 讀取美股():
+    """data/us_daily.csv 轉成 日期 × 名稱 的收盤價表（美股交易日）。"""
+    f = 資料夾 / "us_daily.csv"
+    if not f.exists():
+        return None
+    t = pd.read_csv(f, parse_dates=["date"])
+    return t.pivot_table(index="date", columns="name", values="close").sort_index() if len(t) else None
+
+
+經濟中文 = {
+    "CPI m/m": "CPI 月增率", "CPI y/y": "CPI 年增率", "Core CPI m/m": "核心 CPI 月增率", "PPI m/m": "PPI 月增率",
+    "Core PPI m/m": "核心 PPI 月增率", "Non-Farm Employment Change": "非農就業人數", "Unemployment Rate": "失業率",
+    "Average Hourly Earnings m/m": "平均時薪月增率", "FOMC Statement": "FOMC 利率決策聲明", "Federal Funds Rate": "聯準會利率決策",
+    "FOMC Press Conference": "聯準會主席記者會", "FOMC Meeting Minutes": "FOMC 會議紀錄", "Fed Chair Powell Speaks": "聯準會主席談話",
+    "Advance GDP q/q": "GDP 初值", "Prelim GDP q/q": "GDP 修正值", "Final GDP q/q": "GDP 終值",
+    "Core PCE Price Index m/m": "核心 PCE 物價月增率", "ISM Manufacturing PMI": "ISM 製造業 PMI",
+    "ISM Services PMI": "ISM 服務業 PMI", "Retail Sales m/m": "零售銷售月增率", "Core Retail Sales m/m": "核心零售銷售月增率",
+    "Unemployment Claims": "初領失業救濟金", "JOLTS Job Openings": "JOLTS 職缺", "ADP Non-Farm Employment Change": "ADP 就業人數",
+    "CB Consumer Confidence": "諮商會消費者信心", "Prelim UoM Consumer Sentiment": "密大消費者信心初值",
+    "BOJ Policy Rate": "日本央行利率決策", "Monetary Policy Statement": "央行貨幣政策聲明", "Main Refinancing Rate": "歐洲央行利率決策",
+    "Official Bank Rate": "英國央行利率決策", "Manufacturing PMI": "製造業 PMI", "Caixin Manufacturing PMI": "財新製造業 PMI",
+    "Caixin Services PMI": "財新服務業 PMI", "Non-Manufacturing PMI": "非製造業 PMI", "Trade Balance": "貿易收支",
+    "Industrial Production y/y": "工業生產年增率", "Retail Sales y/y": "零售銷售年增率", "GDP q/y": "GDP 年增率",
+    "Flash Manufacturing PMI": "製造業 PMI 初值", "Flash Services PMI": "服務業 PMI 初值", "BOJ Press Conference": "日銀總裁記者會",
+    "ECB Press Conference": "歐洲央行記者會", "Durable Goods Orders m/m": "耐久財訂單月增率",
+    "Employment Cost Index q/q": "就業成本指數季增率", "Tokyo Core CPI y/y": "東京核心 CPI 年增率",
+    "German Prelim CPI m/m": "德國 CPI 初值月增率", "German Prelim GDP q/q": "德國 GDP 初值", "BOJ Outlook Report": "日銀經濟展望報告",
+    "Advance GDP Price Index q/q": "GDP 物價指數初值", "Pending Home Sales m/m": "成屋待完成銷售", "New Home Sales": "新屋銷售",
+    "Existing Home Sales": "成屋銷售", "Empire State Manufacturing Index": "紐約州製造業指數",
+    "Philly Fed Manufacturing Index": "費城聯儲製造業指數", "Core PCE Price Index y/y": "核心 PCE 物價年增率",
+    "CPI Flash Estimate y/y": "CPI 初值年增率", "Final Manufacturing PMI": "製造業 PMI 終值", "Final Services PMI": "服務業 PMI 終值",
+}
+國別 = {"USD": "美國", "JPY": "日本", "EUR": "歐元區", "GBP": "英國", "CNY": "中國"}
+
+
+def 結算日(年, 月):
+    """台指期月結算：每月第三個週三。"""
+    d = pd.Timestamp(年, 月, 1)
+    第一個週三 = d + pd.Timedelta(days=(2 - d.weekday()) % 7)
+    return 第一個週三 + pd.Timedelta(days=14)
+
+
+def 經濟日程(今天=None, 天數=14, 往前=0, 大型股=None):
+    """國內外重要事件：國際經濟數據與央行會議、美股龍頭財報、台指期結算、月營收與財報期限、大型股法說會與除權息。
+    回傳 DataFrame（日期、時間、類別、市場、事件、重要性、說明）。大型股＝要列入法說會、除權息的代號（例如市值前 50）。"""
+    import datetime as dt
+    import html
+    今天 = pd.Timestamp(今天 or dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).date())
+    起, 迄 = 今天 - pd.Timedelta(days=往前), 今天 + pd.Timedelta(days=天數)
+    列們 = []
+    f = 資料夾 / "econ_calendar.csv"
+    if f.exists():
+        t = pd.read_csv(f, dtype=str).fillna("")
+        t["date"] = pd.to_datetime(t["date"])
+        t = t[(t["date"] >= 起) & (t["date"] <= 迄)]
+        for _, r in t.iterrows():
+            名 = 經濟中文.get(r["title"], r["title"])
+            央行 = any(k in r["title"] for k in ("FOMC", "Federal Funds", "Policy Rate", "Refinancing", "Bank Rate", "Monetary Policy"))
+            說 = "　".join(x for x in (f"預估 {r['forecast']}" if r["forecast"] else "", f"前值 {r['previous']}" if r["previous"] else "",
+                                      f"公布 {r['actual']}" if r["actual"] else "") if x)
+            列們.append({"日期": r["date"], "時間": r["time"], "類別": "央行會議" if 央行 else "經濟數據",
+                       "市場": 國別.get(r["country"], r["country"]), "事件": f"{國別.get(r['country'], '')} {名}".strip(),
+                       "重要性": "高" if r["impact"] == "High" else "中", "說明": 說})
+    f = 資料夾 / "us_earnings.csv"
+    if f.exists():
+        t = pd.read_csv(f, dtype=str).fillna("")
+        t["date"] = pd.to_datetime(t["date"])
+        for _, r in t[(t["date"] >= 起) & (t["date"] <= 迄)].iterrows():
+            列們.append({"日期": r["date"], "時間": r["time"], "類別": "美股財報", "市場": "美國",
+                       "事件": f"{r['name']}（{r['symbol']}）財報", "重要性": "高" if r["symbol"] in ("NVDA", "TSM", "AAPL", "AVGO", "MU", "AMD") else "中",
+                       "說明": "美股時間，台灣隔天早上看結果" if r["time"] == "盤後" else ""})
+    for 月 in pd.period_range(起, 迄, freq="M"):
+        d = 結算日(月.year, 月.month)
+        if 起 <= d <= 迄:
+            列們.append({"日期": d, "時間": "13:30", "類別": "期貨結算", "市場": "台灣", "事件": "台指期月結算",
+                       "重要性": "高", "說明": "結算日前後大盤波動常較大"})
+    for _, r in 重要日程(大型股, 天數 + 往前, 起).iterrows():
+        if r["類型"] == "法說會" and 大型股 is None:
+            continue
+        說 = html.unescape(str(r["說明"])).replace("\u200e", "").replace("\u200f", "")
+        列們.append({"日期": r["日期"], "時間": "", "類別": r["類型"], "市場": "台灣",
+                   "事件": r["股票"] if r["代號"] else 說, "重要性": "中", "說明": 說 if r["代號"] else ""})
+    if 大型股 is not None:
+        f = 資料夾 / "fundamental" / "dividend_upcoming.csv"
+        if f.exists():
+            t = pd.read_csv(f, dtype={"code": str})
+            日欄 = next((c for c in ("date", "ex_date") if c in t.columns), None)
+            if 日欄:
+                t[日欄] = pd.to_datetime(t[日欄], errors="coerce")
+                t = t[(t[日欄] >= 起) & (t[日欄] <= 迄) & t["code"].isin(list(大型股))]
+                for _, r in t.iterrows():
+                    列們.append({"日期": r[日欄], "時間": "", "類別": "除權息", "市場": "台灣",
+                               "事件": f"{r['code']} {r.get('name', '')} 除權息".replace("  ", " "), "重要性": "中", "說明": ""})
+    表 = pd.DataFrame(列們, columns=["日期", "時間", "類別", "市場", "事件", "重要性", "說明"])
+    return 表.sort_values(["日期", "時間"], ignore_index=True)
+
+
+def _百分位(s, 窗=250, 最少=40):
+    """每天的值在過去 窗 天裡排第幾（0～100），缺值保持空白、不補 0。"""
+    s = s.astype(float)
+    return s.rolling(窗, min_periods=最少).apply(lambda x: (x[~np.isnan(x)] <= x[-1]).mean() * 100 if not np.isnan(x[-1]) else np.nan,
+                                              raw=True)
+
+
+def 情緒指數(指標, 加權=None):
+    """四個 0～100 的情緒分數（越高越樂觀／越熱）：
+    散戶＝融資 20 日增減與融資維持率；法人＝三大法人 5 日買賣超金額與外資台指期淨部位；
+    資金溫度＝成交金額相對 60 日均量與上漲家數比例；全球＝VIX（反向）與費城半導體 20 日漲跌。
+    每項先換成「在過去一年排第幾」，資料不夠的項目不算，不補 0。回傳 DataFrame（index＝日期）。"""
+    群 = 指標.groupby("date")
+    日 = pd.DataFrame({"成交值": 群["成交值億"].sum(), "上漲": 群["漲跌"].apply(lambda s: (s > 0).sum()),
+                       "下跌": 群["漲跌"].apply(lambda s: (s < 0).sum())}).astype(float)
+    項 = {}
+    if "融資餘額" in 指標.columns:
+        融 = 群["融資餘額"].sum().astype(float)
+        融 = 融.where(融 > 0)
+        項["融資增減"] = _百分位(融.pct_change(20))
+        維 = 融資維持率(指標)
+        if 維 is not None and len(維):
+            項["維持率"] = _百分位(維.reindex(日.index))
+    if "法人買超" in 指標.columns:
+        金 = (指標["法人買超"].astype(float) * 1000 * 指標["收盤"].astype(float)).groupby(指標["date"]).sum() / 1e8
+        項["法人5日"] = _百分位(金.rolling(5).sum())
+    期 = 讀取期貨未平倉()
+    if 期 is not None and "foreign_oi" in 期:
+        項["外資期貨"] = _百分位(期["foreign_oi"].reindex(日.index))
+    項["量能"] = _百分位(日["成交值"] / 日["成交值"].rolling(60, min_periods=20).mean())
+    項["廣度"] = _百分位((日["上漲"] / (日["上漲"] + 日["下跌"]).replace(0, np.nan)).rolling(5).mean())
+    美 = 讀取美股()
+    if 美 is not None:
+        前一美股日 = lambda s: s.reindex(s.index.union(日.index)).ffill().shift(1).reindex(日.index)  # 台股當天看前一晚美股
+        if "VIX" in 美:
+            項["VIX"] = 100 - _百分位(前一美股日(美["VIX"].dropna()))
+        if "費城半導體" in 美:
+            項["費半"] = _百分位(前一美股日(美["費城半導體"].dropna().pct_change(20)))
+    結果 = pd.DataFrame(index=日.index)
+    for 名, 欄們 in (("散戶", ["融資增減", "維持率"]), ("法人", ["法人5日", "外資期貨"]),
+                    ("資金溫度", ["量能", "廣度"]), ("全球", ["VIX", "費半"])):
+        有 = [項[c] for c in 欄們 if c in 項]
+        結果[名] = pd.concat(有, axis=1).mean(axis=1, skipna=True).rolling(3, min_periods=1).mean().round(0) if 有 else np.nan  # 3 日平滑
+    if 加權 is not None and len(加權):
+        結果["加權"] = 加權.set_index("date")["close"].reindex(結果.index)
+    return 結果
+
+
+def 情緒說明(分):
+    if pd.isna(分):
+        return "資料不足"
+    return "極度樂觀" if 分 >= 80 else "樂觀" if 分 >= 60 else "中性" if 分 > 40 else "悲觀" if 分 > 20 else "極度悲觀"
+
+
+def 情緒象限(散戶, 法人):
+    if pd.isna(散戶) or pd.isna(法人):
+        return "資料不足"
+    if 法人 >= 50:
+        return "全市場過熱" if 散戶 >= 50 else "法人吸籌"
+    return "法人出貨" if 散戶 >= 50 else "系統恐慌"
+
+
+def 市場狀態(加權, 今日, 每日, 情緒=None, 日程=None):
+    """市場狀態判讀卡（規則，不用 AI）：回傳 dict(狀態, 分數, 支持, 反向, 待觀察, 下一步)。
+    每日＝每天的大盤數字（外資、融資、外資期貨、維持率…），情緒＝情緒指數()，日程＝經濟日程()。"""
+    大 = 大盤評分(加權, 今日)
+    支持, 反向, 待觀察 = list(大["利多"]), list(大["利空"]), []
+    def 近(欄, n):
+        s = 每日[欄].dropna() if 欄 in 每日 else pd.Series(dtype=float)
+        return (s.iloc[-1], s.iloc[-1 - n]) if len(s) > n else (None, None)
+    if "外資" in 每日:
+        五 = 每日["外資"].tail(5).sum()
+        (支持 if 五 > 0 else 反向).append(f"外資近 5 日{'買' if 五 > 0 else '賣'}超約 {abs(五):,.0f} 億")
+    現, 前 = 近("外資期貨", 5)
+    if 現 is not None:
+        差 = 現 - 前
+        if abs(差) >= 3000:
+            (支持 if 差 > 0 else 反向).append(f"外資台指期淨部位 5 日{'增加' if 差 > 0 else '減少'} {abs(差):,.0f} 口（{'回補空單' if 差 > 0 else '加碼空單'}）")
+    現, 前 = 近("融資", 5)
+    if 現 is not None and 前:
+        變 = (現 / 前 - 1) * 100
+        if 變 >= 2:
+            反向.append(f"融資 5 日增加 {變:.1f}%，散戶追價、籌碼變亂")
+        elif 變 <= -2:
+            支持.append(f"融資 5 日減少 {abs(變):.1f}%，籌碼沉澱")
+    現, _ = 近("維持率", 1)
+    if 現 is not None:
+        if 現 < 150:
+            反向.append(f"融資維持率 {現:.0f}% 偏低，留意追繳賣壓")
+        elif 現 >= 175:
+            待觀察.append(f"融資維持率 {現:.0f}% 偏高，市場偏熱")
+    if 情緒 is not None and len(情緒):
+        r = 情緒.iloc[-1]
+        if pd.notna(r.get("散戶")) and r["散戶"] >= 80:
+            反向.append(f"散戶情緒 {r['散戶']:.0f} 分過熱（反向指標）")
+        elif pd.notna(r.get("散戶")) and r["散戶"] <= 20:
+            支持.append(f"散戶情緒 {r['散戶']:.0f} 分極度悲觀（反向指標，常接近低點）")
+        if pd.notna(r.get("全球")):
+            if r["全球"] >= 65:
+                支持.append(f"國際風險情緒 {r['全球']:.0f} 分偏樂觀（VIX 低、費半強）")
+            elif r["全球"] <= 35:
+                反向.append(f"國際風險情緒 {r['全球']:.0f} 分偏悲觀（VIX 高或費半弱）")
+    if 日程 is not None and len(日程):
+        近期 = 日程[(日程["重要性"] == "高")].head(6)
+        for _, r in 近期.iterrows():
+            待觀察.append(f"{r['日期']:%m/%d}（{'一二三四五六日'[r['日期'].weekday()]}）{r['事件']}")
+    分數 = len(支持) - len(反向)
+    狀態 = "偏多" if 分數 >= 3 else ("偏空" if 分數 <= -3 else ("中性偏多" if 分數 > 0 else ("中性偏空" if 分數 < 0 else "中性盤整")))
+    數 = 大["數字"]
+    下一步 = []
+    if "MA20" in 數:
+        下一步.append(f"加權能否守住月線 {數['MA20']:,.0f}" if 數["加權"] >= 數["MA20"] else f"加權能否站回月線 {數['MA20']:,.0f}")
+    if "MA60" in 數:
+        下一步.append(f"季線 {數['MA60']:,.0f} 是中期多空分界")
+    下一步.append("外資現貨與期貨方向是否一致（同買＝偏多確認、同賣＝偏空確認）")
+    return {"狀態": 狀態, "分數": 分數, "支持": 支持, "反向": 反向, "待觀察": 待觀察, "下一步": 下一步, "大盤": 大}

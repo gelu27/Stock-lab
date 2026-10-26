@@ -20,6 +20,9 @@
 #   data/warning.csv                      處置股、注意股（交易所每日公告）
 #   data/sbl/20261022.csv.gz              借券賣出餘額（上市＋上櫃，單位：張，保留約一年）
 #   data/calendar.csv                     法說會日程（公開資訊觀測站，本月與下月）
+#   data/us_daily.csv                     美股指數、VIX、台股供應鏈龍頭每日收盤（Yahoo，近 2 年）
+#   data/econ_calendar.csv                國際經濟數據、央行會議（ForexFactory 本週與下週，逐週累積）
+#   data/us_earnings.csv                  美股龍頭財報日（Nasdaq 財報行事曆，未來 5 週）
 
 import argparse
 import datetime as dt
@@ -830,6 +833,109 @@ def 抓匯率():
     print("匯率完成")
 
 
+# ---------- 國際：美股日線、經濟行事曆、美股財報日 ----------
+美股代號 = {"^SOX": "費城半導體", "^IXIC": "那斯達克", "^GSPC": "S&P 500", "^DJI": "道瓊", "^VIX": "VIX",
+          "TSM": "台積電 ADR", "NVDA": "輝達", "AAPL": "蘋果", "AMD": "超微", "AVGO": "博通", "MU": "美光",
+          "TSLA": "特斯拉", "^N225": "日經 225", "^KS11": "韓國綜合"}
+財報關注 = {"NVDA": "輝達", "AAPL": "蘋果", "MSFT": "微軟", "GOOGL": "Alphabet", "AMZN": "亞馬遜", "META": "Meta",
+          "TSLA": "特斯拉", "AMD": "超微", "AVGO": "博通", "MU": "美光", "QCOM": "高通", "INTC": "英特爾",
+          "AMAT": "應用材料", "LRCX": "科林研發", "KLAC": "科磊", "ASML": "艾司摩爾", "TSM": "台積電 ADR",
+          "SMCI": "美超微", "DELL": "戴爾", "HPE": "慧與", "ORCL": "甲骨文", "ARM": "安謀", "MRVL": "邁威爾",
+          "CSCO": "思科", "ANET": "Arista", "TXN": "德州儀器", "NXPI": "恩智浦", "ON": "安森美", "WDC": "威騰"}
+
+
+def 抓美股日線(範圍="2y"):
+    """美股指數、VIX、台股供應鏈龍頭的每日收盤 → data/us_daily.csv（date, symbol, name, close；date 是美股交易日）。"""
+    def 抓(符號):
+        try:
+            r = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{requests.utils.quote(符號)}"
+                             f"?range={範圍}&interval=1d", headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+            結果 = r.json()["chart"]["result"][0]
+            時區 = 結果["meta"].get("gmtoffset", 0)
+            列們 = [{"date": dt.datetime.utcfromtimestamp(時 + 時區).strftime("%Y-%m-%d"), "symbol": 符號,
+                    "name": 美股代號[符號], "close": round(收, 4)}
+                   for 時, 收 in zip(結果["timestamp"], 結果["indicators"]["quote"][0]["close"]) if 收]
+            return 列們
+        except Exception as 錯誤:
+            print(f"美股 {符號} 失敗：{錯誤}")
+            return []
+    with ThreadPoolExecutor(6) as 工人:
+        列們 = [x for 批 in 工人.map(抓, 美股代號) for x in 批]
+    if not 列們:
+        print("美股日線沒有資料")
+        return
+    檔 = 資料夾 / "us_daily.csv"
+    表 = pd.DataFrame(列們)
+    if 檔.exists():
+        表 = pd.concat([pd.read_csv(檔), 表])
+    表 = 表.drop_duplicates(["date", "symbol"], keep="last").sort_values(["symbol", "date"])
+    表 = 表[表["date"] >= (dt.date.today() - dt.timedelta(days=800)).isoformat()]
+    表.to_csv(檔, index=False)
+    print(f"美股日線完成：{表['symbol'].nunique()} 檔，最新 {表['date'].max()}")
+
+
+def 抓經濟行事曆():
+    """ForexFactory 本週、下週的經濟數據（只留美、中、日、歐、英的中高重要性）→ data/econ_calendar.csv。
+    欄位：date（台北時間）、time、country、title、impact、forecast、previous、actual。"""
+    列們 = []
+    for 週 in ("thisweek", "nextweek"):
+        try:
+            r = requests.get(f"https://nfs.faireconomy.media/ff_calendar_{週}.json", headers={"User-Agent": "Mozilla/5.0"},
+                             timeout=30)
+            if r.status_code != 200:
+                print(f"經濟行事曆 {週}：HTTP {r.status_code}")
+                continue
+            for x in r.json():
+                if x.get("country") not in ("USD", "CNY", "JPY", "EUR", "GBP") or x.get("impact") not in ("High", "Medium"):
+                    continue
+                時 = pd.Timestamp(x["date"]).tz_convert("Asia/Taipei")
+                列們.append({"date": f"{時:%Y-%m-%d}", "time": f"{時:%H:%M}", "country": x["country"],
+                            "title": x.get("title", ""), "impact": x["impact"], "forecast": x.get("forecast", ""),
+                            "previous": x.get("previous", ""), "actual": x.get("actual", "")})
+        except Exception as 錯誤:
+            print(f"經濟行事曆 {週} 失敗：{錯誤}")
+    if not 列們:
+        print("經濟行事曆沒有資料")
+        return
+    檔 = 資料夾 / "econ_calendar.csv"
+    表 = pd.DataFrame(列們)
+    if 檔.exists():
+        表 = pd.concat([pd.read_csv(檔, dtype=str), 表.astype(str)])
+    表 = 表.drop_duplicates(["date", "time", "country", "title"], keep="last").sort_values(["date", "time"])
+    表 = 表[表["date"] >= (dt.date.today() - dt.timedelta(days=120)).isoformat()]
+    表.to_csv(檔, index=False)
+    print(f"經濟行事曆完成：{len(表)} 筆，最新 {表['date'].max()}")
+
+
+def 抓美股財報(天數=35):
+    """Nasdaq 財報行事曆：未來 天數 天內，台股供應鏈相關美股龍頭的財報日 → data/us_earnings.csv。"""
+    今天 = dt.date.today()
+    def 抓(日):
+        try:
+            r = requests.get(f"https://api.nasdaq.com/api/calendar/earnings?date={日:%Y-%m-%d}", timeout=30,
+                             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Accept": "application/json"})
+            列們 = (r.json().get("data") or {}).get("rows") or []
+            return [{"date": f"{日:%Y-%m-%d}", "symbol": x["symbol"], "name": 財報關注[x["symbol"]],
+                     "time": {"time-pre-market": "盤前", "time-after-hours": "盤後"}.get(x.get("time"), "")}
+                    for x in 列們 if x.get("symbol") in 財報關注]
+        except Exception as 錯誤:
+            print(f"財報 {日} 失敗：{錯誤}")
+            return None
+    日們 = [今天 + dt.timedelta(days=i) for i in range(天數) if (今天 + dt.timedelta(days=i)).weekday() < 5]
+    with ThreadPoolExecutor(4) as 工人:
+        結果 = list(工人.map(抓, 日們))
+    if all(x is None for x in 結果):
+        print("美股財報全部失敗")
+        return
+    新 = pd.DataFrame([x for 批 in 結果 if 批 for x in 批], columns=["date", "symbol", "name", "time"])
+    檔 = 資料夾 / "us_earnings.csv"
+    舊 = pd.read_csv(檔, dtype=str) if 檔.exists() else pd.DataFrame(columns=新.columns)
+    舊 = 舊[(舊["date"] < 今天.isoformat()) & (舊["date"] >= (今天 - dt.timedelta(days=120)).isoformat())]  # 過去的留著，未來的以這次為準
+    表 = pd.concat([舊, 新.astype(str)]).drop_duplicates(["date", "symbol"], keep="last").sort_values("date")
+    表.to_csv(檔, index=False)
+    print(f"美股財報完成：未來 {len(新)} 筆")
+
+
 # ---------- 主程式 ----------
 def main():
     參數 = argparse.ArgumentParser()
@@ -877,7 +983,8 @@ def main():
             print(f"{日} 休市")
 
     if not 參數.skip_latest:
-        for 工作 in (抓分時, 抓興櫃, 抓基本面, 抓匯率, 抓處置注意, 抓借券, 抓法說會, 抓融資金額, 抓期貨未平倉):  # 這些出問題不影響主資料庫
+        for 工作 in (抓分時, 抓興櫃, 抓基本面, 抓匯率, 抓處置注意, 抓借券, 抓法說會, 抓融資金額, 抓期貨未平倉,
+                     抓美股日線, 抓經濟行事曆, 抓美股財報):  # 這些出問題不影響主資料庫
             try:
                 工作()
             except Exception as 錯誤:
