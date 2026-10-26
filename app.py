@@ -1023,6 +1023,7 @@ def 自選股區():
     if st.session_state.get("自選群組") not in 群組們:
         st.session_state["自選群組"] = 群組們[0]
     if len(群組們) > 1:
+        群組績效(自選)
         群組 = st.segmented_control("群組", 群組們, key="自選群組", label_visibility="collapsed") or 群組們[0]
     else:
         群組 = 群組們[0]
@@ -1039,14 +1040,47 @@ def 自選股區():
             存自選股({**自選, 群組: [v.split()[0] for v in 選]})
             st.rerun()
         a, b = st.columns([3, 1])
-        新名 = a.text_input("新增群組", placeholder="例如：觀察中、想買", key="自選新群組").strip()
+        新名 = a.text_input("新增群組", placeholder="例如：長抱、短線、觀察", key="自選新群組").strip()
         if b.button("＋ 建立", key="自選建立") and 新名 and 新名 not in 自選:
             存自選股({**自選, 新名: []})
             st.session_state["自選群組_切換"] = 新名
             st.rerun()
+        if len(群組們) > 1 and 代號們:
+            a, b, c = st.columns([2, 2, 1])
+            移 = a.selectbox("把股票移到別的群組", [對照.get(x, x) for x in 代號們], key="自選移動股")
+            到 = b.selectbox("移到", [g for g in 群組們 if g != 群組], key="自選移動到")
+            if c.button("➜ 移動", key="自選移動") and 移 and 到:
+                x = 移.split()[0]
+                存自選股({g: ([y for y in v if y != x] if g == 群組 else v + [x] if g == 到 and x not in v else v)
+                       for g, v in 自選.items()})
+                st.rerun()
         if len(群組們) > 1 and st.button(f"🗑 刪除「{群組}」群組", key="自選刪除"):
             存自選股({k: v for k, v in 自選.items() if k != 群組})
             st.rerun()
+
+
+def 群組績效(自選):
+    """每個群組的平均表現（等權重），比較長抱、短線、觀察哪一組比較好。"""
+    表 = 今日.set_index("代號")
+    紀錄 = 自選紀錄()
+    列們 = []
+    for 群, 代號們 in 自選.items():
+        有 = [c for c in 代號們 if c in 表.index]
+        if not 有:
+            continue
+        t = 表.loc[有]
+        加入 = pd.Series({c: (紀錄.get(c, {}).get("收盤") or np.nan) for c in 有}, dtype=float)
+        至今 = (t["收盤"] / 加入 - 1) * 100
+        列們.append({"群組": 群, "檔數": len(有), "今日%": t["漲跌幅"].mean(), "5日%": t["5日漲幅"].mean(),
+                    "20日%": t["20日漲幅"].mean(), "加入至今%": 至今.mean(),
+                    "最強": f"{t['漲跌幅'].idxmax()} {t.loc[t['漲跌幅'].idxmax(), '名稱']}" if t["漲跌幅"].notna().any() else "—"})
+    if not 列們:
+        return
+    績 = pd.DataFrame(列們)
+    數欄 = ["今日%", "5日%", "20日%", "加入至今%"]
+    樣式 = 績.style.format({k: "{:+.2f}" for k in 數欄}, na_rep="—").map(lambda v: f"color:{漲跌色(v)}", subset=數欄)
+    st.dataframe(樣式, hide_index=True, width="stretch", height=35 * (len(績) + 1) + 3)
+    st.caption("各群組等權重平均；最強 = 今天漲最多的一檔。")
 
 
 @st.fragment(run_every=30 if engine.盤中時間() else None)
@@ -1082,6 +1116,52 @@ def 自選表(代號們):
         st.rerun(scope="app")
     st.caption("點一下股票可看個股查詢。加入價 = 加入當時最新的收盤價，加入至今% = 現在股價比加入價漲跌多少。"
                "法人(張) = 三大法人今日買賣超。🔔 = 已到達提醒價格（到價提醒在個股頁設定）。")
+
+
+def 個股比較(代號):
+    """2～4 檔股票走勢疊在一起（起點 = 100）＋評分、估值、籌碼並排。"""
+    段落("COMPARE // 個股比較")
+    對照 = {v.split()[0]: v for v in 股票選項}
+    群 = engine.同族群(今日, 代號, 3)
+    預設 = [c for c in (群["代號"].tolist() if 群 is not None else []) if c != 代號][:2]
+    其他 = st.multiselect("跟哪些股票比（最多 3 檔，預設同產業市值最大的兩檔）", [v for v in 股票選項 if not v.startswith(代號 + " ")],
+                        default=[對照[c] for c in 預設 if c in 對照], max_selections=3, key=f"比較_{代號}")
+    代號們 = [代號] + [v.split()[0] for v in 其他]
+    期間 = st.segmented_control("期間", ["1 個月", "3 個月", "6 個月", "1 年"], default="3 個月", key="比較期間",
+                              label_visibility="collapsed") or "3 個月"
+    起 = 最新日 - pd.DateOffset(months={"1 個月": 1, "3 個月": 3, "6 個月": 6, "1 年": 12}[期間])
+    史 = 指標[(指標["代號"].isin(代號們)) & (指標["date"] >= 起)].pivot_table(index="date", columns="代號", values="還原價")
+    色們 = [青, "#FFB020", "#B388FF", "#FF7AB6"]
+    名 = dict(zip(今日["代號"], 今日["名稱"]))
+    圖 = go.Figure()
+    for i, c in enumerate(代號們):
+        if c in 史 and 史[c].notna().any():
+            線 = 史[c].dropna()
+            圖.add_trace(go.Scatter(x=線.index, y=線 / 線.iloc[0] * 100, mode="lines", name=f"{c} {名.get(c, '')}",
+                                   line=dict(color=色們[i], width=2.5 if i == 0 else 1.8)))
+    圖.add_hline(y=100, line=dict(color=灰, dash="dot", width=1))
+    圖.update_layout(legend=dict(orientation="h", y=1.08, x=0))
+    st.plotly_chart(圖表外觀(圖, 340), width="stretch")
+    st.caption("用還原股價（含配息）換算，起點都從 100 開始，100 以上代表這段期間是賺的。")
+    分 = 評分資料(_版本)[0]
+    t = 今日.set_index("代號").reindex(代號們)
+    期間漲 = (史.ffill().iloc[-1] / 史.bfill().iloc[0] - 1) * 100 if len(史) else pd.Series(dtype=float)
+    表 = pd.DataFrame({
+        "股票": [f"{c} {名.get(c, '')}" for c in 代號們],
+        "股價": t["收盤"].values, "今日%": t["漲跌幅"].values, f"{期間}%": 期間漲.reindex(代號們).values,
+        "總分": 分["總分"].reindex(代號們).values, "看法": 分["看法"].reindex(代號們).values,
+        "本益比": t["本益比"].values, "殖利率": t["殖利率"].values, "淨值比": t["淨值比"].values,
+        "營收年增%": t.get("營收年增率", pd.Series(np.nan, index=t.index)).values,
+        "法人5日(張)": t.get("法人5日買超", pd.Series(np.nan, index=t.index)).values,
+        "產業": t["產業"].values if "產業" in t else None,
+    })
+    漲欄 = ["今日%", f"{期間}%", "營收年增%", "法人5日(張)"]
+    樣式 = (表.style.format({"股價": "{:,.2f}", "今日%": "{:+.2f}", f"{期間}%": "{:+.1f}", "總分": "{:.0f}",
+                            "本益比": "{:.1f}", "殖利率": "{:.2f}", "淨值比": "{:.2f}", "營收年增%": "{:+.1f}",
+                            "法人5日(張)": "{:+,.0f}"}, na_rep="—")
+          .map(lambda v: f"color:{漲跌色(v)}", subset=漲欄).map(lambda v: f"color:{分數色(v)}", subset=["總分"]))
+    st.dataframe(樣式, hide_index=True, width="stretch", height=35 * (len(表) + 1) + 3)
+    st.caption("總分是規則計分（50 為中性），僅供參考，非投資建議。")
 
 
 @st.cache_data(ttl=3600, show_spinner=False, max_entries=50)
@@ -1179,6 +1259,12 @@ def 市場每日(_資料版本):
         表["外資"] = 金額("外資買超")
         表["法人"] = 金額("法人買超")
         表["融資"] = 近.groupby("date")["融資餘額"].sum()
+        維持 = engine.融資維持率(近)
+        if 維持 is not None:
+            表["維持率"] = 維持.reindex(表.index)
+    期 = engine.讀取期貨未平倉()
+    if 期 is not None and "foreign_oi" in 期:
+        表["外資期貨"] = 期["foreign_oi"].reindex(表.index)
     if 加權 is not None and not 加權.empty:
         表["加權"] = 加權.set_index("date")["close"].reindex(表.index)
     匯率 = engine.讀取匯率()
@@ -1218,13 +1304,49 @@ def 市場卡片():
         欄位 = {"加權": ("加權指數", "{:,.0f}"), "成交金額": ("成交金額（億）", "{:,.0f}"),
               "上漲": ("上漲家數", "{:,.0f}"), "下跌": ("下跌家數", "{:,.0f}"),
               "外資": ("外資買賣超（億）", "{:,.1f}"), "法人": ("三大法人買賣超（億）", "{:,.1f}"),
-              "融資": ("融資餘額（張）", "{:,.0f}"), "匯率": ("美元/台幣", "{:.3f}")}
+              "融資": ("融資餘額（張）", "{:,.0f}"), "維持率": ("上市融資維持率（%）", "{:.1f}"),
+              "外資期貨": ("外資台指期淨未平倉（口）", "{:+,.0f}"), "匯率": ("美元/台幣", "{:.3f}")}
         欄位 = {k: v for k, v in 欄位.items() if k in 每日.columns and 每日[k].notna().iloc[-1]}
         with st.expander("📊 前後期比較（昨日、5 日前、20 日前、60 日前）", expanded=True):
             前後期表(每日, 欄位, [("昨日", 1), ("5 日前", 5), ("20 日前", 20), ("60 日前", 60)],
                      lambda d: f"{d:%m/%d}", 反向={"下跌", "融資", "匯率"})
             st.caption("🔴 偏多：指數、成交、上漲家數、法人買超變多，融資減少、台幣升值；🟢 反之。"
                        "外資／法人金額用買賣超張數 × 收盤價估算。")
+
+
+def 資金面區():
+    段落("MONEY // 資金面：漲跌家數、融資維持率、外資期貨")
+    每日 = 市場每日(_版本).tail(60)
+    卡們 = []
+    if "維持率" in 每日 and 每日["維持率"].notna().any():
+        維 = 每日["維持率"].dropna()
+        差 = 維.iloc[-1] - 維.iloc[-2] if len(維) >= 2 else np.nan
+        卡們.append(卡片(f"上市融資維持率 · {維.index[-1]:%m/%d}", f"{維.iloc[-1]:.1f}%",
+                       ("" if pd.isna(差) else f"{差:+.1f}　") + ("低於 140% 容易有斷頭賣壓" if 維.iloc[-1] < 140 else "130% 以下會被追繳"),
+                       綠 if 維.iloc[-1] < 140 else "#EDEDED"))
+    if "外資期貨" in 每日 and 每日["外資期貨"].notna().any():
+        期 = 每日["外資期貨"].dropna()
+        差 = 期.iloc[-1] - 期.iloc[-2] if len(期) >= 2 else np.nan
+        卡們.append(卡片(f"外資台指期淨未平倉 · {期.index[-1]:%m/%d}", f"{期.iloc[-1]:+,.0f} 口",
+                       "" if pd.isna(差) else f"較前一日 {差:+,.0f} 口", 漲跌色(期.iloc[-1])))
+    淨 = 每日["上漲"] - 每日["下跌"]
+    卡們.append(卡片("上漲減下跌（今日）", f"{淨.iloc[-1]:+,.0f} 家", f"近 20 日平均 {淨.tail(20).mean():+,.0f}", 漲跌色(淨.iloc[-1])))
+    卡片格(卡們)
+    日 = 每日.index.strftime("%m/%d")
+    圖 = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.06,
+                       subplot_titles=("上漲家數 − 下跌家數", "上市融資維持率（%）", "外資台指期淨未平倉（口）"))
+    圖.add_trace(go.Bar(x=日, y=淨, marker_color=[紅 if v > 0 else 綠 for v in 淨], name="漲跌家數差"), 1, 1)
+    if "維持率" in 每日:
+        圖.add_trace(go.Scatter(x=日, y=每日["維持率"], mode="lines", line=dict(color=青, width=2), name="維持率",
+                                connectgaps=True), 2, 1)
+    if "外資期貨" in 每日:
+        圖.add_trace(go.Bar(x=日, y=每日["外資期貨"], marker_color="#FFB020", name="外資淨未平倉"), 3, 1)
+    圖.update_layout(showlegend=False, bargap=0.2)
+    圖.update_xaxes(type="category", nticks=8)
+    圖.update_annotations(font=dict(size=11, color=灰), x=0, xanchor="left")
+    st.plotly_chart(圖表外觀(圖, 520), width="stretch")
+    st.caption("融資維持率 = 上市股票融資餘額 × 收盤價 ÷ 融資金額（證交所信用交易統計），自行估算，跟券商公布的數字可能差 1～2%。"
+               "外資淨未平倉 = 外資台指期（大台）多單減空單，負的代表偏空避險。")
 
 
 def 排行區():
@@ -1251,7 +1373,7 @@ def 排行區():
                "依 Yahoo 1 分鐘線計算，可能有幾分鐘誤差。")
 
 
-首頁區塊 = ["市場", "國際", "加權指數", "族群", "排行"]
+首頁區塊 = ["市場", "國際", "加權指數", "資金", "族群", "排行"]
 
 if 頁面 == 頁面們[0]:
     隱藏 = [x for x in st.query_params.get("hide", "").split(",") if x in 首頁區塊]
@@ -1274,6 +1396,8 @@ if 頁面 == 頁面們[0]:
             st.caption("國際行情暫時無法顯示。")
     if "加權指數" in 顯示 and 加權 is not None and len(加權) > 1:
         加權圖()
+    if "資金" in 顯示:
+        資金面區()
     if "族群" in 顯示:
         族群熱力圖()
     if "排行" in 顯示:
@@ -1403,35 +1527,99 @@ def 績效卡(績, 基準名, 基準鍵):
     ]
     if 基準鍵 in 績:
         卡們.append(卡片(基準名, f"{績[基準鍵]:+.1f}%", "買進持有", 漲跌色(績[基準鍵])))
+    if 基準鍵 != "0050 同期報酬(%)" and "0050 同期報酬(%)" in 績:
+        卡們.append(卡片("0050 同期", f"{績['0050 同期報酬(%)']:+.1f}%", "買進持有", 漲跌色(績["0050 同期報酬(%)"])))
+    if "交易成本(元)" in 績:
+        卡們.append(卡片("手續費＋證交稅", f"{績['交易成本(元)']:,.0f}", "元"))
     卡片格(卡們)
 
 
+回測存檔 = "backtest_presets.json"
+
+
+def 回測條件存取():
+    """把目前的選股條件與回測參數存成一組名字，下次一鍵套用（存在 ai-reports 分支，需密碼）。"""
+    if "回測條件組" not in st.session_state:
+        try:
+            st.session_state["回測條件組"] = engine.讀取設定檔(_設定(), 回測存檔) or {}
+        except Exception:
+            st.session_state["回測條件組"] = {}
+    組們 = st.session_state["回測條件組"]
+    with st.expander(f"💾 常用條件（已存 {len(組們)} 組）"):
+        if 組們:
+            a, b, c = st.columns([3, 1, 1])
+            選 = a.selectbox("已存的條件", list(組們), key="回測條件選", label_visibility="collapsed")
+            if b.button("套用", key="回測條件套用"):
+                st.session_state["_套用回測條件"] = 組們[選]
+                st.rerun()
+            if 可編輯() and c.button("🗑 刪除", key="回測條件刪"):
+                新 = {k: v for k, v in 組們.items() if k != 選}
+                if 回測條件存檔(新):
+                    st.rerun()
+        if not 可編輯():
+            st.caption("存新條件需要先在「02 / 我的股票」輸入密碼解鎖；已存的條件可以直接套用。")
+            return
+        a, b = st.columns([3, 1])
+        名 = a.text_input("名稱", placeholder="例如：高殖利率＋投信連買", key="回測條件名", label_visibility="collapsed").strip()
+        if b.button("存目前條件", key="回測條件存") and 名:
+            內容 = {k: (list(v) if isinstance(v, tuple) else v) for k, v in st.session_state.items()
+                  if str(k).startswith(("條_", "回_")) and isinstance(v, (bool, int, float, str, list, tuple))}
+            if 回測條件存檔({**組們, 名: 內容}):
+                st.rerun()
+
+
+def 回測條件存檔(組們):
+    try:
+        engine.儲存設定檔(_設定(), 回測存檔, 組們, "更新回測常用條件")
+        st.session_state["回測條件組"] = 組們
+        st.toast("已儲存")
+        return True
+    except Exception as e:
+        st.error(f"存檔失敗：{e}")
+        return False
+
+
+def 套用回測條件():
+    組 = st.session_state.pop("_套用回測條件", None)
+    if not 組:
+        return
+    for k, v in 組.items():
+        if k in ("條_市場",) or not isinstance(v, list):
+            st.session_state[k] = v
+        else:
+            st.session_state[k] = tuple(v)  # 滑桿區間
+    st.session_state["_條件記憶"] = {k: v for k, v in st.session_state.items() if str(k).startswith("條_")}
+
+
 if 頁面 == 頁面們[7]:
+    套用回測條件()
     回測分頁 = st.tabs(["組合回測", "個股回測"])
     with 回測分頁[0]:
+        回測條件存取()
         with st.expander("⚙️ 選股條件（跟 04 / 選股 共用）"):
             條件, 範本 = 選股條件區()
         st.caption("規則：每期最後一個交易日收盤後用上面的條件選股，隔日收盤價買進前 N 檔，每檔投入總資產 ÷ N；"
-                   "沒入選的賣出；觸發停損停利當天收盤賣出。已計入手續費 0.1425% 與證交稅 0.3%。"
+                   "沒入選的賣出；觸發停損停利當天收盤賣出。已計入手續費 0.1425%（可打折）與證交稅（股票 0.3%、ETF 0.1%）。"
                    "月營收與 EPS 條件只有最新一期，回測時不套用。")
         最早 = engine.資料起訖()[0].date()
         a, b, c, d, e = st.columns(5)
         開始 = a.date_input("開始日期", max(最早, 最新日.date() - dt.timedelta(days=730)), min_value=最早,
                          max_value=最新日.date())
         結束 = b.date_input("結束日期", 最新日.date(), min_value=最早, max_value=最新日.date())
-        調倉 = c.selectbox("調倉頻率", ["每月", "每週", "每日"])
-        檔數 = d.number_input("最多持有檔數", 1, 50, 10)
-        資金 = e.number_input("初始資金", 100_000, 100_000_000, 1_000_000, step=100_000)
-        a, b = st.columns(2)
-        停損 = a.number_input("停損 %（0 代表不設）", 0.0, 50.0, 10.0, step=1.0)
-        停利 = b.number_input("停利 %（0 代表不設）", 0.0, 500.0, 0.0, step=5.0)
+        調倉 = c.selectbox("調倉頻率", ["每月", "每週", "每日"], key="回_調倉")
+        檔數 = d.number_input("最多持有檔數", 1, 50, 10, key="回_檔數")
+        資金 = e.number_input("初始資金", 100_000, 100_000_000, 1_000_000, step=100_000, key="回_資金")
+        a, b, c = st.columns(3)
+        停損 = a.number_input("停損 %（0 代表不設）", 0.0, 50.0, 10.0, step=1.0, key="回_停損")
+        停利 = b.number_input("停利 %（0 代表不設）", 0.0, 500.0, 0.0, step=5.0, key="回_停利")
+        折扣 = c.number_input("手續費折扣（1 = 不打折，0.28 = 2.8 折）", 0.1, 1.0, 1.0, step=0.05, key="回_折扣")
 
         if st.button("▶ 開始回測"):
             with st.spinner("回測計算中…"):
                 每日, 調倉日表 = engine.回測資料(開始, 結束, 調倉)
                 st.session_state["回測"] = engine.回測(
                     每日, 條件, pd.Timestamp(開始), pd.Timestamp(結束), 檔數, 調倉,
-                    停損 or None, 停利 or None, 資金, 選股資料=調倉日表)
+                    停損 or None, 停利 or None, 資金, 選股資料=調倉日表, 手續費折扣=折扣)
                 del 每日, 調倉日表
                 engine.釋放記憶體()
 
@@ -1465,7 +1653,7 @@ if 頁面 == 頁面們[7]:
                 st.dataframe(上色(報告["交易"]), hide_index=True, width="stretch", height=360)
 
     with 回測分頁[1]:
-        st.caption("訊號在收盤後產生，隔一個交易日以收盤價成交；已計入手續費與證交稅，價格使用還原股價。")
+        st.caption("訊號在收盤後產生，隔一個交易日以收盤價成交；已計入手續費（可打折）與證交稅，價格使用還原股價。")
         全部選項 = (今日["代號"] + " " + 今日["名稱"]).tolist()
         預設 = next((i for i, v in enumerate(全部選項) if v.startswith("2330 ")), 0)
         a, b = st.columns([2, 1])
@@ -1483,10 +1671,11 @@ if 頁面 == 頁面們[7]:
         RSI上 = b.number_input("RSI 賣出（高於）", 50, 95, 70, key="RSI上")
         停損2 = c.number_input("停損 %（0 不設）", 0.0, 50.0, 0.0, step=1.0, key="個股停損")
         停利2 = d.number_input("停利 %（0 不設）", 0.0, 500.0, 0.0, step=5.0, key="個股停利")
+        折扣2 = st.number_input("手續費折扣（1 = 不打折，0.28 = 2.8 折）", 0.1, 1.0, 1.0, step=0.05, key="個股折扣")
         if st.button("▶ 開始個股回測"):
             st.session_state["個股回測"] = engine.個股回測(
                 個股全史(標的.split()[0], _版本), 標的.split()[0], pd.Timestamp(開始2), pd.Timestamp(結束2), 策略, 短, 長, RSI下, RSI上,
-                停損2 or None, 停利2 or None)
+                停損2 or None, 停利2 or None, 手續費折扣=折扣2, 大盤=個股全史("0050", _版本))
         報告 = st.session_state.get("個股回測")
         if 報告 is None:
             st.info("選好股票和策略後，按「開始個股回測」。")
@@ -1498,6 +1687,9 @@ if 頁面 == 頁面們[7]:
                                       line=dict(color=青, width=2)))
             圖.add_trace(go.Scatter(x=報告["基準"].index, y=(報告["基準"] - 1) * 100, name="買進持有",
                                     line=dict(color=灰, width=1, dash="dot")))
+            if 報告.get("大盤") is not None:
+                圖.add_trace(go.Scatter(x=報告["大盤"].index, y=(報告["大盤"] - 1) * 100, name="0050",
+                                        line=dict(color="#FFB020", width=1, dash="dash")))
             交易 = 報告["交易"]
             if not 交易.empty:
                 對照 = (報告["曲線"] - 1) * 100
@@ -1589,7 +1781,9 @@ if 頁面 == 頁面們[2]:
         卡片("市值", 數(股數 * r["收盤"] / 1e8 if pd.notna(股數) else np.nan, "{:,.0f}", " 億")),
         卡片("成交量", 數(r["成交張數"], "{:,.0f}", " 張"), f"週轉率 {數(r['volume'] / 股數 * 100 if pd.notna(股數) else np.nan, '{:.2f}', '%')}"),
     ])
-    分頁 = st.tabs(["📋 總覽", "💰 籌碼", "📊 基本面", "📈 技術", "🤖 AI 分析"])
+    分頁 = st.tabs(["📋 總覽", "💰 籌碼", "📊 基本面", "📈 技術", "🤖 AI 分析", "⚖️ 比較"])
+    with 分頁[5]:
+        個股比較(代號)
     with 分頁[0]:
         法 = 日程資料((代號,), _版本, 60)
         法 = 法[法["類型"] == "法說會"]
@@ -2646,6 +2840,17 @@ if 頁面 == 頁面們[5]:
     st.caption("資料來源：優先用各投信官網每日公布的持股（野村、統一、群益、復華、中信、第一金、富邦、凱基、摩根、台新、永豐、聯博、安聯）；"
                "官網抓不到時改用公開彙整 nctuwanglin.github.io/active-etf，再不行用 github.com/janeytu/tw-etf-pages 的快照"
                "（國泰、兆豐官網擋 GitHub，只能靠彙整）。總覽表的「來源」欄可看每檔用的是哪一個。僅供研究參考，不構成投資建議。")
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def 新鮮度表(_版本):
+    return engine.資料新鮮度()
+
+
+_鮮 = 新鮮度表(_版本)
+_落後 = (~_鮮["狀態"].str.startswith("✅")).sum()
+with st.expander(f"🩺 資料新鮮度：{'全部正常' if not _落後 else f'{_落後} 項落後'}", expanded=bool(_落後)):
+    st.dataframe(_鮮, hide_index=True, width="stretch")
+    st.caption("每日資料跟最新交易日比；月營收、內部人、季報看距離該期結束多久。休市日不算落後。")
 
 st.markdown(f'<div class="sub" style="color:{灰};font-family:JetBrains Mono;font-size:11px;margin-top:30px">'
             '僅供個人研究，不構成投資建議 // DATA: TWSE · TPEx</div>', unsafe_allow_html=True)
