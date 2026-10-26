@@ -242,8 +242,14 @@ if 指標 is None:
     st.stop()
 
 最新日 = 指標["date"].max()
-a, b = st.columns([4, 1])
+if "精簡表格" not in st.session_state:  # 手機預設精簡
+    try:
+        st.session_state["精簡表格"] = "Mobile" in st.context.headers.get("User-Agent", "")
+    except Exception:
+        st.session_state["精簡表格"] = False
+a, c, b = st.columns([3, 1, 1])
 a.caption(f"📅 資料日期 {最新日:%Y/%m/%d}　·　資料庫最後更新 {最後更新()}（每個交易日約 18:00 自動更新）")
+c.toggle("📱 精簡表格", key="精簡表格", help="表格只留名稱、股價、漲跌等重點欄位，手機不用左右滑")
 with b.popover("🔄 更新"):
     st.markdown("**重新載入**：資料庫已經更新、但網站顯示的還是舊資料時按。")
     if st.button("🔄 重新載入網站資料", key="重新載入"):
@@ -417,7 +423,16 @@ def 點選表(表, 樣式, key, **參數):
         列們 = st.session_state[key].selection.rows
         if 列們:
             前往(表.iloc[列們[0]]["代號"])
+    if st.session_state.get("精簡表格"):
+        留 = [c for c in 表.columns if c in 精簡欄位]
+        if len(留) >= 3:
+            參數["column_config"] = {**{c: None for c in 表.columns if c not in 留}, **參數.get("column_config", {})}
     st.dataframe(樣式, key=key, on_select=點了, selection_mode="single-row", hide_index=True, width="stretch", **參數)
+
+
+# 手機精簡表格只留這些欄（有的才顯示）
+精簡欄位 = {"名稱", "股票", "股價", "收盤", "漲跌幅", "今日損益", "總損益", "報酬率(%)", "總分", "較昨日", "看法",
+          "加入至今%", "驗收", "距目標價%", "20日漲幅", "符合策略", "市值億"}
 
 @st.cache_data(show_spinner=False)
 def 警示表(_資料版本):
