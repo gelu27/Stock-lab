@@ -21,6 +21,7 @@
 #   data/sbl/20261022.csv.gz              借券賣出餘額（上市＋上櫃，單位：張，保留約一年）
 #   data/calendar.csv                     法說會日程（公開資訊觀測站，本月與下月）
 #   data/index_ohlc.csv                   加權指數、櫃買指數每日開高低收（證交所、櫃買中心，近 5 年），畫支撐壓力用
+#   data/mtx_retail.csv                   小台散戶多空比（期交所三大法人小台淨部位、小台未平倉量）
 #   data/us_daily.csv                     美股指數、VIX、台股供應鏈龍頭每日收盤（Yahoo，近 2 年）
 #   data/econ_calendar.csv                國際經濟數據、央行會議（ForexFactory 本週與下週，逐週累積）
 #   data/us_earnings.csv                  美股龍頭財報日（Nasdaq 財報行事曆，未來 5 週）
@@ -835,9 +836,68 @@ def 抓匯率():
 
 
 # ---------- 國際：美股日線、經濟行事曆、美股財報日 ----------
+def _期交所下載(網址, 資料, 名稱):
+    """期交所 CSV 下載（big5），重試 3 次；回傳 DataFrame 或 None。"""
+    for 第幾次 in range(3):
+        time.sleep(5 + 10 * 第幾次)
+        try:
+            r = requests.post(網址, headers=標頭, timeout=60, data=資料)
+            r.encoding = "big5"
+            文 = r.text.lstrip()
+            if 文.startswith(("日期", "交易日期")):
+                return pd.read_csv(io.StringIO(文), index_col=False)
+            print(f"{名稱} 回傳不是資料：{文[:120]!r}")
+        except Exception as 錯誤:
+            print(f"{名稱} 失敗：{錯誤}")
+    return None
+
+
+def 抓小台散戶(天數=400):
+    """小台指（MTX）散戶多空比 → data/mtx_retail.csv（date, inst_net, total_oi, ratio）。
+    散戶淨部位＝ −（三大法人小台多空未平倉淨額）；多空比＝散戶淨部位 ÷ 全市場小台未平倉量 × 100。
+    數字越大＝散戶越看多（常被當反向指標，宏爺說的「韭菜指數」）。"""
+    檔 = 資料夾 / "mtx_retail.csv"
+    舊 = pd.read_csv(檔) if 檔.exists() else pd.DataFrame()
+    有資料 = [d for d, 狀態 in 讀狀態().items() if 狀態 == "ok"]
+    if not 有資料:
+        return
+    今天 = pd.Timestamp(max(有資料)).date()
+    起 = (pd.Timestamp(舊["date"].max()).date() + dt.timedelta(days=1)) if len(舊) else 今天 - dt.timedelta(days=天數)
+    列們 = []
+    while 起 <= 今天:
+        迄 = min(起 + dt.timedelta(days=30), 今天)
+        區間 = {"queryStartDate": f"{起:%Y/%m/%d}", "queryEndDate": f"{迄:%Y/%m/%d}"}
+        法 = _期交所下載("https://www.taifex.com.tw/cht/3/futContractsDateDown", {**區間, "commodityId": "MXF"},
+                        f"小台法人 {起}～{迄}")
+        量 = _期交所下載("https://www.taifex.com.tw/cht/3/futDataDown", {**區間, "down_type": "1", "commodity_id": "MTX"},
+                        f"小台行情 {起}～{迄}")
+        if 法 is None or 量 is None:
+            break  # 缺一段就先停，下次從缺的那天接著補
+        法 = 法[法["商品名稱"].astype(str).str.contains("小型臺指")]
+        法 = 法.assign(date=pd.to_datetime(法["日期"]).dt.strftime("%Y-%m-%d"),
+                       net=pd.to_numeric(法["多空未平倉口數淨額"], errors="coerce"))
+        淨 = 法.groupby("date")["net"].sum()
+        量 = 量[量["交易時段"].astype(str).str.strip() == "一般"]
+        量 = 量[~量["到期月份(週別)"].astype(str).str.contains("/")]   # 價差單不算
+        量 = 量.assign(date=pd.to_datetime(量["交易日期"]).dt.strftime("%Y-%m-%d"),
+                       oi=pd.to_numeric(量["未沖銷契約數"], errors="coerce"))
+        總 = 量.groupby("date")["oi"].sum()
+        t = pd.DataFrame({"inst_net": 淨, "total_oi": 總}).dropna()
+        t = t[t["total_oi"] > 0]
+        t["ratio"] = (-t["inst_net"] / t["total_oi"] * 100).round(2)
+        列們.append(t.reset_index(names="date"))
+        起 = 迄 + dt.timedelta(days=1)
+    if not 列們:
+        print("小台散戶沒有新資料")
+        return
+    表 = pd.concat([舊] + 列們).drop_duplicates("date", keep="last").sort_values("date")
+    表.to_csv(檔, index=False)
+    print(f"小台散戶多空比完成，共 {len(表)} 天（最新 {表['date'].max()}，{表['ratio'].iloc[-1]:+.1f}%）")
+
+
 美股代號 = {"^SOX": "費城半導體", "^IXIC": "那斯達克", "^GSPC": "S&P 500", "^DJI": "道瓊", "^VIX": "VIX",
           "TSM": "台積電 ADR", "NVDA": "輝達", "AAPL": "蘋果", "AMD": "超微", "AVGO": "博通", "MU": "美光",
-          "TSLA": "特斯拉", "^N225": "日經 225", "^KS11": "韓國綜合"}
+          "TSLA": "特斯拉", "^N225": "日經 225", "^KS11": "韓國綜合", "LITE": "Lumentum"}
 財報關注 = {"NVDA": "輝達", "AAPL": "蘋果", "MSFT": "微軟", "GOOGL": "Alphabet", "AMZN": "亞馬遜", "META": "Meta",
           "TSLA": "特斯拉", "AMD": "超微", "AVGO": "博通", "MU": "美光", "QCOM": "高通", "INTC": "英特爾",
           "AMAT": "應用材料", "LRCX": "科林研發", "KLAC": "科磊", "ASML": "艾司摩爾", "TSM": "台積電 ADR",
@@ -1034,7 +1094,7 @@ def main():
             print(f"{日} 休市")
 
     if not 參數.skip_latest:
-        for 工作 in (抓分時, 抓興櫃, 抓基本面, 抓匯率, 抓處置注意, 抓借券, 抓法說會, 抓融資金額, 抓期貨未平倉,
+        for 工作 in (抓分時, 抓興櫃, 抓基本面, 抓匯率, 抓處置注意, 抓借券, 抓法說會, 抓融資金額, 抓期貨未平倉, 抓小台散戶,
                      抓美股日線, 抓經濟行事曆, 抓美股財報, 抓指數K線):  # 這些出問題不影響主資料庫
             try:
                 工作()

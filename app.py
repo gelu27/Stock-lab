@@ -1957,6 +1957,8 @@ def 關鍵價位區():
     if 技術:
         st.markdown("**分析師常用條件**：週線、KD、扣抵值、爆量 K 棒")
         st.markdown(燈號卡(技術), unsafe_allow_html=True)
+    if 代號 == "TAIEX":
+        殺估值區()
     天數 = st.segmented_control("圖表區間", [60, 120, 250], default=120, format_func=lambda d: {60: "3 個月", 120: "半年", 250: "1 年"}[d],
                               key="價位區間", label_visibility="collapsed") or 120
     圖分頁 = st.tabs(["支撐壓力圖", "櫃買 ÷ 加權 強弱", "缺口清單", "準不準？（回測）", "守 5 週線的強勢股"])
@@ -1980,6 +1982,25 @@ def 關鍵價位區():
                "分析師常用條件整理自幾位 YouTube 分析師：20 週線守不守（宏爺）、KD 沒黃金交叉不算反轉（老王）、"
                "扣抵值看 5 日線何時翻揚（通勤族）、跌破爆量那天的低點凶多吉少（老王）。"
                "僅供研究參考，不是買賣建議。")
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def 殺估值資料(_資料版本):
+    return engine.殺估值觀察組(指標, engine.讀取美股())
+
+
+def 殺估值區():
+    t, 燈, 話 = 殺估值資料(_版本)
+    if t.empty:
+        return
+    st.markdown(燈號卡([("殺估值觀察組", 燈, 話)]), unsafe_allow_html=True)
+    with st.expander("看每一檔"):
+        st.dataframe(t, hide_index=True, width="stretch",
+                     column_config={"距60日高%": st.column_config.NumberColumn(format="%+.1f"),
+                                    "本益比降幅%": st.column_config.NumberColumn(format="%+.1f")})
+        st.caption("通勤族的觀察法：這波下跌主要是「殺估值」（市場不願意再給高本益比），不是公司變差。"
+                   "高本益比的領頭股不再創新低（近 5 日低點沒有低於前 20 日低點），才代表修正可能告一段落。"
+                   "Lumentum 是美股光通訊股，只有收盤價。")
 
 
 def 守週線表():
@@ -2282,7 +2303,7 @@ def 狀態區():
 
 def 恐慌溫度計區():
     try:
-        項們, 溫, 級, 話 = engine.恐慌溫度計(engine.讀取美股(), engine.讀取匯率())
+        項們, 溫, 級, 話 = engine.恐慌溫度計(engine.讀取美股(), engine.讀取匯率(), engine.讀取小台散戶())
     except Exception:
         return
     if not 項們:
@@ -2293,7 +2314,8 @@ def 恐慌溫度計區():
     st.markdown(f'<div class="thermo"><i style="left:calc({溫:.0f}% - 2px)"></i></div>'
                 '<div class="thermo-l"><span>樂觀</span><span>中性</span><span>恐慌</span></div>'
                 f'<div class="verdict sub">{話}</div>', unsafe_allow_html=True)
-    st.caption("恐慌溫度計＝VIX 在過去一年排第幾、美元兌台幣在一年區間的位置（台幣越貶分數越高），兩項平均。"
+    st.caption("恐慌溫度計＝VIX 在過去一年排第幾、美元兌台幣在一年區間的位置（台幣越貶分數越高）、"
+               "韭菜指數（小台散戶多空比：散戶淨多單 ÷ 小台未平倉量，散戶越看空分數越高），各項平均。"
                "參考反向型分析者的看法：大家最怕的時候常接近低點，但仍要等止跌訊號，不是買賣建議。")
 
 
