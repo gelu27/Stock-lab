@@ -278,7 +278,7 @@ with b.popover("🔄 更新"):
     if st.button("🔄 重新載入網站資料", key="重新載入"):
         載入.clear()
         st.cache_data.clear()
-        for k in ("自選股", "到價提醒", "交易日記"):
+        for k in ("自選股", "到價提醒", "交易日記", "研究筆記"):
             st.session_state.pop(k, None)
         engine.釋放記憶體()
         st.rerun()
@@ -293,7 +293,18 @@ with b.popover("🔄 更新"):
         else:
             成功, 說明 = engine.觸發更新(秘密)
             (st.success if 成功 else st.error)(說明)
+
+
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=1)
+def 補充欄位(_資料版本):
+    """外資持股比、當沖比率、投信 60 日買超佔股本、負債比、流動比、近四季現金流（每天更新一次）。"""
+    表 = engine.籌碼補充表(指標)
+    體質 = engine.財報體質表()
+    return 表 if 體質 is None else 表.join(體質, how="outer")
+
+
 今日 = engine.加基本面(指標[指標["date"] == 最新日], engine.讀取基本面())
+今日 = 今日.join(補充欄位(_版本), on="代號")
 市場名稱 = dict(zip(今日["代號"], 今日["名稱"]))
 有籌碼 = "法人買超" in 指標.columns
 
@@ -363,7 +374,11 @@ def 選股條件區():
                 條件["累計營收年增率下限"] = st.number_input("累計營收年增率(%) ≥", value=10.0, step=5.0, key="條_累計營收年增率(%) ≥")
             if st.checkbox("最新一季 EPS 下限", key="條_最新一季 EPS 下限"):
                 條件["EPS下限"] = st.number_input("EPS(元) ≥", value=1.0, step=0.5, key="條_EPS(元) ≥")
-            st.caption("月營收與 EPS 只有最新一期，組合回測時不會套用。")
+            if st.checkbox("負債比上限", key="條_負債比上限"):
+                條件["負債比上限"] = st.number_input("負債比(%) ≤", value=50.0, step=5.0, key="條_負債比(%) ≤")
+            if st.checkbox("近四季自由現金流為正", key="條_近四季自由現金流為正"):
+                條件["自由現金流為正"] = True
+            st.caption("月營收、EPS、負債比、現金流只有最新一期，組合回測時不會套用。")
         with 格[1].container(border=True):
             st.markdown("**籌碼面**")
             if st.checkbox("外資連續買超", key="條_外資連續買超"):
@@ -378,6 +393,13 @@ def 選股條件區():
                 條件["法人5日買超下限"] = st.number_input("法人 5 日買超(張) ≥", value=1000, step=500, key="條_法人 5 日買超(張) ≥")
             if st.checkbox("融資 5 日增減上限", key="條_融資 5 日增減上限"):
                 條件["融資5日增減上限"] = st.number_input("融資 5 日增減(%) ≤", value=0.0, step=1.0, key="條_融資 5 日增減(%) ≤")
+            if st.checkbox("外資持股比下限", key="條_外資持股比下限"):
+                條件["外資持股比下限"] = st.number_input("外資持股比(%) ≥", value=30.0, step=5.0, key="條_外資持股比(%) ≥")
+            if st.checkbox("外資持股比 20 日增加", key="條_外資持股比 20 日增加"):
+                條件["外資持股20日變化下限"] = st.number_input("增加(百分點) ≥", value=1.0, step=0.5, key="條_外資持股增加 ≥")
+            if st.checkbox("當沖比率上限（避開當沖股）", key="條_當沖比率上限"):
+                條件["當沖比率上限"] = st.number_input("近 5 日當沖比率(%) ≤", value=30.0, step=5.0, key="條_當沖比率(%) ≤")
+                st.caption("當沖比率只有上市股票，上櫃股票會被排除。")
         with 格[0].container(border=True):
             st.markdown("**技術面**")
             if st.checkbox("站上均線", key="條_站上均線"):
@@ -971,6 +993,44 @@ def 個股價格(代號):
 
 
 @st.cache_data(ttl=600, show_spinner=False)
+def 研究筆記():
+    """自己的研究筆記（有密碼時加密存放），每個瀏覽階段從 GitHub 讀一次。"""
+    if "研究筆記" not in st.session_state:
+        try:
+            st.session_state["研究筆記"] = engine.讀取筆記(_設定())
+        except Exception as e:
+            st.caption(f"研究筆記暫時讀不到（{type(e).__name__}）")
+            return []
+    return st.session_state["研究筆記"]
+
+
+def 存研究筆記(筆記們):
+    st.session_state["研究筆記"] = 筆記們
+    try:
+        if engine.儲存筆記(筆記們, _設定()):
+            st.toast("研究筆記已儲存" + ("（已加密）" if _密碼() else ""))
+        else:
+            st.toast("已暫存（網站重新啟動會消失；在 Secrets 設定 GITHUB_TOKEN 就能永久保存）")
+    except Exception as e:
+        st.error(f"研究筆記存檔失敗：{e}")
+
+
+def 筆記輸入(key, 代號=None):
+    """新增一則筆記的小表單（04 研究筆記頁、03 個股頁共用）。"""
+    with st.form(f"筆記_{key}", clear_on_submit=True):
+        if 代號 is None:
+            a, b = st.columns([2, 1])
+            股 = a.selectbox("股票（可空白，寫大盤或產業）", 股票選項, index=None, placeholder="輸入代號或名稱", key=f"筆記股_{key}")
+            看 = b.segmented_control("看法", ["看多", "中立", "看空"], default="中立", key=f"筆記看_{key}")
+        else:
+            股, 看 = None, st.segmented_control("看法", ["看多", "中立", "看空"], default="中立", key=f"筆記看_{key}")
+        內容 = st.text_area("筆記內容", placeholder="例如：法說會說下半年毛利率會回到 50%，等月營收確認；跌破 120 停損", key=f"筆記內容_{key}")
+        if st.form_submit_button("存下來", type="primary") and 內容.strip():
+            代 = 代號 or (股.split(" ")[0] if 股 else "")
+            存研究筆記(研究筆記() + [{"日期": f"{dt.date.today():%Y-%m-%d}", "代號": 代, "看法": 看 or "中立", "內容": 內容.strip()}])
+            st.rerun()
+
+
 def 網紅說法清單(_快取鍵):
     return engine.讀取網紅說法(_設定())
 
@@ -983,7 +1043,14 @@ def 張(股):
 # ---------- 各頁內容在 views/ 資料夾（一頁一個檔案，只執行目前這一頁） ----------
 def 執行頁面(索引):
     檔 = Path(__file__).parent / "views" / f"{頁面檔[索引]}.py"
-    exec(compile(檔.read_text("utf-8"), str(檔), "exec"), globals())
+    try:
+        exec(compile(檔.read_text("utf-8"), str(檔), "exec"), globals())
+    except Exception as e:  # st.rerun()/st.stop() 不是 Exception，會照常往外傳
+        import traceback
+        st.error(f"這一頁有一部分出錯了（{type(e).__name__}），已自動記錄，每天的資料檢查會用 LINE 通知。其他頁面不受影響，"
+                 "可以先按上方「🔄 更新 → 重新載入」再試一次。")
+        st.exception(e)
+        threading.Thread(target=engine.記錄錯誤, args=(_設定(), 頁面們[索引], e, traceback.format_exc()), daemon=True).start()
 
 
 執行頁面(頁面們.index(頁面))

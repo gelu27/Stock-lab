@@ -109,3 +109,46 @@ else:
                "命中率＝達標 ÷（達標＋停損），統計所有報告（含舊的）。"
                "AI 目標價＝報告裡的「合理目標價」，距目標價% ＝ 目標價比現在股價高（紅）或低（綠）多少。"
                "舊版報告沒有目標價，到個股的「🤖 AI 分析」分頁打開一次就會自動補上。點一下股票可到個股查詢。")
+
+段落("ERRORS // 網站錯誤紀錄")
+try:
+    錯誤們 = engine.讀取設定檔(_設定(), "errors.json") or {}
+except Exception as e:
+    錯誤們 = {}
+    st.caption(f"錯誤紀錄暫時讀不到（{type(e).__name__}）")
+if not 錯誤們:
+    st.caption("✅ 沒有記錄到網站錯誤。頁面出錯時會自動記在這裡，每天收盤後的資料檢查也會用 LINE 通知。")
+else:
+    錯表 = pd.DataFrame(錯誤們.values()).sort_values("最近", ascending=False)
+    表格(錯表[["最近", "頁面", "類型", "訊息", "位置", "次數", "首次"]], hide_index=True, width="stretch")
+    with st.expander("看完整錯誤訊息（可以複製貼給 Claude 修）"):
+        for _, x in 錯表.head(5).iterrows():
+            st.code(f"{x['最近']} {x['頁面']}\n{x.get('追蹤', '')}", language=None)
+
+段落("BACKUP // 個人資料備份")
+st.caption("把自選股、到價提醒、選股訂閱、回測常用條件、交易日記、研究筆記、券商報告、網紅說法打包成一個 zip 下載，"
+           "可以自己存到 Google 雲端硬碟。交易日記和研究筆記在 zip 裡是解密後的內容，請放在只有自己看得到的地方。"
+           "另外 GitHub 每週六也會自動備份一份（Actions →「LINE 週報」→ Artifacts，保留 90 天，日記和筆記保持加密）。")
+if st.button("📦 產生備份檔", key="產生備份"):
+    import json as _json
+    import zipfile
+    檔 = io.BytesIO()
+    設 = _設定()
+    with zipfile.ZipFile(檔, "w", zipfile.ZIP_DEFLATED) as z:
+        for 名 in ("watchlist.json", "alerts.json", "subscriptions.json", "backtest_presets.json",
+                   "broker_reports.json", "influencer_notes.json"):
+            try:
+                內 = engine.讀取設定檔(設, 名)
+                if 內:
+                    z.writestr(名, _json.dumps(內, ensure_ascii=False, indent=1))
+            except Exception as e:
+                z.writestr(f"{名}.讀取失敗.txt", repr(e))
+        for 名, 讀 in (("journal.json", lambda: engine.讀取日記(設)), ("notes.json", lambda: {"筆記": engine.讀取筆記(設)})):
+            try:
+                z.writestr(名, _json.dumps(讀(), ensure_ascii=False, indent=1))
+            except Exception as e:
+                z.writestr(f"{名}.讀取失敗.txt", repr(e))
+    st.session_state["備份檔"] = 檔.getvalue()
+if st.session_state.get("備份檔"):
+    st.download_button("⬇️ 下載備份 zip", st.session_state["備份檔"], file_name=f"台股觀測備份_{dt.date.today():%Y%m%d}.zip",
+                       mime="application/zip", key="下載備份")

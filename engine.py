@@ -594,6 +594,14 @@ def 選股(當日, 條件):
         結果 = 結果[結果["RSI"].between(*c["RSI區間"])]
     if c.get("量比下限") is not None:
         結果 = 結果[結果["量比"] >= c["量比下限"]]
+    for 鍵, 欄 in (("外資持股比下限", "外資持股比"), ("外資持股20日變化下限", "外資持股20日變化")):
+        if c.get(鍵) is not None and 欄 in 結果.columns:
+            結果 = 結果[結果[欄] >= c[鍵]]
+    for 鍵, 欄 in (("當沖比率上限", "當沖比率"), ("負債比上限", "負債比")):
+        if c.get(鍵) is not None and 欄 in 結果.columns:
+            結果 = 結果[結果[欄] <= c[鍵]]
+    if c.get("自由現金流為正") and "近四季自由現金流億" in 結果.columns:
+        結果 = 結果[結果["近四季自由現金流億"] > 0]
     for 鍵, 欄 in (("外資連買下限", "外資連買"), ("投信連買下限", "投信連買"), ("法人5日買超下限", "法人5日買超"),
                  ("外資連賣下限", "外資連賣"), ("土洋對作下限", "土洋對作")):
         if c.get(鍵) is not None and 欄 in 結果.columns:
@@ -2496,6 +2504,7 @@ def 資料新鮮度():
     營 = 欄最大("fundamental/revenue.csv", "month")
     季 = 欄最大("fundamental/eps.csv", "quarter")
     內 = 欄最大("fundamental/insider.csv", "month")
+    財 = 欄最大("fundamental/cashflow.csv", "quarter")
     列們 = [  # (名稱, 最新, 頻率, 判斷方式, 容許)
         ("股價、成交量", 價, "每個交易日", "平日", 1),
         ("指數開高低（支撐壓力）", (lambda v: v and pd.Timestamp(v))(欄最大("index_ohlc.csv", "date")), "每個交易日", "交易日", 0),
@@ -2506,11 +2515,15 @@ def 資料新鮮度():
         ("主動式 ETF 持股", _最新檔日("etf/holdings"), "每個交易日晚上", "交易日", 1),
         ("上市融資金額（維持率）", (lambda v: v and pd.Timestamp(v))(欄最大("margin_total.csv", "date")), "每個交易日", "交易日", 1),
         ("外資台指期未平倉", (lambda v: v and pd.Timestamp(v))(欄最大("futures_oi.csv", "date")), "每個交易日", "交易日", 1),
+        ("外資持股比", (lambda v: v and pd.Timestamp(v))(欄最大("qfii.csv.gz", "date")), "每個交易日", "交易日", 1),
+        ("上市個股當沖", (lambda v: v and pd.Timestamp(v))(欄最大("daytrade.csv.gz", "date")), "每個交易日", "交易日", 1),
+        ("選擇權籌碼", (lambda v: v and pd.Timestamp(v))(欄最大("options_pc.csv", "date")), "每個交易日", "交易日", 1),
         ("集保大戶（千張）", _最新檔日("tdcc"), "每週", "天", 10),
         ("美元匯率", fx and pd.Timestamp(fx), "每天", "天", 5),
         ("月營收", 營 and pd.Period(營, "M").to_timestamp(), "每月 10 日前", "期末", (期末(營, "M"), 45)),
         ("內部人持股", 內 and pd.Period(內, "M").to_timestamp(), "每月 15 日前", "期末", (期末(內, "M"), 50)),
         ("季報 EPS", 季 and pd.Period(季, "Q").to_timestamp(), "每季", "期末", (期末(季, "Q"), 140)),
+        ("資產負債、現金流量", 財 and pd.Period(財, "Q").to_timestamp(), "每季", "期末", (期末(財, "Q"), 140)),
     ]
     交易日們 = sorted({f.name[:8] for f in (資料夾 / "prices").glob("*/*.csv.gz")})[-5:]
     結果 = []
@@ -4988,6 +5001,14 @@ def 定期定額(歷史, 每月, 扣款日=6, 開始=None, 結束=None, 折扣=1
 
 # ========== 名詞小辭典（網站上方「📖 名詞」） ==========
 名詞表 = {
+    "P/C ratio": "選擇權賣權未平倉量 ÷ 買權未平倉量。台灣常見解讀：超過 100% 偏多（有人大量賣出賣權當支撐）、低於 80% 偏空。",
+    "選擇權最大未平倉": "買權未平倉最多的履約價常被當成壓力、賣權最多的當成支撐，越接近結算日越有參考性。",
+    "外資持股比": "外資持有的股數 ÷ 公司發行股數。持續上升代表外資長線布局，比單日買賣超更能看出趨勢。",
+    "當沖比率": "當天買進又賣出（當日沖銷）的成交量 ÷ 總成交量。比率很高代表短線客多，股價容易暴漲暴跌。",
+    "自由現金流": "公司本業賺進的現金（營業現金流）扣掉投資支出後剩下的錢，可以拿來配息、還債。網站用「營業＋投資現金流」簡單估算。",
+    "負債比": "總負債 ÷ 總資產。一般產業超過 60～70% 要留意；銀行、保險本來就很高，不能直接比。",
+    "庫藏股": "公司拿錢從市場買回自家股票，通常代表公司認為股價偏低，也有護盤效果。",
+    "可轉債": "可以轉換成股票的公司債。股價高於轉換價時債券持有人會轉成股票，股本會被稀釋。",
     "支撐／壓力": "股價跌到某個價位常會止跌（支撐）、漲到某個價位常會賣壓出現（壓力）。網站用前波高低點、缺口、成交密集區、整數關卡自動找。",
     "共振區": "兩種以上方法算出的支撐或壓力剛好重疊在附近，通常比單一條線更有參考價值。",
     "缺口": "今天最低價比昨天最高價還高（向上缺口），或今天最高價比昨天最低價還低（向下缺口）。沒被回補的缺口常變成支撐或壓力。",
@@ -5025,3 +5046,211 @@ def 定期定額(歷史, 每月, 扣款日=6, 開始=None, 結束=None, 折扣=1
     "Put/Call 比": "選擇權賣權和買權的比例，常被拿來看市場情緒；數值高代表避險的人多。",
     "XIRR 年化報酬": "考慮每一筆錢投入時間的年化報酬，定期定額要用這個看才公平。",
 }
+
+
+# ========== 研究筆記：自己的筆記＋券商報告＋網紅說法放在同一條時間軸 ==========
+筆記檔 = "notes.json"
+
+
+def 讀取筆記(設定):
+    包 = 讀取設定檔(設定, 筆記檔)
+    if not 包:
+        return []
+    return (解密(包, 設定.get("password", "")) if 包.get("加密") else 包).get("筆記", [])
+
+
+def 儲存筆記(筆記們, 設定):
+    密碼 = str(設定.get("password", ""))
+    內容 = {"筆記": 筆記們}
+    return 儲存設定檔(設定, 筆記檔, 加密(內容, 密碼) if 密碼 else 內容, "更新研究筆記")
+
+
+def 研究時間軸(筆記們=(), 券商們=(), 影片們=(), 代號=None):
+    """一列一則：日期、來源、代號、出處、看法、內容。代號給了就只留那檔。"""
+    列們 = []
+    for x in 筆記們:
+        列們.append({"日期": x.get("日期"), "來源": "📝 我的筆記", "代號": str(x.get("代號") or ""), "出處": "自己",
+                   "看法": x.get("看法", ""), "內容": x.get("內容", "")})
+    for x in 券商們:
+        目 = _數(x.get("目標價"))
+        列們.append({"日期": x.get("日期"), "來源": "🏦 券商報告", "代號": str(x.get("代號") or ""), "出處": x.get("券商", ""),
+                   "看法": x.get("看法") or x.get("評等") or "",
+                   "內容": "　".join(s for s in (f"評等 {x['評等']}" if x.get("評等") else "", f"目標價 {目:,.0f}" if pd.notna(目) else "",
+                                                str(x.get("摘要") or x.get("重點") or "")[:120]) if s)})
+    for v in 影片們:
+        for s in v.get("股票", []):
+            列們.append({"日期": v.get("日期"), "來源": "🎬 網紅說法", "代號": str(s.get("代號") or ""), "出處": v.get("頻道", ""),
+                       "看法": s.get("看法", ""), "內容": str(s.get("理由") or s.get("原文看法") or "")[:120]})
+    t = pd.DataFrame(列們, columns=["日期", "來源", "代號", "出處", "看法", "內容"])
+    if 代號:
+        t = t[t["代號"] == str(代號)]
+    t["日期"] = pd.to_datetime(t["日期"], errors="coerce")
+    return t.sort_values("日期", ascending=False, na_position="last").reset_index(drop=True)
+
+
+# ========== 網站錯誤紀錄（ai-reports 分支 errors.json；每天資料健康檢查時 LINE 通知新錯誤） ==========
+def 記錄錯誤(設定, 頁面, 錯誤, 追蹤=""):
+    """同一個錯誤（同頁、同類型、同一行）只記一筆，累加次數。"""
+    import datetime as dt
+    import hashlib
+    import re as _re
+    位置 = _re.findall(r'File "([^"]+)", line (\d+)', 追蹤)
+    位置 = f"{Path(位置[-1][0]).name}:{位置[-1][1]}" if 位置 else ""
+    鍵 = hashlib.sha1(f"{頁面}|{type(錯誤).__name__}|{位置}".encode()).hexdigest()[:10]
+    現在 = dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).strftime("%Y-%m-%d %H:%M")
+    for _ in range(3):
+        try:
+            紀錄 = 讀取設定檔(設定, "errors.json") or {}
+            舊 = 紀錄.get(鍵, {"首次": 現在, "次數": 0})
+            紀錄[鍵] = {**舊, "最近": 現在, "次數": 舊["次數"] + 1, "頁面": 頁面, "類型": type(錯誤).__name__,
+                       "訊息": str(錯誤)[:300], "位置": 位置, "追蹤": 追蹤[-1500:]}
+            if len(紀錄) > 50:  # 只留最近 50 種
+                紀錄 = dict(sorted(紀錄.items(), key=lambda kv: kv[1]["最近"])[-50:])
+            儲存設定檔(設定, "errors.json", 紀錄, f"網站錯誤 {頁面}")
+            return
+        except Exception:
+            continue
+
+
+# ========== 第三批新資料：外資持股比、當沖、選擇權籌碼、財報體質、公司事件、新股申購 ==========
+def _讀(檔, **kw):
+    f = 資料夾 / 檔
+    if not f.exists():
+        return None
+    t = pd.read_csv(f, **kw)
+    return t if len(t) else None
+
+
+def 讀取外資持股():
+    """data/qfii.csv.gz：date、code、ratio（外資及陸資持股比率 %）。"""
+    return _讀("qfii.csv.gz", dtype={"code": str}, parse_dates=["date"])
+
+
+def 讀取當沖():
+    """data/daytrade.csv.gz：上市個股每日當沖成交股數 shares、買進金額 buy、賣出金額 sell。"""
+    return _讀("daytrade.csv.gz", dtype={"code": str}, parse_dates=["date"])
+
+
+def 讀取當沖大盤():
+    """上市、上櫃整體當沖成交股數佔比（%），date × market。"""
+    t = _讀("daytrade_market.csv", parse_dates=["date"])
+    return None if t is None else t.pivot_table(index="date", columns="market", values="vol_pct").sort_index()
+
+
+def 籌碼補充表(指標):
+    """每檔：外資持股比、外資持股比 20 日變化（百分點）、當沖比率（近 5 日當沖股數 ÷ 成交股數，%）、
+    投信 60 日買超佔股本（%，投信沒有公布持股，用累計買超估算）。以代號為索引。"""
+    表 = pd.DataFrame(index=pd.Index([], name="代號"))
+    q = 讀取外資持股()
+    if q is not None:
+        日們 = sorted(q["date"].unique())
+        今 = q[q["date"] == 日們[-1]].set_index("code")["ratio"]
+        表 = pd.DataFrame({"外資持股比": 今})
+        if len(日們) > 20:
+            前 = q[q["date"] == 日們[-21]].set_index("code")["ratio"]
+            表["外資持股20日變化"] = (今 - 前.reindex(今.index)).round(2)
+    d = 讀取當沖()
+    if d is not None and "成交張數" in 指標.columns:
+        近日 = sorted(d["date"].unique())[-5:]
+        d = d[d["date"].isin(近日)].groupby("code")["shares"].sum() / 1000
+        量 = 指標[指標["date"].isin(近日)].groupby("代號")["成交張數"].sum()
+        比 = (d / 量.reindex(d.index) * 100).where(lambda s: s.between(0, 100)).round(1)
+        表 = 表.join(比.rename("當沖比率"), how="outer")
+    if "投信買超" in 指標.columns:
+        近 = 指標[指標["date"] >= sorted(指標["date"].unique())[-60]]
+        累 = 近.groupby("代號")["投信買超"].sum() * 1000
+        股數 = _股本表()["發行股數"]
+        表 = 表.join((累 / 股數.reindex(累.index) * 100).round(2).rename("投信60日買超佔股本"), how="outer")
+    表.index.name = "代號"
+    return 表
+
+
+def 讀取財報(代號=None):
+    """各季資產負債（季底，千元）與現金流量（換成單季，千元）：code、quarter、assets、liabilities、cur_assets、
+    cur_liab、equity、cash_end、cfo、cfi、cff、fcf（營業＋投資現金流，自由現金流的簡易算法）。"""
+    b = _讀("fundamental/balance.csv", dtype={"code": str})
+    c = _讀("fundamental/cashflow.csv", dtype={"code": str})
+    if b is None and c is None:
+        return None
+    if 代號 is not None:
+        b = None if b is None else b[b["code"] == str(代號)]
+        c = None if c is None else c[c["code"] == str(代號)]
+    if c is not None and len(c):
+        c = c.sort_values(["code", "quarter"]).copy()
+        年, 季 = c["quarter"].str[:4], c["quarter"].str[-1].astype(int)
+        前季 = 季.groupby([c["code"], 年]).shift()
+        for 欄 in ("cfo", "cfi", "cff"):
+            前 = c[欄].groupby([c["code"], 年]).shift()
+            c[欄] = np.where(季 == 1, c[欄], np.where(前季 == 季 - 1, c[欄] - 前, np.nan))
+        c["fcf"] = c["cfo"] + c["cfi"]
+    if b is None or not len(b):
+        return c
+    return b.merge(c, on=["code", "quarter"], how="outer") if c is not None else b
+
+
+def 財報體質表():
+    """每檔最新一季：負債比、流動比（%）、近四季營業現金流、近四季自由現金流（億）。以代號為索引。"""
+    t = 讀取財報()
+    if t is None:
+        return None
+    t = t.sort_values(["code", "quarter"])
+    結果 = pd.DataFrame(index=pd.Index(t["code"].unique(), name="代號"))
+    if "liabilities" in t:
+        最新 = t.dropna(subset=["assets"]).groupby("code").tail(1).set_index("code")
+        結果["負債比"] = (最新["liabilities"] / 最新["assets"] * 100).round(1)
+        結果["流動比"] = (最新["cur_assets"] / 最新["cur_liab"] * 100).where(最新["cur_liab"] > 0).round(0)
+    if "cfo" in t:
+        c = t.dropna(subset=["cfo"]).groupby("code").tail(4)
+        季 = c.groupby("code")["quarter"].agg(["first", "last", "count"])
+        連續 = 季[(季["count"] == 4) &季.apply(lambda r: (pd.Period(r["last"], "Q") - pd.Period(r["first"], "Q")).n == 3, axis=1)].index
+        和 = c[c["code"].isin(連續)].groupby("code")[["cfo", "fcf"]].sum() / 1e5
+        結果["近四季營業現金流億"] = 和["cfo"].round(1)
+        結果["近四季自由現金流億"] = 和["fcf"].round(1)
+    return 結果
+
+
+def 讀取選擇權():
+    """回傳 (P/C ratio 表, 三大法人買賣權未平倉表, 各履約價未平倉分布)，沒有的回傳 None。"""
+    pc = _讀("options_pc.csv", parse_dates=["date"])
+    法 = _讀("options_inst.csv", parse_dates=["date"])
+    分布 = _讀("options_oi.csv", parse_dates=["date"], dtype={"expiry": str})
+    return (None if pc is None else pc.set_index("date").sort_index(),
+            None if 法 is None else 法.set_index("date").sort_index(), 分布)
+
+
+def 選擇權壓力支撐(分布, 種類="month", 檔數=3):
+    """最新一天、最近月份（month）或最近一週（week）合約：買權未平倉最多的履約價＝壓力、賣權最多＝支撐。
+    回傳 dict（日期、合約、壓力 [(履約價, 口數)…]、支撐、表）或 None。"""
+    if 分布 is None or not len(分布):
+        return None
+    t = 分布[(分布["date"] == 分布["date"].max()) & (分布["kind"] == 種類)]
+    if not len(t):
+        return None
+    買 = t[t["cp"] == "call"].nlargest(檔數, "oi")
+    賣 = t[t["cp"] == "put"].nlargest(檔數, "oi")
+    return {"日期": t["date"].iloc[0], "合約": t["expiry"].iloc[0],
+            "壓力": list(zip(買["strike"], 買["oi"])), "支撐": list(zip(賣["strike"], 賣["oi"])), "表": t}
+
+
+def 讀取新股申購():
+    t = _讀("ipo.csv", dtype={"code": str}, parse_dates=["draw_date", "start", "end", "list_date"])
+    return t
+
+
+def 申購試算(申購, 現價):
+    """申購表加上：現價、價差、每簽獲利（1 張）、報酬%。現價＝今日收盤（初上市櫃還沒有就是 NaN）。"""
+    t = 申購.copy()
+    t["現價"] = t["code"].map(現價)
+    t["價差"] = t["現價"] - t["price"]
+    t["每簽獲利"] = (t["價差"] * 1000).round(0)
+    t["報酬%"] = (t["價差"] / t["price"] * 100).round(1)
+    return t
+
+
+def 讀取庫藏股():
+    return _讀("buyback.csv", dtype={"code": str}, parse_dates=["board_date", "start", "end"])
+
+
+def 讀取可轉債():
+    """data/cb.csv：code、name、issue_date、maturity、amount、outstanding（元）、conv_price（發行時轉換價）。"""
+    return _讀("cb.csv", dtype={"code": str}, parse_dates=["issue_date", "maturity"])

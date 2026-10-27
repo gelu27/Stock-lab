@@ -1369,14 +1369,20 @@ def 抓庫藏股(天數=400):
 
 
 def 抓可轉債():
-    """櫃買中心「轉(交)換公司債發行資料」→ data/cb.csv。"""
+    """櫃買中心「轉(交)換公司債發行資料」（上市櫃公司發行的）→ data/cb.csv：code、name、issue_date、maturity、
+    amount、outstanding（元）、conv_price（發行時轉換價）。"""
     資料 = 櫃買("https://www.tpex.org.tw/openapi/v1/bond_ISSBD5_data")
     if not 資料:
         print("可轉債沒有資料")
         return
-    表 = pd.DataFrame(資料)
-    print("可轉債欄位：", list(表.columns))
-    表.to_csv(資料夾 / "cb.csv", index=False)
+    t = pd.DataFrame(資料)
+    日期 = lambda s: pd.to_datetime(s.astype(str).str.strip(), format="%Y%m%d", errors="coerce").dt.strftime("%Y-%m-%d")
+    表 = pd.DataFrame({"code": t["IssuerCode"].astype(str).str.strip(), "name": t["ShortName"].astype(str).str.strip(),
+                       "issue_date": 日期(t["IssueDate"]), "maturity": 日期(t["MaturityDate"]),
+                       "amount": t["IssueAmount"].map(轉數字), "outstanding": t["OutstandingAmount"].map(轉數字),
+                       "conv_price": t["Conversion/ExchangePriceAtIssuance"].map(轉數字)})
+    表 = 表[表["code"].str.fullmatch(r"\d{4}")].dropna(subset=["issue_date"])
+    表.sort_values("issue_date").to_csv(資料夾 / "cb.csv", index=False)
     print(f"可轉債完成，共 {len(表)} 筆")
 
 
