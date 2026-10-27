@@ -1123,8 +1123,8 @@ def 盤中時間():
 
 
 def 即時報價(代號們, 市場對照):
-    """證交所基本市況報導（延遲約 5 到 20 秒）。回傳 DataFrame：code, name, close, change, time。
-    代號 t00 是加權指數。"""
+    """證交所基本市況報導（延遲約 5 到 20 秒）。回傳 DataFrame：code, name, close, change, high, low, time。
+    代號 t00 是加權指數、o00 是櫃買指數（市場對照要給 {"o00": "上櫃"}）。"""
     import requests
 
     頻道 = []
@@ -1142,7 +1142,7 @@ def 即時報價(代號們, 市場對照):
             if pd.isna(現價):  # 這段時間沒成交，用最佳買價
                 現價 = _數(str(m.get("b", "")).split("_")[0])
             結果.append({"code": m.get("c"), "name": m.get("n"), "close": 現價,
-                       "change": 現價 - 昨收, "time": m.get("t"),
+                       "change": 現價 - 昨收, "high": _數(m.get("h")), "low": _數(m.get("l")), "time": m.get("t"),
                        "date": pd.Timestamp(m.get("d", "")) if m.get("d") else pd.NaT})
     return pd.DataFrame(結果)
 
