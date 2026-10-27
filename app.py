@@ -107,6 +107,16 @@ h1, h2, h3 {{ font-family: 'Space Grotesk', 'Noto Sans TC', sans-serif !importan
     text-align: center; border: 1px solid {青}; background: rgba(0,0,0,.85); color: {青} !important;
     text-decoration: none !important; font-family: 'JetBrains Mono'; font-size: 18px; }}
 .totop:hover {{ background: {青}; color: #000 !important; }}
+/* 關鍵價位：燈號卡、價位條 */
+.lamps {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 6px 0; }}
+.lamp {{ border: 1px solid #1E1E1E; background: #070707; padding: 10px 12px; }}
+.lamp .t {{ font-family: 'Noto Sans TC', sans-serif; font-size: 14px; color: #EDEDED; font-weight: 700; }}
+.lamp .t i {{ font-style: normal; margin-right: 6px; }}
+.lamp .s {{ font-family: 'JetBrains Mono', 'Noto Sans TC', monospace; font-size: 12px; color: #9A9A9A; margin-top: 4px; line-height: 1.5; }}
+.lamp.g {{ border-left: 3px solid {綠}; }} .lamp.y {{ border-left: 3px solid #FFC24B; }} .lamp.r {{ border-left: 3px solid {紅}; }}
+.verdict {{ border: 1px solid #1E1E1E; border-left: 3px solid {青}; background: #050505; padding: 10px 14px; margin: 8px 0;
+    font-family: 'Noto Sans TC', sans-serif; font-size: 15px; line-height: 1.7; color: #DADADA; }}
+@media (max-width: 640px) {{ .lamps {{ grid-template-columns: 1fr; gap: 6px; }} .verdict {{ font-size: 14px; }} }}
 /* 手機：頁首縮小、頁面選單改成一排可左右滑 */
 @media (max-width: 640px) {{
     .hero {{ padding: 16px 16px 12px; margin-bottom: 10px; }}
@@ -1644,6 +1654,175 @@ def 槓桿趨勢():
     st.caption("投信台指期多半是替 ETF 避險或加碼的多單，主要看外資的方向；合計＝三者相加。資料來源：證交所、櫃買中心、期交所。")
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def 指數K線(代號, _資料版本):
+    return engine.讀取指數K線(代號)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def 價位分析(代號, _資料版本):
+    K = 指數K線(代號, _資料版本)
+    if K is None or len(K) < 60:
+        return None
+    sr = engine.支撐壓力(K)
+    區們 = engine.共振區(sr["價位"])
+    return K, sr, 區們, engine.位置解讀(sr, 區們), engine.黑K一半(K)
+
+
+價位色 = {"回檔": "#FFC24B", "缺口": "#FF8A3D", "前高低": "#BDBDBD", "整數": "#555555"}
+
+
+def 支撐壓力圖(K, sr, 區們, 天數=120, 高=440, 均線們=((20, 青, "月線"), (60, "#FF00E5", "季線"), (120, "#FFC24B", "半年線"))):
+    """K 線＋均線＋自動畫的支撐壓力線：黃＝費波那契回檔、橘＝未回補缺口、白＝前高前低、灰＝整數關卡，青色色帶＝共振區。"""
+    k = K.tail(天數 + 240).reset_index(drop=True)
+    for n, _, _ in 均線們:
+        k[f"MA{n}"] = k["close"].rolling(n).mean()
+    k = k.tail(天數)
+    收 = sr["收盤"]
+    小數 = 0 if 收 > 1000 else 2
+    有K = engine.有開高低(k)
+    圖 = go.Figure()
+    if 有K:
+        圖.add_trace(go.Candlestick(x=k["date"], open=k["open"], high=k["high"], low=k["low"], close=k["close"], name="K 線",
+                                    increasing=dict(line=dict(color=紅, width=1), fillcolor=紅),
+                                    decreasing=dict(line=dict(color=綠, width=1), fillcolor=綠)))
+    else:
+        圖.add_trace(go.Scatter(x=k["date"], y=k["close"], name="收盤", line=dict(color="#EDEDED", width=1.4)))
+    for n, 色, 名 in 均線們:
+        圖.add_trace(go.Scatter(x=k["date"], y=k[f"MA{n}"], name=名, line=dict(color=色, width=1.1), hoverinfo="skip"))
+    低, 高_ = float(k["low"].min()), float(k["high"].max())
+    下界, 上界 = min(低, 收 * 0.94), max(高_, 收 * 1.06)
+    for z in 區們:
+        if z["上"] >= 下界 and z["下"] <= 上界:
+            寬 = max(z["上"] - z["下"], 收 * 0.002)
+            圖.add_hrect(y0=z["中"] - 寬 / 2 - 收 * 0.001, y1=z["中"] + 寬 / 2 + 收 * 0.001, fillcolor=青, opacity=0.13,
+                         line_width=0, layer="below")
+    for 下, 上, 日, 向 in sr["缺口"]:
+        if 上 >= 下界 and 下 <= 上界:
+            圖.add_shape(type="rect", x0=日, x1=k["date"].iloc[-1], y0=下, y1=上, fillcolor="#FF8A3D", opacity=0.12,
+                         line_width=0, layer="below")
+    線們 = sr["價位"][(sr["價位"]["類別"] != "均線") & sr["價位"]["價位"].between(下界, 上界)].sort_values("價位")
+    標籤們 = []   # 很靠近的價位合併成一個標籤，避免字疊在一起
+    for _, r in 線們.iterrows():
+        色 = 價位色.get(r["類別"], 灰)
+        圖.add_hline(y=r["價位"], line=dict(color=色, width=1, dash="dot" if r["類別"] in ("整數", "前高低") else "dash"))
+        if 標籤們 and r["價位"] - 標籤們[-1]["價"] < (上界 - 下界) * 0.05:
+            標籤們[-1]["名"].append(r["名稱"])
+        else:
+            標籤們.append({"價": r["價位"], "名": [r["名稱"]], "色": 色})
+    for t in 標籤們:
+        圖.add_annotation(x=1, xref="paper", xanchor="right", y=t["價"], yanchor="bottom", showarrow=False,
+                          text=f"{'／'.join(t['名'])} {t['價']:,.{小數}f}", font=dict(size=10, color=t["色"]),
+                          bgcolor="rgba(0,0,0,0.55)")
+    圖.add_hline(y=收, line=dict(color="#FFFFFF", width=1), opacity=0.35)
+    缺日 = pd.bdate_range(k["date"].min(), k["date"].max()).difference(pd.DatetimeIndex(k["date"]))
+    圖.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"]), dict(values=list(缺日))])
+    圖.update_yaxes(range=[下界 * 0.995, 上界 * 1.005], side="right")
+    圖.update_layout(xaxis_rangeslider_visible=False, legend=dict(orientation="h", y=1.06, x=0))
+    return 圖表外觀(圖, 高)
+
+
+def 黑K卡(黑):
+    類 = {"🟢": "g", "🟡": "y", "🔴": "r"}.get(黑["燈"], "y")
+    return (f'<div class="lamp {類}" style="margin:6px 0"><div class="t"><i>{黑["燈"]}</i>黑 K 一半規則</div>'
+            f'<div class="s">{黑["日期"]:%m/%d} 大黑 K（開 {黑["開"]:,.2f}／收 {黑["收"]:,.2f}）：{黑["狀態"]}</div></div>')
+
+
+def 燈號卡(項們):
+    類 = {"🟢": "g", "🟡": "y", "🔴": "r"}
+    return '<div class="lamps">' + "".join(
+        f'<div class="lamp {類.get(燈, "y")}"><div class="t"><i>{燈}</i>{名}</div><div class="s">{說}</div></div>'
+        for 名, 燈, 說 in 項們) + "</div>"
+
+
+def 價位卡片(sr, 解, 昨收=None):
+    收 = sr["收盤"]
+    小數 = 0 if 收 > 1000 else 2
+    漲 = 收 - 昨收 if 昨收 else None
+    卡們 = [卡片(f"收盤 · {sr['日期']:%m/%d}", f"{收:,.{小數}f}",
+                (f"{漲:+,.{小數}f}（{漲 / 昨收 * 100:+.2f}%）・" if 漲 is not None else "")
+                + f"站上 {len(解['站上'])}／跌破 {len(解['跌破'])} 條均線", 漲跌色(漲) if 漲 is not None else "#EDEDED")]
+    for 名, r, 色 in (("最近支撐", 解["最近支撐"], 綠), ("最近壓力", 解["最近壓力"], 紅)):
+        卡們.append(卡片(名, "—" if r is None else f"{r['價位']:,.{小數}f}",
+                       "" if r is None else f"{r['名稱']}・{r['距離%']:+.1f}%", 色))
+    卡片格(卡們)
+
+
+def 價位明細(sr, 區們, key):
+    t = sr["價位"].copy()
+    共 = {n for z in 區們 for n in z["成員"]}
+    t["共振"] = t["名稱"].map(lambda n: "◆" if n in 共 else "")
+    t = t[["角色", "名稱", "價位", "距離%", "共振", "說明"]]
+    st.dataframe(t.style.map(lambda v: f"color:{紅 if v == '壓力' else 綠}", subset=["角色"])
+                 .format({"價位": "{:,.2f}", "距離%": "{:+.2f}"}), hide_index=True, width="stretch",
+                 height=min(35 * (len(t) + 1) + 3, 520), key=key,
+                 column_config={"說明": st.column_config.TextColumn(width="large")})
+
+
+def 關鍵價位區():
+    段落("LEVELS // 關鍵價位：支撐、壓力與觀察條件")
+    選 = st.segmented_control("指數", ["加權指數", "櫃買指數"], default="加權指數", key="價位指數",
+                            label_visibility="collapsed") or "加權指數"
+    代號 = "TAIEX" if 選 == "加權指數" else "TPEX"
+    結果 = 價位分析(代號, _版本)
+    if 結果 is None:
+        st.info(f"{選}的開高低資料下次更新後就會出現。")
+        return
+    K, sr, 區們, 解, 黑 = 結果
+    價位卡片(sr, 解, float(K["close"].iloc[-2]))
+    st.markdown(f'<div class="verdict">{解["文字"]}</div>', unsafe_allow_html=True)
+    try:
+        項們, 總結 = engine.三條件燈號(指數K線("TAIEX", _版本), 指數K線("TPEX", _版本), engine.讀取美股())
+    except Exception:
+        項們, 總結 = [], ""
+    if 項們:
+        st.markdown(f"**本週觀察三條件**：{總結}")
+        st.markdown(燈號卡(項們), unsafe_allow_html=True)
+    if 黑:
+        st.markdown(黑K卡(黑), unsafe_allow_html=True)
+    天數 = st.segmented_control("圖表區間", [60, 120, 250], default=120, format_func=lambda d: {60: "3 個月", 120: "半年", 250: "1 年"}[d],
+                              key="價位區間", label_visibility="collapsed") or 120
+    st.plotly_chart(支撐壓力圖(K, sr, 區們, 天數), width="stretch", config={"displayModeBar": False})
+    with st.expander("📋 完整價位表"):
+        價位明細(sr, 區們, "價位明細")
+    st.caption("自動計算，不是人工畫線：月線／季線／半年線＝20／60／120 日均線；黃線＝最近一段漲勢（或跌勢）的費波那契回檔；"
+               "橘色＝還沒回補的跳空缺口；白虛線＝波段高低點；灰虛線＝整數關卡；青色色帶＝2 種以上方法重疊的「共振區」，通常比單一條線重要。"
+               "三條件燈號參考週報分析者的觀察清單；黑 K 一半規則＝大跌那天之後的反彈，收盤要站上那根黑 K 實體的一半才算有力。"
+               "僅供研究參考，不是買賣建議。")
+
+
+def 個股K線(代號):
+    """個股日 K 換成「還原」後的開高低收（最新一天等於實際股價），避免除權息被當成跳空缺口。"""
+    歷史 = 個股全史(代號, _版本)
+    if 歷史 is None or len(歷史) < 60:
+        return None
+    h = 歷史[["date", "open", "high", "low", "收盤", "還原價"]].dropna(subset=["收盤"]).reset_index(drop=True)
+    比 = (h["還原價"] / h["收盤"]).where(h["收盤"] > 0).ffill().fillna(1)
+    比 = 比 / 比.iloc[-1]
+    K = pd.DataFrame({"date": h["date"], "open": h["open"] * 比, "high": h["high"] * 比, "low": h["low"] * 比,
+                      "close": h["收盤"] * 比})
+    return K.dropna().reset_index(drop=True)
+
+
+def 個股價位區(代號):
+    K = 個股K線(代號)
+    if K is None:
+        st.caption("資料不足，無法計算支撐壓力。")
+        return
+    sr = engine.支撐壓力(K)
+    區們 = engine.共振區(sr["價位"])
+    解 = engine.位置解讀(sr, 區們)
+    價位卡片(sr, 解, float(K["close"].iloc[-2]))
+    st.markdown(f'<div class="verdict">{解["文字"]}</div>', unsafe_allow_html=True)
+    黑 = engine.黑K一半(K)
+    if 黑:
+        st.markdown(黑K卡(黑), unsafe_allow_html=True)
+    st.plotly_chart(支撐壓力圖(K, sr, 區們, 120, 420), width="stretch", config={"displayModeBar": False})
+    with st.expander("📋 完整價位表"):
+        價位明細(sr, 區們, f"個股價位明細{代號}")
+    st.caption("用還原股價計算（除權息不會被當成缺口），最新一天等於實際股價。線的意思跟首頁「關鍵價位」相同。僅供研究參考。")
+
+
 def 排行區():
     段落("RANKING // 排行（前 50 檔，含上市櫃）")
     排行 = engine.排行資料(今日)
@@ -1958,7 +2137,7 @@ def AI解讀區():
                "僅供研究參考，不是買賣建議。")
 
 
-首頁區塊 = ["市場", "狀態", "AI解讀", "焦點", "國際", "連動", "加權指數", "權值", "資金", "情緒", "族群", "行事曆", "排行"]
+首頁區塊 = ["市場", "狀態", "價位", "AI解讀", "焦點", "國際", "連動", "加權指數", "權值", "資金", "情緒", "族群", "行事曆", "排行"]
 
 if 頁面 == 頁面們[0]:
     隱藏 = [x for x in st.query_params.get("hide", "").split(",") if x in 首頁區塊]
@@ -1977,7 +2156,7 @@ if 頁面 == 頁面們[0]:
             國際行情()
         except Exception:
             st.caption("國際行情暫時無法顯示。")
-    區塊函式 = {"市場": 市場卡片, "狀態": 狀態區, "AI解讀": AI解讀區, "焦點": 焦點區, "國際": _國際, "連動": 連動區,
+    區塊函式 = {"市場": 市場卡片, "狀態": 狀態區, "價位": 關鍵價位區, "AI解讀": AI解讀區, "焦點": 焦點區, "國際": _國際, "連動": 連動區,
              "加權指數": 加權圖 if 加權 is not None and len(加權) > 1 else None, "權值": 權值區, "資金": 資金面區,
              "情緒": 情緒區, "族群": 族群熱力圖, "行事曆": 行事曆區, "排行": 排行區}
     要畫 = [x for x in 首頁區塊 if x in 顯示 and 區塊函式.get(x)]
@@ -2606,6 +2785,9 @@ if 頁面 == 頁面們[2]:
                 if 代號 in engine.選股(今日[今日["代號"] == 代號], dict(設定["條件"], 排除ETF=False))["代號"].values]
         st.markdown("**今天符合的烏賊策略：** " + ("、".join(
             f"{'🔴' if engine.烏賊條件[x]['方向'] == '多' else '🟢'} {x.replace('烏賊', '')}" for x in 符合) or "無"))
+
+        段落("LEVELS // 支撐壓力（自動計算）")
+        個股價位區(代號)
 
         段落("CHART // 走勢與指標")
         週期 = st.segmented_control("週期", ["當日", "5分", "日", "週", "月", "季"], default="日", key="個股週期",
