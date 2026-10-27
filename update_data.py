@@ -21,6 +21,13 @@
 #   data/sbl/20261022.csv.gz              借券賣出餘額（上市＋上櫃，單位：張，保留約一年）
 #   data/calendar.csv                     法說會日程（公開資訊觀測站，本月與下月）
 #   data/index_ohlc.csv                   加權指數、櫃買指數每日開高低收（證交所、櫃買中心，近 5 年），畫支撐壓力用
+#   data/options_pc.csv, options_inst.csv 臺指選擇權 P/C ratio、三大法人買賣權未平倉（期交所）
+#   data/options_oi.csv                   臺指選擇權最近月份、最近一週各履約價未平倉量（保留 20 天）
+#   data/ipo.csv                          新股公開申購抽籤日程（證交所，今年與去年）
+#   data/daytrade.csv.gz, daytrade_market.csv 上市個股當沖成交股數、上市櫃整體當沖比重
+#   data/fundamental/balance.csv, cashflow.csv 各季資產負債（季底）、現金流量（今年累計），千元
+#   data/buyback.csv                      庫藏股（買回自己公司股份）近一年；data/cb.csv 國內可轉債發行資料
+#   data/qfii.csv.gz                      個股外資持股比率（證交所 MI_QFIIS、櫃買，每天累積約一年）
 #   data/mtx_retail.csv                   小台散戶多空比（期交所三大法人小台淨部位、小台未平倉量）
 #   data/us_daily.csv                     美股指數、VIX、台股供應鏈龍頭每日收盤（Yahoo，近 2 年）
 #   data/econ_calendar.csv                國際經濟數據、央行會議（ForexFactory 本週與下週，逐週累積）
@@ -383,6 +390,7 @@ def 抓基本面():
     抓內部人()
     抓歷史營收()
     抓損益表()
+    抓財報()
     抓除權息()
     抓集保()
 
@@ -1095,7 +1103,7 @@ def main():
 
     if not 參數.skip_latest:
         for 工作 in (抓分時, 抓興櫃, 抓基本面, 抓匯率, 抓處置注意, 抓借券, 抓法說會, 抓融資金額, 抓期貨未平倉, 抓小台散戶,
-                     抓美股日線, 抓經濟行事曆, 抓美股財報, 抓指數K線):  # 這些出問題不影響主資料庫
+                     抓美股日線, 抓經濟行事曆, 抓美股財報, 抓指數K線, 抓選擇權, 抓新股申購, 抓外資持股, 抓當沖, 抓庫藏股, 抓可轉債):  # 這些出問題不影響主資料庫
             try:
                 工作()
             except Exception as 錯誤:

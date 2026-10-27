@@ -1,67 +1,32 @@
-# 暫時用：在 GitHub Actions 測新資料來源能不能連（測完就刪）
-import json
-import re
-import requests
+# 暫時用：在 GitHub Actions 實際跑新的下載函式，看結果（測完就刪）
+import sys
+import time
+sys.path.insert(0, ".")
+import pandas as pd
+import update_data as u
 
-H = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36"}
-去 = lambda t: re.sub(r"<[^>]+>|&nbsp;|\s", "", t)
-
-
-def 看(名, 方法, url, n=900, **kw):
+pd.set_option("display.width", 250)
+pd.set_option("display.max_columns", 30)
+for 名, 工作, 檔 in (("選擇權", u.抓選擇權, ["options_pc.csv", "options_inst.csv", "options_oi.csv"]),
+                    ("新股申購", u.抓新股申購, ["ipo.csv"]),
+                    ("外資持股", lambda: u.抓外資持股(3), ["qfii.csv.gz"]),
+                    ("當沖", lambda: u.抓當沖(3), ["daytrade.csv.gz", "daytrade_market.csv"]),
+                    ("庫藏股", u.抓庫藏股, ["buyback.csv"]),
+                    ("可轉債", u.抓可轉債, ["cb.csv"]),
+                    ("財報", lambda: u.抓財報(2), ["fundamental/balance.csv", "fundamental/cashflow.csv"])):
+    t0 = time.time()
     try:
-        r = requests.request(方法, url, headers=H, timeout=60, **kw)
-        r.encoding = r.encoding or "utf-8"
-        print(f"\n===== {名} {r.status_code} {len(r.text)} {r.headers.get('content-type')}\n{r.text[:n]}")
-        return r
+        工作()
     except Exception as e:
-        print(f"\n===== {名} 失敗 {e!r}")
-
-
-def 表頭(名, r, 列數=3):
-    if r is None:
-        return
-    for i, 表 in enumerate(re.findall(r"<table[^>]*>(.*?)</table>", r.text, re.S)[:6]):
-        th = [去(t) for t in re.findall(r"<th[^>]*>(.*?)</th>", 表, re.S)]
-        trs = re.findall(r"<tr[^>]*>(.*?)</tr>", 表, re.S)
-        print(f"--- {名} 表{i} th={th[:40]}")
-        k = 0
-        for tr in trs:
-            td = [去(t) for t in re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S)]
-            if len(td) > 3:
-                print("   ", td[:30])
-                k += 1
-                if k >= 列數:
-                    break
-
-
-j = requests.get("https://www.tpex.org.tw/openapi/swagger.json", headers=H, timeout=40).json()
-for p, v in j["paths"].items():
-    s = json.dumps(v, ensure_ascii=False)
-    if re.search(r"bond|cb|CB|債|增資|庫藏|私募", p + s):
-        print("TPEx", p, v.get("get", {}).get("summary", "")[:50])
-j = requests.get("https://openapi.twse.com.tw/v1/swagger.json", headers=H, timeout=40).json()
-for p, v in j["paths"].items():
-    s = json.dumps(v, ensure_ascii=False)
-    if re.search(r"債|增資|庫藏|私募|買回", s):
-        print("TWSE", p, v.get("get", {}).get("summary", "")[:50])
-
-看("TWSE openapi TWTB4U", "GET", "https://openapi.twse.com.tw/v1/exchangeReport/TWTB4U", 1200)
-看("TWSE rwd dayTrading", "GET", "https://www.twse.com.tw/rwd/zh/dayTrading/TWTB4U?date=20261027&selectType=All&response=json", 1500)
-看("TWSE old TWTB4U", "GET", "https://www.twse.com.tw/exchangeReport/TWTB4U?response=json&date=20261027&selectType=All", 1500)
-看("TPEx openapi 當沖統計", "GET", "https://www.tpex.org.tw/openapi/v1/tpex_intraday_trading_statistics", 1200)
-看("TPEx openapi 當沖標的", "GET", "https://www.tpex.org.tw/openapi/v1/tpex_securities", 600)
-看("TPEx openapi qfii", "GET", "https://www.tpex.org.tw/openapi/v1/tpex_3insti_qfii", 600)
-看("TPEx rwd 當沖", "POST", "https://www.tpex.org.tw/www/zh-tw/intraday/trading", 800, data={"date": "2026/10/27", "response": "json"})
-看("TWSE openapi 資產負債", "GET", "https://openapi.twse.com.tw/v1/opendata/t187ap07_L_ci", 1200)
-for 頁 in ("ajax_t163sb05", "ajax_t163sb20"):
-    r = 看(f"MOPS {頁}", "POST", f"https://mopsov.twse.com.tw/mops/web/{頁}", 100,
-          data={"encodeURIComponent": 1, "step": 1, "firstin": 1, "off": 1, "isQuery": "Y", "TYPEK": "sii", "year": "115", "season": "02"})
-    表頭(頁, r)
-r = 看("MOPS 庫藏股 t35sc09", "POST", "https://mopsov.twse.com.tw/mops/web/ajax_t35sc09", 100,
-      data={"encodeURIComponent": 1, "step": 1, "firstin": 1, "off": 1, "TYPEK": "sii", "d1": "1150701", "d2": "1151027", "RD": "1"})
-表頭("t35sc09", r, 5)
-print(r.text[-3000:] if r is not None else "")
-r = 看("MOPS 現金流 個股", "POST", "https://mopsov.twse.com.tw/mops/web/ajax_t164sb05", 100,
-      data={"encodeURIComponent": 1, "step": 1, "firstin": 1, "off": 1, "queryName": "co_id", "inpuType": "co_id", "TYPEK": "all",
-            "isnew": "false", "co_id": "2330", "year": "115", "season": "02"})
-表頭("t164sb05", r, 40)
+        import traceback
+        traceback.print_exc()
+    print(f"##### {名} 花 {time.time() - t0:.0f} 秒")
+    for f in 檔:
+        p = u.資料夾 / f
+        if p.exists():
+            t = pd.read_csv(p, dtype=str)
+            print(f"--- {f} {len(t)} 列 {p.stat().st_size // 1024} KB\n{t.head(4)}\n{t.tail(3)}")
+            if f in ("fundamental/balance.csv", "fundamental/cashflow.csv", "qfii.csv.gz", "daytrade.csv.gz"):
+                print(t[t["code"].isin(["2330", "2881", "6488", "5274"])].tail(8))
+        else:
+            print(f"--- {f} 沒有產生")
