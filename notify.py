@@ -147,6 +147,11 @@ def 收盤摘要(強制=False):
         print("日程／警示失敗：", repr(e))
 
     try:
+        行們 += 價位提醒(([] if not 持股 else h["代號"].tolist()) + 代號們)
+    except Exception as e:
+        print("價位提醒失敗：", repr(e))
+
+    try:
         行們 += 評分摘要(持股, 代號們)
     except Exception as e:  # 評分失敗不影響其他摘要
         print("評分計算失敗：", repr(e))
@@ -165,6 +170,35 @@ def 收盤摘要(強制=False):
     if 到價:
         行們 += ["", "🔔 到價"] + 到價
     推播("\n".join(行們))
+
+
+def 價位提醒(代號們):
+    """加權、櫃買和庫存＋自選股今天跌破或站回重要價位（月線、季線、半年線、年線、共振區、黑 K 一半），以及美股龍頭超賣。"""
+    import engine
+    跌站 = []
+    for 代, 名 in (("TAIEX", "加權"), ("TPEX", "櫃買")):
+        K = engine.讀取指數K線(代)
+        for 動, 價名, 價 in (engine.跌破站回(K) if K is not None else []):
+            跌站.append(f"{'⚠️' if 動 == '跌破' else '✅'} {名}{動}{價名}" + ("" if "共振區" in 價名 else f" {價:,.2f}"))
+    代號們 = list(dict.fromkeys(代號們))[:40]
+    if 代號們:
+        原始 = engine.讀取資料庫(最近天數=400, 代號=代號們)
+        if 原始 is not None:
+            指標 = engine.計算指標(原始)
+            for c, 歷史 in 指標.groupby("代號"):
+                K = engine.還原K線(歷史)
+                量 = 歷史.set_index("date")["成交值億"]
+                for 動, 價名, 價 in (engine.跌破站回(K, 量) if K is not None else []):
+                    跌站.append(f"{'⚠️' if 動 == '跌破' else '✅'} {歷史['名稱'].iloc[-1]} {動}{價名}"
+                              + ("" if "共振區" in 價名 else f" {價:,.2f}"))
+    行們 = (["", "📍 跌破／站回重要價位"] + 跌站) if 跌站 else []
+    超 = engine.美股超賣(engine.讀取美股())
+    if len(超):
+        超 = 超[超["狀態"] == "超賣"]
+        if len(超):
+            行們 += ["", "🧊 美股龍頭超賣：" + "、".join(f"{k}（RSI {r['RSI']:.0f}、距月線 {r['距月線%']:+.1f}%）"
+                                               for k, r in 超.iterrows())]
+    return 行們
 
 
 def 提醒事項(代號們):

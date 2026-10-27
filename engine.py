@@ -3375,3 +3375,174 @@ def 恐慌溫度計(美股=None, 匯率=None):
     else:
         級, 話 = "樂觀", "市場很放心，反向思考要小心追高。"
     return 項們, 溫, 級, 話
+
+
+# ========== 24. 支撐壓力回測、缺口清單、跌破／站回、金融股看獲利、美股龍頭超賣 ==========
+def 支撐壓力回測(K, 間隔=5, 往後=20, 守住天數=3, 碰到=0.003, 跌破=0.01, 範圍=0.05, 起=250):
+    """這些自動價位過去準不準：每隔幾天站在「當時」只用當時以前的資料畫價位，看之後 20 天有沒有碰到、碰到後有沒有守住。
+    支撐守住＝碰到那天起 守住天數 內收盤都沒跌破價位 1% 以上；壓力守住＝收盤都沒突破 1% 以上。
+    另外放「隨機對照」：距離收盤 1～4% 的任意價位，用來比較自動價位是不是真的比較有用。
+    回傳每次測試的明細 DataFrame（類別, 角色, 共振, 守住）。"""
+    k = K.dropna(subset=["close"]).reset_index(drop=True)
+    低, 高, 收們 = k["low"].values, k["high"].values, k["close"].values
+    列們 = []
+    for t in range(起, len(k) - 往後, 間隔):
+        sr = 支撐壓力(k.iloc[:t + 1])
+        收 = sr["收盤"]
+        價位 = sr["價位"]
+        共 = {n for z in 共振區(價位) for n in z["成員"]}
+        候選 = [(r["類別"], r["價位"], r["角色"], r["名稱"] in 共) for _, r in 價位.iterrows()
+                if 0.005 <= abs(r["距離%"]) / 100 <= 範圍]
+        候選 += [("隨機對照", 收 * (1 - d), "支撐", False) for d in (0.01, 0.02, 0.03, 0.04)]
+        候選 += [("隨機對照", 收 * (1 + d), "壓力", False) for d in (0.01, 0.02, 0.03, 0.04)]
+        for 類, 價, 角, 共振 in 候選:
+            段 = slice(t + 1, t + 1 + 往後)
+            碰 = np.where(低[段] <= 價 * (1 + 碰到))[0] if 角 == "支撐" else np.where(高[段] >= 價 * (1 - 碰到))[0]
+            if not len(碰):
+                continue
+            i = t + 1 + int(碰[0])
+            之後 = 收們[i:i + 守住天數 + 1]
+            守 = bool((之後 >= 價 * (1 - 跌破)).all()) if 角 == "支撐" else bool((之後 <= 價 * (1 + 跌破)).all())
+            列們.append((類, 角, 共振, 守))
+    return pd.DataFrame(列們, columns=["類別", "角色", "共振", "守住"])
+
+
+def 回測摘要(明細):
+    """依方法彙總守住率，另外列「共振區裡的價位」與「全部自動價位」。"""
+    if 明細.empty:
+        return pd.DataFrame()
+    自動 = 明細[明細["類別"] != "隨機對照"]
+    組們 = [(c, 明細[明細["類別"] == c]) for c in ("均線", "回檔", "缺口", "前高低", "整數", "分價量")]
+    組們 += [("共振區", 自動[自動["共振"]]), ("全部自動價位", 自動), ("隨機對照", 明細[明細["類別"] == "隨機對照"])]
+    列們 = []
+    for 名, g in 組們:
+        if len(g) < 5:
+            continue
+        支, 壓 = g[g["角色"] == "支撐"], g[g["角色"] == "壓力"]
+        列們.append({"方法": 名, "測試次數": len(g), "守住率%": g["守住"].mean() * 100,
+                   "支撐守住%": 支["守住"].mean() * 100 if len(支) else np.nan,
+                   "壓力守住%": 壓["守住"].mean() * 100 if len(壓) else np.nan})
+    return pd.DataFrame(列們).round(1)
+
+
+def 缺口清單(K):
+    """全部還沒回補的缺口（資料有幾年就看幾年），由近到遠。"""
+    if not 有開高低(K):
+        return pd.DataFrame()
+    收 = float(K["close"].iloc[-1])
+    最後 = K["date"].iloc[-1]
+    列們 = []
+    for 下, 上, 日, 向 in 找缺口(K, 天數=len(K)):
+        邊 = 上 if 上 < 收 else 下
+        列們.append({"日期": 日, "方向": "向上跳空（支撐）" if 向 == "向上" else "向下跳空（壓力）", "下緣": 下, "上緣": 上,
+                   "缺口大小%": (上 / 下 - 1) * 100, "距離%": (邊 / 收 - 1) * 100,
+                   "已過交易日": int((K["date"] > 日).sum()) if 日 < 最後 else 0})
+    if not 列們:
+        return pd.DataFrame()
+    return pd.DataFrame(列們).sort_values("距離%", key=abs).reset_index(drop=True)
+
+
+def 還原K線(歷史):
+    """一檔股票的指標表（date, open, high, low, 收盤, 還原價）換成還原後的開高低收，最新一天等於實際股價，
+    除權息才不會被當成跳空缺口。"""
+    if 歷史 is None or len(歷史) < 60:
+        return None
+    h = 歷史[["date", "open", "high", "low", "收盤", "還原價"]].dropna(subset=["收盤"]).sort_values("date").reset_index(drop=True)
+    比 = (h["還原價"] / h["收盤"]).where(h["收盤"] > 0).ffill().fillna(1)
+    比 = 比 / 比.iloc[-1]
+    K = pd.DataFrame({"date": h["date"], "open": h["open"] * 比, "high": h["high"] * 比, "low": h["low"] * 比,
+                      "close": h["收盤"] * 比})
+    return K.dropna().reset_index(drop=True)
+
+
+def 跌破站回(K, 量=None):
+    """今天收盤跟昨天比，有沒有跌破或站回重要價位（月線、季線、半年線、年線、共振區、黑 K 一半）。
+    回傳 [(「跌破」/「站回」, 名稱, 價位)]。"""
+    if K is None or len(K) < 130:
+        return []
+    今, 昨 = float(K["close"].iloc[-1]), float(K["close"].iloc[-2])
+    結果 = []
+    昨K = K.iloc[:-1]
+    for n, 名 in 均線名稱.items():   # 均線用各自那天的值比較
+        if len(K) > n:
+            今均, 昨均 = float(K["close"].tail(n).mean()), float(昨K["close"].tail(n).mean())
+            if 昨 >= 昨均 and 今 < 今均:
+                結果.append(("跌破", 名, 今均))
+            elif 昨 <= 昨均 and 今 > 今均:
+                結果.append(("站回", 名, 今均))
+    sr = 支撐壓力(昨K, 量=量)
+    for z in 共振區(sr["價位"]):
+        區 = f"{z['下']:,.0f}～{z['上']:,.0f} 共振區" if z["上"] > 1000 else f"{z['下']:,.2f}～{z['上']:,.2f} 共振區"
+        if 昨 >= z["下"] and 今 < z["下"]:
+            結果.append(("跌破", 區, z["下"]))
+        elif 昨 <= z["上"] and 今 > z["上"]:
+            結果.append(("站回", 區, z["上"]))
+    黑 = 黑K一半(昨K)
+    if 黑 and 昨 <= 黑["中點"] < 今:
+        結果.append(("站回", f"{黑['日期']:%m/%d} 黑 K 一半", 黑["中點"]))
+    return 結果
+
+
+def 金融股獲利表():
+    """金融保險股的單季、今年累計 EPS 與稅後淨利，跟去年同期比（金融股月營收含投資損益，波動大，看獲利比較準）。"""
+    f = 資料夾 / "fundamental" / "income.csv"
+    if not f.exists():
+        return pd.DataFrame()
+    t = pd.read_csv(f, dtype={"code": str})
+    金 = _股本表().index[_股本表()["產業"] == "金融保險"]
+    t = t[t["code"].isin(金)].dropna(subset=["eps"]).sort_values(["code", "quarter"]).copy()
+    if t.empty:
+        return pd.DataFrame()
+    t["序"] = t["quarter"].str[:4].astype(int) * 4 + t["quarter"].str[-1].astype(int)
+    前 = t.groupby("code")[["序", "eps", "netinc"]].shift()
+    第一季 = t["quarter"].str[-1] == "1"
+    連續 = 前["序"] == t["序"] - 1
+    t["單季EPS"] = np.where(第一季, t["eps"], np.where(連續, t["eps"] - 前["eps"], np.nan))
+    t["單季淨利"] = np.where(第一季, t["netinc"], np.where(連續, t["netinc"] - 前["netinc"], np.nan))
+    鍵 = t.set_index(["code", "序"])
+    最新 = t.groupby("code").tail(1).set_index("code")
+    去年 = list(zip(最新.index, 最新["序"] - 4))
+    def 年增(今, 去):
+        return np.where(np.asarray(去) > 0, (np.asarray(今) / np.asarray(去) - 1) * 100, np.nan)
+    表 = pd.DataFrame({"季度": 最新["quarter"], "單季EPS": 最新["單季EPS"],
+                       "去年同季EPS": 鍵["單季EPS"].reindex(去年).values,
+                       "累計EPS": 最新["eps"], "去年同期累計EPS": 鍵["eps"].reindex(去年).values,
+                       "單季淨利(億)": 最新["單季淨利"] / 1e5}, index=最新.index)
+    表["單季EPS年增%"] = 年增(表["單季EPS"], 表["去年同季EPS"])
+    表["累計EPS年增%"] = 年增(表["累計EPS"], 表["去年同期累計EPS"])
+    四季 = 近四季EPS表()
+    表["近四季EPS"] = 四季["近四季EPS"].reindex(表.index)
+    return 表.round(2)
+
+
+美股龍頭 = ("輝達", "台積電 ADR", "博通", "超微", "美光", "蘋果", "特斯拉", "費城半導體", "那斯達克")
+
+
+def 美股超賣(美股, 名單=美股龍頭):
+    """美股龍頭的 RSI(14)、距 20 日均線、距 60 日高點、連跌天數。RSI < 30 或跌破月線 8% 以上＝超賣，RSI < 35＝接近超賣。
+    回傳 DataFrame（index＝名稱），依 RSI 由低到高。"""
+    if 美股 is None:
+        return pd.DataFrame()
+    列們 = {}
+    for 名 in 名單:
+        if 名 not in 美股:
+            continue
+        s = 美股[名].dropna()
+        if len(s) < 70:
+            continue
+        變 = s.diff()
+        漲 = 變.clip(lower=0).ewm(alpha=1 / 14, adjust=False).mean()
+        跌 = (-變.clip(upper=0)).ewm(alpha=1 / 14, adjust=False).mean()
+        rsi = float(100 - 100 / (1 + 漲.iloc[-1] / 跌.iloc[-1])) if 跌.iloc[-1] > 0 else 100.0
+        乖離 = float((s.iloc[-1] / s.tail(20).mean() - 1) * 100)
+        回落 = float((s.iloc[-1] / s.tail(60).max() - 1) * 100)
+        連跌 = 0
+        for v in 變.iloc[::-1]:
+            if v < 0:
+                連跌 += 1
+            else:
+                break
+        狀態 = "超賣" if rsi < 30 or 乖離 < -8 else ("接近超賣" if rsi < 35 or 乖離 < -5 else ("過熱" if rsi > 70 else ""))
+        列們[名] = {"日期": s.index[-1], "收盤": float(s.iloc[-1]), "RSI": round(rsi, 1), "距月線%": round(乖離, 1),
+                  "距60日高%": round(回落, 1), "連跌天數": 連跌, "狀態": 狀態}
+    return pd.DataFrame(列們).T.sort_values("RSI") if 列們 else pd.DataFrame()

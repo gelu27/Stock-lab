@@ -122,6 +122,10 @@ h1, h2, h3 {{ font-family: 'Space Grotesk', 'Noto Sans TC', sans-serif !importan
     background: #080808; color: #9A9A9A; }}
 .pv span b {{ font-weight: 700; margin-left: 4px; }}
 .pv span.now {{ border-color: #8F7CFF; color: #EDEDED; }}
+.cross {{ display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }}
+.cross span {{ font-family: 'Noto Sans TC', sans-serif; font-size: 13px; padding: 4px 10px; border: 1px solid; font-weight: 700; }}
+.cross .dn {{ color: {綠}; border-color: {綠}; background: rgba(0,214,143,.08); }}
+.cross .up {{ color: {紅}; border-color: {紅}; background: rgba(255,59,92,.08); }}
 .thermo {{ position: relative; height: 12px; margin: 10px 0 4px;
     background: linear-gradient(90deg, {紅} 0%, #555 45%, #555 55%, {綠} 100%); opacity: .9; }}
 .thermo i {{ position: absolute; top: -5px; width: 4px; height: 22px; background: #FFF; box-shadow: 0 0 6px #FFF; }}
@@ -229,6 +233,34 @@ def 漲跌色(值):
     if pd.isna(值) or 值 == 0:
         return "#EDEDED"
     return 紅 if 值 > 0 else 綠
+
+
+def 色階(樣式, 表, 欄們):
+    """明細色階：成長率、EPS、ROE 正的越大越紅、負的越大越綠；營收、市值越大底色越藍（用對數，才不會只有前幾名有顏色）。"""
+    上限 = {"月增%": 100, "年增%": 100, "累計年增%": 100, "近3月年增%": 100, "合計年增%": 50, "年增中位數%": 50,
+            "ROE%": 30, "連增月數": 12}
+    def 漲跌底(v, 頂):
+        if pd.isna(v) or v == 0 or not 頂:
+            return ""
+        強 = min(abs(v) / 頂, 1) * 0.55 + 0.08
+        r, g, b = (255, 59, 92) if v > 0 else (0, 214, 143)
+        return f"background-color:rgba({r},{g},{b},{強:.2f})"
+    def 大小底(v, 低, 高):
+        if pd.isna(v) or v <= 0 or 高 <= 低:
+            return ""
+        強 = (np.log10(v) - 低) / (高 - 低)
+        return f"background-color:rgba(0,229,255,{min(max(強, 0), 1) * 0.45:.2f})"
+    for c in 欄們:
+        if c not in 表 or 表[c].dropna().empty:
+            continue
+        if c in ("營收(億)", "市值(億)"):
+            對數 = np.log10(表[c][表[c] > 0])
+            低, 高 = (對數.quantile(0.05), 對數.quantile(0.99)) if len(對數) else (0, 0)
+            樣式 = 樣式.map(lambda v, 低=低, 高=高: 大小底(v, 低, 高), subset=[c])
+        else:
+            頂 = 上限.get(c) or 表[c].abs().quantile(0.9)
+            樣式 = 樣式.map(lambda v, 頂=頂: 漲跌底(v, 頂), subset=[c])
+    return 樣式
 
 
 def 段落(文字):
@@ -1713,6 +1745,26 @@ def 價位分析(代號, _資料版本):
     return K, sr, 區們, engine.位置解讀(sr, 區們), engine.黑K一半(K), engine.量價標籤(K, 量)
 
 
+@st.cache_data(ttl=3600, show_spinner="回測 5 年支撐壓力中…")
+def 價位回測(代號, _資料版本):
+    K = 指數K線(代號, _資料版本)
+    return engine.回測摘要(engine.支撐壓力回測(K)) if K is not None and len(K) > 300 else pd.DataFrame()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def 指數跌破站回(代號, _資料版本):
+    K = 指數K線(代號, _資料版本)
+    return engine.跌破站回(K, 指數成交值(代號, _資料版本)) if K is not None else []
+
+
+def 跌破站回條(項們):
+    if 項們:
+        st.markdown('<div class="cross">' + "".join(
+            f'<span class="{"dn" if 動 == "跌破" else "up"}">{"⚠️" if 動 == "跌破" else "✅"} 今天{動}{名}'
+            f'{"" if "共振區" in 名 else f" {價:,.2f}"}</span>'
+            for 動, 名, 價 in 項們) + "</div>", unsafe_allow_html=True)
+
+
 價位色 = {"回檔": "#FFC24B", "缺口": "#FF8A3D", "前高低": "#BDBDBD", "整數": "#555555", "分價量": "#8F7CFF"}
 
 
@@ -1835,6 +1887,7 @@ def 關鍵價位區():
         return
     K, sr, 區們, 解, 黑, 量價 = 結果
     價位卡片(sr, 解, float(K["close"].iloc[-2]))
+    跌破站回條(指數跌破站回(代號, _版本))
     st.markdown(f'<div class="verdict">{解["文字"]}</div>', unsafe_allow_html=True)
     量價條(量價)
     try:
@@ -1848,11 +1901,15 @@ def 關鍵價位區():
         st.markdown(黑K卡(黑), unsafe_allow_html=True)
     天數 = st.segmented_control("圖表區間", [60, 120, 250], default=120, format_func=lambda d: {60: "3 個月", 120: "半年", 250: "1 年"}[d],
                               key="價位區間", label_visibility="collapsed") or 120
-    圖分頁 = st.tabs(["支撐壓力圖", "櫃買 ÷ 加權 強弱"])
+    圖分頁 = st.tabs(["支撐壓力圖", "櫃買 ÷ 加權 強弱", "缺口清單", "準不準？（回測）"])
     with 圖分頁[0]:
         st.plotly_chart(支撐壓力圖(K, sr, 區們, 天數), width="stretch", config={"displayModeBar": False})
     with 圖分頁[1]:
         強弱圖(天數)
+    with 圖分頁[2]:
+        缺口表(K, f"缺口{代號}")
+    with 圖分頁[3]:
+        回測區(代號)
     with st.expander("📋 完整價位表"):
         價位明細(sr, 區們, "價位明細")
     st.caption("自動計算，不是人工畫線：月線／季線／半年線＝20／60／120 日均線；黃線＝最近一段漲勢（或跌勢）的費波那契回檔；"
@@ -1861,6 +1918,49 @@ def 關鍵價位區():
                "量價：漲跌看收盤，量看成交金額比前 5 日平均（多 15% 算量增、少 15% 算量縮）。"
                "三條件燈號參考週報分析者的觀察清單；黑 K 一半規則＝大跌那天之後的反彈，收盤要站上那根黑 K 實體的一半才算有力。"
                "僅供研究參考，不是買賣建議。")
+
+
+def 缺口表(K, key):
+    t = engine.缺口清單(K)
+    if t.empty:
+        st.caption("目前沒有還沒回補的缺口。")
+        return
+    st.dataframe(t.style.map(lambda v: f"color:{綠 if '支撐' in v else 紅}", subset=["方向"])
+                 .format({"日期": "{:%Y/%m/%d}", "下緣": "{:,.2f}", "上緣": "{:,.2f}", "缺口大小%": "{:.2f}",
+                          "距離%": "{:+.1f}"}), hide_index=True, width="stretch",
+                 height=min(35 * (len(t) + 1) + 3, 400), key=key)
+    st.caption(f"共 {len(t)} 個還沒回補的缺口，依離目前價位遠近排列。距離＝最先會碰到的那一邊（下方缺口看上緣、上方缺口看下緣）。"
+               "後來的 K 線碰到一部分，缺口會跟著縮小；整個碰到就算回補，從清單移除。")
+
+
+def 回測區(代號):
+    t = 價位回測(代號, _版本)
+    if t.empty:
+        st.caption("資料不足，無法回測。")
+        return
+    基 = t.set_index("方法")
+    自動 = 基.loc["全部自動價位", "守住率%"] if "全部自動價位" in 基.index else np.nan
+    隨機 = 基.loc["隨機對照", "守住率%"] if "隨機對照" in 基.index else np.nan
+    最好 = t[~t["方法"].isin(["全部自動價位", "隨機對照"])].nlargest(1, "支撐守住%")
+    話 = (f"全部自動價位守住率 {自動:.0f}%，任意畫的價位（隨機對照）是 {隨機:.0f}%，"
+         + ("差不多，所以<b>單一條線不要太迷信</b>，要配合量價、燈號一起看。" if abs(自動 - 隨機) < 5 else
+            ("自動價位明顯比較有用。" if 自動 > 隨機 else "自動價位反而比較差，要更謹慎。")))
+    if len(最好):
+        r = 最好.iloc[0]
+        話 += f"當支撐最可靠的是「{r['方法']}」（守住 {r['支撐守住%']:.0f}%）。"
+    st.markdown(f'<div class="verdict sub">{話}</div>', unsafe_allow_html=True)
+    樣式 = t.style
+    for c in ("守住率%", "支撐守住%", "壓力守住%"):   # 跟隨機對照比：比較好越紅、比較差越綠
+        b = 基.loc["隨機對照", c] if "隨機對照" in 基.index else 50
+        樣式 = 樣式.map(lambda v, b=b: "" if pd.isna(v) or abs(v - b) < 2 else
+                        f"background-color:rgba({'255,59,92' if v > b else '0,214,143'},{min(abs(v - b) / 15, 1) * 0.5 + 0.08:.2f})",
+                        subset=[c])
+    st.dataframe(樣式.format(
+        {"守住率%": "{:.0f}", "支撐守住%": "{:.0f}", "壓力守住%": "{:.0f}"}, na_rep="—"),
+        hide_index=True, width="stretch", height=35 * (len(t) + 1) + 3)
+    st.caption("回測方法：近 5 年每隔 5 個交易日，只用「當時」以前的資料畫價位，看之後 20 天有沒有碰到（差 0.3% 內）；"
+               "碰到後 3 天內收盤都沒有跌破（壓力是突破）1% 以上就算守住。隨機對照＝離收盤 1～4% 的任意價位，"
+               "用來比較：如果自動價位跟隨機差不多，代表那類價位沒有特別神奇。紅底＝比隨機對照好、綠底＝比隨機差。")
 
 
 def 強弱圖(天數=120):
@@ -1880,15 +1980,7 @@ def 強弱圖(天數=120):
 
 def 個股K線(代號):
     """個股日 K 換成「還原」後的開高低收（最新一天等於實際股價），避免除權息被當成跳空缺口。"""
-    歷史 = 個股全史(代號, _版本)
-    if 歷史 is None or len(歷史) < 60:
-        return None
-    h = 歷史[["date", "open", "high", "low", "收盤", "還原價"]].dropna(subset=["收盤"]).reset_index(drop=True)
-    比 = (h["還原價"] / h["收盤"]).where(h["收盤"] > 0).ffill().fillna(1)
-    比 = 比 / 比.iloc[-1]
-    K = pd.DataFrame({"date": h["date"], "open": h["open"] * 比, "high": h["high"] * 比, "low": h["low"] * 比,
-                      "close": h["收盤"] * 比})
-    return K.dropna().reset_index(drop=True)
+    return engine.還原K線(個股全史(代號, _版本))
 
 
 def 個股價位區(代號):
@@ -1902,6 +1994,7 @@ def 個股價位區(代號):
     區們 = engine.共振區(sr["價位"])
     解 = engine.位置解讀(sr, 區們)
     價位卡片(sr, 解, float(K["close"].iloc[-2]))
+    跌破站回條(engine.跌破站回(K, 量))
     st.markdown(f'<div class="verdict">{解["文字"]}</div>', unsafe_allow_html=True)
     if 量 is not None:
         量價條(engine.量價標籤(K, 量))
@@ -1909,8 +2002,9 @@ def 個股價位區(代號):
     if 黑:
         st.markdown(黑K卡(黑), unsafe_allow_html=True)
     st.plotly_chart(支撐壓力圖(K, sr, 區們, 120, 420), width="stretch", config={"displayModeBar": False})
-    with st.expander("📋 完整價位表"):
+    with st.expander("📋 完整價位表與缺口清單"):
         價位明細(sr, 區們, f"個股價位明細{代號}")
+        缺口表(K, f"個股缺口{代號}")
     st.caption("用還原股價計算（除權息不會被當成缺口），最新一天等於實際股價。線的意思跟首頁「關鍵價位」相同。僅供研究參考。")
 
 
@@ -2197,6 +2291,7 @@ def 連動區():
         st.info("美股歷史資料（data/us_daily.csv）下次資料更新後就會出現。")
         return
     卡片格([卡片(f"{名} · {日:%m/%d}", f"{v:+.2f}%", "美股前一晚", 漲跌色(v)) for 名, (日, v) in 最新.items()][:6])
+    美股龍頭區()
     if "落差%" in 表:
         跟漲 = 表[表["費城半導體"] >= 0.3]
         if len(跟漲):
@@ -2215,6 +2310,27 @@ def 連動區():
     st.caption("相關係數：近 120 個交易日，台股族群當天漲跌和「前一晚」美股漲跌的關聯（1＝完全同向、0＝沒關係、越紅越同向）。"
                "費半敏感度＝費半漲 1% 時族群平均漲幾 %；推估＝敏感度 × 昨晚費半漲跌；落差＝今天實際 − 推估。"
                "相關不代表因果，只是過去的統計。明天推估在美股比台股新一天時才會出現。")
+
+
+def 美股龍頭區():
+    t = engine.美股超賣(engine.讀取美股())
+    if t.empty:
+        return
+    超 = t[t["狀態"].isin(["超賣", "接近超賣"])]
+    if len(超):
+        話 = "🧊 <b>美股龍頭超賣提示</b>　" + "、".join(
+            f"{k} {r['狀態']}（RSI {r['RSI']:.0f}、距月線 {r['距月線%']:+.1f}%）" for k, r in 超.iterrows()) +             "。超賣常有技術性反彈，但跌深不代表見底，要等止跌。"
+    else:
+        話 = "美股龍頭目前沒有超賣訊號。"
+    st.markdown(f'<div class="verdict sub">{話}</div>', unsafe_allow_html=True)
+    with st.expander("📋 美股龍頭 RSI 與乖離"):
+        顯示 = t.reset_index(names="名稱")
+        st.dataframe(顯示.style.map(lambda v: f"color:{綠 if '超賣' in str(v) else (紅 if v == '過熱' else '#EDEDED')}",
+                                    subset=["狀態"]).map(lambda v: f"color:{漲跌色(v)}", subset=["距月線%", "距60日高%"])
+                     .format({"日期": "{:%m/%d}", "收盤": "{:,.2f}", "RSI": "{:.1f}", "距月線%": "{:+.1f}",
+                              "距60日高%": "{:+.1f}", "連跌天數": "{:.0f}"}),
+                     hide_index=True, width="stretch", height=35 * (len(顯示) + 1) + 3)
+        st.caption("RSI(14) 低於 30 或跌破 20 日均線 8% 以上＝超賣；RSI 低於 35 或跌破月線 5% 以上＝接近超賣；RSI 高於 70＝過熱。")
 
 
 連動欄 = ["費城半導體", "那斯達克", "輝達", "蘋果", "台積電 ADR"]
@@ -3422,34 +3538,6 @@ if 頁面 == 頁面們[8]:
                    "舊版報告沒有目標價，到個股的「🤖 AI 分析」分頁打開一次就會自動補上。點一下股票可到個股查詢。")
 
 # ---------- 05 主動式 ETF ----------
-def 色階(樣式, 表, 欄們):
-    """明細色階：成長率、EPS、ROE 正的越大越紅、負的越大越綠；營收、市值越大底色越藍（用對數，才不會只有前幾名有顏色）。"""
-    上限 = {"月增%": 100, "年增%": 100, "累計年增%": 100, "近3月年增%": 100, "合計年增%": 50, "年增中位數%": 50,
-            "ROE%": 30, "連增月數": 12}
-    def 漲跌底(v, 頂):
-        if pd.isna(v) or v == 0 or not 頂:
-            return ""
-        強 = min(abs(v) / 頂, 1) * 0.55 + 0.08
-        r, g, b = (255, 59, 92) if v > 0 else (0, 214, 143)
-        return f"background-color:rgba({r},{g},{b},{強:.2f})"
-    def 大小底(v, 低, 高):
-        if pd.isna(v) or v <= 0 or 高 <= 低:
-            return ""
-        強 = (np.log10(v) - 低) / (高 - 低)
-        return f"background-color:rgba(0,229,255,{min(max(強, 0), 1) * 0.45:.2f})"
-    for c in 欄們:
-        if c not in 表 or 表[c].dropna().empty:
-            continue
-        if c in ("營收(億)", "市值(億)"):
-            對數 = np.log10(表[c][表[c] > 0])
-            低, 高 = (對數.quantile(0.05), 對數.quantile(0.99)) if len(對數) else (0, 0)
-            樣式 = 樣式.map(lambda v, 低=低, 高=高: 大小底(v, 低, 高), subset=[c])
-        else:
-            頂 = 上限.get(c) or 表[c].abs().quantile(0.9)
-            樣式 = 樣式.map(lambda v, 頂=頂: 漲跌底(v, 頂), subset=[c])
-    return 樣式
-
-
 def 營收走勢圖(代號, 月份):
     """月營收明細點一列：近 24 個月營收（柱）與年增率（線）。"""
     歷史 = engine.讀取營收歷史(代號)
@@ -3479,6 +3567,30 @@ def 營收走勢圖(代號, 月份):
     圖.update_layout(hovermode="x unified", bargap=0.25)
     st.plotly_chart(圖, width="stretch", config={"displayModeBar": False})
     st.caption("最後一根紅色＝創近 5 年新高。黃線是年增率（去年同月營收不到 100 萬時不畫）。")
+
+
+def 金融獲利區():
+    t = engine.金融股獲利表()
+    if t.empty:
+        st.caption("金融股財報資料還沒抓到。")
+        return
+    t = t.reset_index(names="代號")
+    t["股票"] = t["代號"] + " " + t["代號"].map(市場名稱).fillna("")
+    收盤 = 今日.set_index("代號")["收盤"]
+    t["本益比"] = (收盤.reindex(t["代號"]).values / t["近四季EPS"].where(t["近四季EPS"] > 0)).round(1)
+    排序 = st.segmented_control("排序", ["近四季EPS", "累計EPS年增%", "單季EPS年增%"], default="近四季EPS", key="金融排序",
+                              label_visibility="collapsed") or "近四季EPS"
+    t = t.sort_values(排序, ascending=False, na_position="last")
+    欄 = ["代號", "股票", "季度", "單季EPS", "去年同季EPS", "單季EPS年增%", "累計EPS", "去年同期累計EPS", "累計EPS年增%",
+         "近四季EPS", "本益比", "單季淨利(億)"]
+    輸出 = t[欄]
+    點選表(輸出, 色階(輸出.style, 輸出, ["單季EPS年增%", "累計EPS年增%"]).format(
+        {c: "{:,.2f}" for c in ("單季EPS", "去年同季EPS", "累計EPS", "去年同期累計EPS", "近四季EPS")}
+        | {"單季EPS年增%": "{:+,.0f}", "累計EPS年增%": "{:+,.0f}", "本益比": "{:.1f}", "單季淨利(億)": "{:,.1f}"},
+        na_rep="—"), "金融獲利表", height=min(35 * (len(輸出) + 1) + 3, 600), column_config={"代號": None})
+    st.caption("金融股（金控、銀行、保險、證券）的營收包含投資、匯兌損益，波動很大，看「賺多少錢」比較準。"
+               "累計＝今年到最新一季合計；年增用去年同期比；去年同期是虧損或接近 0 時年增會很誇張，顯示「—」或很大的數字要小心。"
+               "金控每月 10 日左右也會自結公布當月獲利，網站目前只有每季財報。點一列可到個股查詢。")
 
 
 @st.cache_data(max_entries=4, show_spinner=False)
@@ -3563,7 +3675,10 @@ if 頁面 == 頁面們[4]:
            卡片("近 5 年新高 ★", f"{int(全部['五年新高'].sum())} 家",
                 f"連續年增 ≥ 12 個月 {int((全部['連增月數'] >= 12).sum())} 家")])
 
-    明細頁, 產業頁 = st.tabs(["📋 個股明細", "🏭 產業概況"])
+    st.caption("🏦 金融股的月營收包含投資損益，常常大起大落，年增率參考價值低，請改看「金融股看獲利」分頁。")
+    明細頁, 產業頁, 金融頁 = st.tabs(["📋 個股明細", "🏭 產業概況", "🏦 金融股看獲利"])
+    with 金融頁:
+        金融獲利區()
     with 明細頁:
         欄位們 = {"營收": ["營收(億)"], "月增": ["月增%"], "年增": ["年增%"], "近3月": ["近3月年增%"], "連增": ["連增月數"],
                 "累計": ["累計年增%"], "EPS": ["近四季EPS"], "EPS試算": ["單月EPS試算", "今年EPS試算"], "ROE": ["ROE%"],
