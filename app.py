@@ -458,6 +458,10 @@ def 選股條件區():
                 條件["外資連買下限"] = st.number_input("外資連買天數 ≥", value=3, step=1, key="條_外資連買天數 ≥")
             if st.checkbox("投信連續買超", key="條_投信連續買超"):
                 條件["投信連買下限"] = st.number_input("投信連買天數 ≥", value=3, step=1, key="條_投信連買天數 ≥")
+            if st.checkbox("外資連續賣超", key="條_外資連續賣超"):
+                條件["外資連賣下限"] = st.number_input("外資連賣天數 ≥", value=5, step=1, key="條_外資連賣天數 ≥")
+            if st.checkbox("土洋對作（外資賣、投信買）", key="條_土洋對作"):
+                條件["土洋對作下限"] = st.number_input("連續天數 ≥", value=3, step=1, key="條_土洋對作天數 ≥")
             if st.checkbox("三大法人 5 日合計買超", key="條_三大法人 5 日合計買超"):
                 條件["法人5日買超下限"] = st.number_input("法人 5 日買超(張) ≥", value=1000, step=500, key="條_法人 5 日買超(張) ≥")
             if st.checkbox("融資 5 日增減上限", key="條_融資 5 日增減上限"):
@@ -1982,6 +1986,8 @@ def 關鍵價位區():
     if 技術:
         st.markdown("**分析師常用條件**：週線、KD、扣抵值、爆量 K 棒")
         st.markdown(燈號卡(技術), unsafe_allow_html=True)
+    if 代號 == "TAIEX":
+        殺估值區()
     天數 = st.segmented_control("圖表區間", [60, 120, 250], default=120, format_func=lambda d: {60: "3 個月", 120: "半年", 250: "1 年"}[d],
                               key="價位區間", label_visibility="collapsed") or 120
     圖分頁 = st.tabs(["支撐壓力圖", "櫃買 ÷ 加權 強弱", "缺口清單", "準不準？（回測）", "守 5 週線的強勢股"])
@@ -2005,6 +2011,25 @@ def 關鍵價位區():
                "分析師常用條件整理自幾位 YouTube 分析師：20 週線守不守（宏爺）、KD 沒黃金交叉不算反轉（老王）、"
                "扣抵值看 5 日線何時翻揚（通勤族）、跌破爆量那天的低點凶多吉少（老王）。"
                "僅供研究參考，不是買賣建議。")
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def 殺估值資料(_資料版本):
+    return engine.殺估值觀察組(指標, engine.讀取美股())
+
+
+def 殺估值區():
+    t, 燈, 話 = 殺估值資料(_版本)
+    if t.empty:
+        return
+    st.markdown(燈號卡([("殺估值觀察組", 燈, 話)]), unsafe_allow_html=True)
+    with st.expander("看每一檔"):
+        表格(t, hide_index=True, width="stretch",
+                     column_config={"距60日高%": st.column_config.NumberColumn(format="%+.1f"),
+                                    "本益比降幅%": st.column_config.NumberColumn(format="%+.1f")})
+        st.caption("通勤族的觀察法：這波下跌主要是「殺估值」（市場不願意再給高本益比），不是公司變差。"
+                   "高本益比的領頭股不再創新低（近 5 日低點沒有低於前 20 日低點），才代表修正可能告一段落。"
+                   "Lumentum 是美股光通訊股，只有收盤價。")
 
 
 def 守週線表():
@@ -2105,6 +2130,13 @@ def 個股價位區(代號):
     技術 = engine.技術觀察(K, 量)
     if 技術:
         st.markdown(燈號卡(技術), unsafe_allow_html=True)
+    紀 = engine.停損紀律狀態(K)
+    if 紀:
+        類 = {"🟢": "g", "🟡": "y", "🔴": "r"}.get(紀["燈"], "y")
+        st.markdown(f'<div class="lamp {類}" style="margin:6px 0"><div class="t"><i>{紀["燈"]}</i>老王停損紀律：{紀["建議"]}</div>'
+                    f'<div class="s">{紀["說明"]}</div></div>', unsafe_allow_html=True)
+        with st.expander("🧪 這套紀律在這檔有用嗎？（5 年回測）"):
+            停損紀律回測表(代號)
     貴 = engine.買貴檢查(歷史)
     if 貴:
         燈 = "r" if 貴["跌幅%"] <= -30 else ("y" if 貴["跌幅%"] <= -10 else "g")
@@ -2115,6 +2147,27 @@ def 個股價位區(代號):
         價位明細(sr, 區們, f"個股價位明細{代號}")
         缺口表(K, f"個股缺口{代號}")
     st.caption("用還原股價計算（除權息不會被當成缺口），最新一天等於實際股價。線的意思跟首頁「關鍵價位」相同。僅供研究參考。")
+
+
+@st.cache_data(ttl=3600, show_spinner="回測中…")
+def 停損紀律回測資料(代號, _資料版本):
+    return engine.停損紀律回測(個股全史(代號, _資料版本))
+
+
+def 停損紀律回測表(代號):
+    t = 停損紀律回測資料(代號, _版本)
+    if t.empty:
+        st.caption("資料不足，無法回測。")
+        return
+    表格(t, hide_index=True, width="stretch",
+                 column_config={"總報酬%": st.column_config.NumberColumn(format="%+.1f"),
+                                "最大回檔%": st.column_config.NumberColumn(format="%.1f")})
+    抱, 老 = t.iloc[0], t.iloc[2]
+    話 = ("在這檔，紀律的報酬比一直抱著好" if 老["總報酬%"] > 抱["總報酬%"] else "在這檔，一直抱著的報酬比較高，紀律常被洗出場")
+    話 += ("，但最大回檔比較小，抱得比較安心。" if 老["最大回檔%"] > 抱["最大回檔%"] + 3 else "，回檔也沒有明顯變小。")
+    st.markdown(f'<div class="verdict sub">{話}</div>', unsafe_allow_html=True)
+    st.caption(f"從 {t.attrs.get('起', pd.NaT):%Y/%m/%d} 起算。進場都是收盤站上 5、10、20 日線；訊號收盤產生、隔天收盤成交，已扣手續費與證交稅。"
+               "停損紀律的好處是避開大跌，代價是盤整時被來回洗、手續費變多；適合短線操作，長期好公司不一定適用。")
 
 
 def 排行區():
@@ -2289,7 +2342,7 @@ def 狀態區():
 
 def 恐慌溫度計區():
     try:
-        項們, 溫, 級, 話 = engine.恐慌溫度計(engine.讀取美股(), engine.讀取匯率())
+        項們, 溫, 級, 話 = engine.恐慌溫度計(engine.讀取美股(), engine.讀取匯率(), engine.讀取小台散戶())
     except Exception:
         return
     if not 項們:
@@ -2300,7 +2353,8 @@ def 恐慌溫度計區():
     st.markdown(f'<div class="thermo"><i style="left:calc({溫:.0f}% - 2px)"></i></div>'
                 '<div class="thermo-l"><span>樂觀</span><span>中性</span><span>恐慌</span></div>'
                 f'<div class="verdict sub">{話}</div>', unsafe_allow_html=True)
-    st.caption("恐慌溫度計＝VIX 在過去一年排第幾、美元兌台幣在一年區間的位置（台幣越貶分數越高），兩項平均。"
+    st.caption("恐慌溫度計＝VIX 在過去一年排第幾、美元兌台幣在一年區間的位置（台幣越貶分數越高）、"
+               "韭菜指數（小台散戶多空比：散戶淨多單 ÷ 小台未平倉量，散戶越看空分數越高），各項平均。"
                "參考反向型分析者的看法：大家最怕的時候常接近低點，但仍要等止跌訊號，不是買賣建議。")
 
 
@@ -2610,8 +2664,11 @@ def 券商報告總覽():
     else:
         st.caption("近 30 天沒有上修紀錄。")
     段落("LIST // 全部報告")
+    表 = engine.加潛在空間(表, dict(zip(今日["代號"].astype(str), 今日["收盤"])))
     表格(表.drop(columns=["報告收盤價"]), hide_index=True, width="stretch",
-                 column_config={"日期": st.column_config.DateColumn(format="YYYY-MM-DD")})
+                 column_config={"日期": st.column_config.DateColumn(format="YYYY-MM-DD"),
+                                "潛在空間%": st.column_config.NumberColumn(format="%+.1f%%")})
+    st.caption("潛在空間＝目標價 ÷ 今天收盤 − 1，每天跟著收盤價更新；負數代表股價已經超過目標價。")
     段落("SCORE // 券商目標價驗收")
     價們 = {c: 個股價格(c) for c in 表["代號"].unique() if str(c).isdigit()}
     命 = engine.券商命中率(報告們, {k: v for k, v in 價們.items() if v is not None})
@@ -2621,6 +2678,96 @@ def 券商報告總覽():
         表格(命, width="stretch")
         st.caption("達標＝報告後 6 個月內股價碰到目標價；平均報酬＝報告日收盤到現在（最多 6 個月）。"
                    "多數報告定義「買進」是 6 個月報酬 15～30%，時間還不到 6 個月的算進行中。")
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def 網紅說法清單(_快取鍵):
+    return engine.讀取網紅說法(_設定())
+
+
+網紅指令 = ("請用繁體中文完整整理這支影片，不要只寫摘要，也不要加入你自己的看法：（貼上影片連結）\n"
+          "格式：一、頻道、日期、長度。二、逐段內容（時間點、講什麼、理由），保留所有數字。"
+          "三、提到的股票（每檔一行：代號 名稱：看多或看空。理由：…，有價位要寫）。四、所有「如果…就…」的判斷條件。"
+          "五、引用的資料來源。六、畫面上的圖表與字卡。七、影片本身前後矛盾或沒說清楚的地方"
+          "（不要用你自己的知識判斷股價、EPS 等數字對不對，你的資料可能不是最新的）。")
+
+
+def 網紅說法上傳區():
+    if not 可編輯():
+        st.caption("新增影片要先在 01 市場總覽的庫存區輸入密碼解鎖。")
+        return
+    with st.popover("📋 給 Gemini 的整理指令（複製用）"):
+        st.code(網紅指令, language=None, wrap_lines=True)
+    文 = st.text_area("把 Gemini 整理好的文字整段貼上（一次可以貼好幾支）", height=180, key="網紅貼上")
+    if 文 and st.button("🔍 解析", key="網紅解析", type="primary"):
+        名表 = dict(zip(今日["名稱"], 今日["代號"]))
+        片們 = [v for v in (engine.解析影片整理(p, 名表) for p in engine.拆開多支影片(文)) if v]
+        st.session_state["網紅預覽"] = 片們
+        if not 片們:
+            st.warning("看不出格式，請確認有「三、提到的股票」這一段。")
+    預覽 = st.session_state.get("網紅預覽")
+    if 預覽:
+        for v in 預覽:
+            st.markdown(f"**{v['頻道']}**（{v['日期'] or '沒有日期'}）：{len(v['股票'])} 檔、{v['條件數']} 個條件"
+                        + (f"，🚩 {len(v['紅旗'])}" if v["紅旗"] else ""))
+            表格(pd.DataFrame(v["股票"])[["代號", "名稱", "看法", "理由"]], hide_index=True, width="stretch")
+        a, b = st.columns(2)
+        if a.button("💾 存檔", key="存網紅", type="primary"):
+            全 = engine.合併網紅說法(engine.讀取網紅說法(_設定()), 預覽)
+            永久 = engine.儲存網紅說法(_設定(), 全)
+            st.session_state.pop("網紅預覽", None)
+            st.session_state["_網紅版本"] = st.session_state.get("_網紅版本", 0) + 1
+            st.success(f"已存 {len(預覽)} 支" + ("（GitHub 永久保存）" if 永久 else "（暫存在網站上）"))
+        if b.button("✖ 不要存", key="棄網紅"):
+            st.session_state.pop("網紅預覽", None)
+            st.rerun()
+    st.caption("不用 AI 額度：網站直接讀「三、提到的股票」和「四、如果…就…」兩段。只保存股票、看法和一句理由。")
+
+
+def 網紅說法總覽():
+    影片們 = 網紅說法清單(st.session_state.get("_網紅版本", 0))
+    段落("INFLUENCER // 網紅說法收件匣")
+    with st.expander("📥 新增影片", expanded=not 影片們):
+        網紅說法上傳區()
+    if not 影片們:
+        st.caption("還沒有影片。存進來後，這裡會整理每位分析師的看法、紅旗，並在 20 個交易日後對答案。")
+        return
+    代們 = {str(x["代號"]) for v in 影片們 for x in v.get("股票", []) if str(x.get("代號", "")).isdigit()}
+    價們 = {c: 個股價格(c) for c in 代們}
+    明細, 彙 = engine.網紅對答案(影片們, {k: v for k, v in 價們.items() if v is not None}, 指數K線("TAIEX", _版本))
+    段落("SCORE // 誰說得準（20 個交易日後，扣掉大盤漲跌）")
+    if 彙.empty:
+        st.caption("還沒有可以對答案的資料。")
+    else:
+        表格(彙, width="stretch", column_config={"平均超額%": st.column_config.NumberColumn(format="%+.1f")})
+        st.caption("超額報酬＝個股報酬減同期加權報酬。看多且贏大盤、看空且輸大盤算說對；不到 20 天的算「暫時」，不計入命中率。"
+                   "中立的不算。樣本少的時候命中率只是參考。")
+    段落("FLAGS // 紅旗：哪些說法要打折")
+    for v in 影片們:
+        旗 = v.get("紅旗") or []
+        st.markdown(f"{'🚩' * min(len(旗), 3) or '✅'} **{v['頻道']}**（{v.get('日期') or '—'}）：{len(v.get('股票', []))} 檔、"
+                    f"{v.get('條件數', 0)} 個「如果…就…」條件" + (f"。{'；'.join(旗)}" if 旗 else "。沒有明顯紅旗"))
+    if not 明細.empty:
+        段落("LIST // 每一則看法")
+        表格(明細.sort_values("日期", ascending=False), hide_index=True, width="stretch",
+                     column_config={"日期": st.column_config.DateColumn(format="YYYY-MM-DD"),
+                                    "報酬%": st.column_config.NumberColumn(format="%+.1f"),
+                                    "超額%": st.column_config.NumberColumn(format="%+.1f")})
+    st.caption("紅旗是規則自動標的：用績效建立可信度、保證獲利用語、業配、沒有條件、幾乎全部看多、點名太多檔、沒有價位。"
+               "有紅旗不代表說錯，只是要多查證。")
+
+
+def 個股網紅說法(代號):
+    說們 = [(v, x) for v in 網紅說法清單(st.session_state.get("_網紅版本", 0)) for x in v.get("股票", [])
+           if str(x.get("代號")) == str(代號)]
+    if not 說們:
+        return
+    段落("INFLUENCER // 網紅怎麼說")
+    for v, x in sorted(說們, key=lambda t: str(t[0].get("日期")), reverse=True)[:8]:
+        圖 = {"看多": "🔴", "看空": "🟢"}.get(x["看法"], "⚪")
+        st.markdown(f"- `{v.get('日期') or '—'}` {圖} **{v['頻道']}**：{x.get('原文看法') or x['看法']}。{x.get('理由', '')}"
+                    + (" 🚩" if v.get("紅旗") else ""))
+    st.caption("紅色＝看多、綠色＝看空（跟台股漲跌顏色一樣）。🚩＝那支影片有紅旗，見 04 選股 → 網紅說法。")
 
 
 def 個股券商報告(代號, 收盤):
@@ -2636,13 +2783,17 @@ def 個股券商報告(代號, 收盤):
         卡片格([卡片("目標價區間", f"{目.min():,.0f} ~ {目.max():,.0f}", f"{len(目)} 份報告，分歧 {(目.max() / 目.min() - 1) * 100:.0f}%"),
                卡片("中位數距現價", f"{(目.median() / 收盤 - 1) * 100:+.1f}%", f"中位數 {目.median():,.0f}"),
                卡片("最新修正", f"目標價{表['目標價修正'].iloc[0]}", f"EPS {表['EPS修正'].iloc[0]} · {表['券商'].iloc[0]}")])
-    表格(表.drop(columns=["代號", "名稱"]), hide_index=True, width="stretch",
-                 column_config={"日期": st.column_config.DateColumn(format="YYYY-MM-DD")})
+    表 = engine.加潛在空間(表, {str(代號): 收盤})
+    表格(表.drop(columns=["代號", "名稱", "現價"]), hide_index=True, width="stretch",
+                 column_config={"日期": st.column_config.DateColumn(format="YYYY-MM-DD"),
+                                "潛在空間%": st.column_config.NumberColumn(format="%+.1f%%")})
     營收 = engine.讀取營收歷史(代號)
     價 = 個股價格(代號)
     for x in 報告們[:5]:
         驗 = engine.驗收券商報告(x, 價) if 價 is not None else {"結果": "無資料"}
-        標 = f"{x.get('日期')} {x.get('券商')} {x.get('評等')}，目標價 {x.get('目標價') or '—'}（{驗['結果']}）"
+        目 = engine._數(x.get("目標價"))
+        空 = f"，空間 {(目 / 收盤 - 1) * 100:+.0f}%" if not np.isnan(目) and 收盤 else ""
+        標 = f"{x.get('日期')} {x.get('券商')} {x.get('評等')}，目標價 {x.get('目標價') or '—'}{空}（{驗['結果']}）"
         with st.expander(標):
             if x.get("白話"):
                 st.markdown("**白話翻譯**\n" + "\n".join(f"{i}. {t}" for i, t in enumerate(x["白話"], 1)))
@@ -2748,9 +2899,11 @@ if 頁面 == 頁面們[1]:
 
 # ---------- 04 選股 ----------
 if 頁面 == 頁面們[3]:
-  選股分頁 = st.tabs(["條件選股", "烏賊每日功課", "烏賊策略總覽", "券商報告"])
+  選股分頁 = st.tabs(["條件選股", "烏賊每日功課", "烏賊策略總覽", "券商報告", "網紅說法"])
   with 選股分頁[3]:
     券商報告總覽()
+  with 選股分頁[4]:
+    網紅說法總覽()
   with 選股分頁[2]:
     總表, 名單, 重複 = engine.烏賊總覽(今日)
     多 = 總表[總表["多空"] == "多"]["符合檔數"].sum()
@@ -3059,6 +3212,9 @@ if 頁面 == 頁面們[2]:
     概念們 = engine.個股概念(代號)
     if 概念們:
         st.caption("🏷️ 概念股：" + "、".join(概念們))
+    鏈 = engine.產業鏈位置(代號, dict(zip(今日["代號"], 今日["名稱"])))
+    if 鏈:
+        st.caption("🔗 " + 鏈.replace("\n", "　｜　"))
     if 警示表(_版本).get(代號):
         st.warning("⚠️ " + 警示表(_版本)[代號] + "　（處置股要先付款／交券才能下單，注意股代表近期交易異常）")
     if not 可編輯():
@@ -3169,8 +3325,12 @@ if 頁面 == 頁面們[2]:
         if 有籌碼:
             段落("CHIPS // 籌碼面（張）")
             卡片格([
-                卡片("外資", 數(r["外資買超"], "{:+,.0f}"), f"連買 {數(r['外資連買'], '{:.0f}')} 天", 漲跌色(r["外資買超"])),
-                卡片("投信", 數(r["投信買超"], "{:+,.0f}"), f"連買 {數(r['投信連買'], '{:.0f}')} 天", 漲跌色(r["投信買超"])),
+                卡片("外資", 數(r["外資買超"], "{:+,.0f}"),
+                     f"連賣 {數(r['外資連賣'], '{:.0f}')} 天" if r.get("外資連賣", 0) > 0 else f"連買 {數(r['外資連買'], '{:.0f}')} 天",
+                     漲跌色(r["外資買超"])),
+                卡片("投信", 數(r["投信買超"], "{:+,.0f}"),
+                     f"土洋對作 {r['土洋對作']:.0f} 天（外資賣、投信買）" if r.get("土洋對作", 0) >= 2 else
+                     f"連買 {數(r['投信連買'], '{:.0f}')} 天", 漲跌色(r["投信買超"])),
                 卡片("自營商", 數(r["自營買超"], "{:+,.0f}"), "", 漲跌色(r["自營買超"])),
                 卡片("法人 5 日合計", 數(r["法人5日買超"], "{:+,.0f}"), "", 漲跌色(r["法人5日買超"])),
                 卡片("法人 10 日合計", 數(r["法人10日買超"], "{:+,.0f}"), "", 漲跌色(r["法人10日買超"])),
@@ -3644,6 +3804,7 @@ if 頁面 == 頁面們[2]:
                             st.markdown(engine.拆解AI建議(舊["內容"])[0])
                             st.divider()
         個股券商報告(代號, float(r["收盤"]))
+        個股網紅說法(代號)
 
 
 def 評分驗證區():
