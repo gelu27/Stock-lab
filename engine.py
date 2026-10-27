@@ -1,6 +1,7 @@
 # 計算核心：讀資料庫、算技術指標、選股、回測
 # 想調整選股或回測規則，主要改這個檔案
 
+import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -546,6 +547,9 @@ def 計算指標(原始):
         表["法人10日買超"] = _滾動(群, "法人買超", 10, "sum", 1).round()
         表["外資連買"] = _連續天數(表["外資買超"] > 0, 表["code"])
         表["投信連買"] = _連續天數(表["投信買超"] > 0, 表["code"])
+        表["外資連賣"] = _連續天數(表["外資買超"] < 0, 表["code"])
+        # 土洋對作：外資賣、投信買（理財達人秀：要看急殺時誰接手）
+        表["土洋對作"] = _連續天數((表["外資買超"] < 0) & (表["投信買超"] > 0), 表["code"])
         表["融資餘額"] = 表["margin"]
         表["融資5日增減"] = ((表["margin"] / 群["margin"].shift(5) - 1) * 100).round(1)
     數字 = 表.select_dtypes("float64").columns
@@ -590,7 +594,8 @@ def 選股(當日, 條件):
         結果 = 結果[結果["RSI"].between(*c["RSI區間"])]
     if c.get("量比下限") is not None:
         結果 = 結果[結果["量比"] >= c["量比下限"]]
-    for 鍵, 欄 in (("外資連買下限", "外資連買"), ("投信連買下限", "投信連買"), ("法人5日買超下限", "法人5日買超")):
+    for 鍵, 欄 in (("外資連買下限", "外資連買"), ("投信連買下限", "投信連買"), ("法人5日買超下限", "法人5日買超"),
+                 ("外資連賣下限", "外資連賣"), ("土洋對作下限", "土洋對作")):
         if c.get(鍵) is not None and 欄 in 結果.columns:
             結果 = 結果[結果[欄] >= c[鍵]]
     if c.get("融資5日增減上限") is not None and "融資5日增減" in 結果.columns:
@@ -4055,6 +4060,9 @@ def 讀取產業鏈():
     return pd.read_csv(f, dtype=str) if f.exists() else pd.DataFrame(columns=["chain", "stage", "group", "code"])
 
 
+賺錢順序鏈 = {"玻璃基板"}   # Vic：設備與檢測 → 代工與材料 → 基板廠
+
+
 def 產業鏈位置(代號, 名稱表=None):
     """回傳一段文字：這檔在哪條產業鏈的哪一段、同組有誰、上下游是哪些環節。名稱表＝{代號: 名稱}。"""
     t = 讀取產業鏈()
@@ -4067,6 +4075,11 @@ def 產業鏈位置(代號, 名稱表=None):
         鏈 = t[t["chain"] == r["chain"]]
         同 = 鏈[(鏈["group"] == r["group"]) & (鏈["code"] != r["code"])]["code"]
         段們 = sorted(x for x in 鏈["stage"].unique() if "支援" not in x)   # 製程支援（設備、耗材）服務各段，不算上下游
+        if r["chain"] in 賺錢順序鏈:   # 新技術的鏈依建廠順序排，不是上下游
+            行.append(f"{r['chain']} 產業鏈：{r['stage']}／{r['group']}"
+                     + (f"；同組：{'、'.join(名(c) for c in 同)}" if len(同) else "")
+                     + f"；賺錢順序：{' → '.join(段們)}（設備先收錢，基板廠要等量產）")
+            continue
         if r["stage"] in 段們:
             i = 段們.index(r["stage"])
             上 = 段們[i - 1] if i > 0 else None
@@ -4295,3 +4308,231 @@ def 技術觀察摘要(K, 量=None, 名稱=""):
     """給 AI 大盤解讀用的一行：週線位置、KD、扣抵值、爆量 K 棒。"""
     項們 = 技術觀察(K, 量)
     return f"{名稱}分析師常用條件：" + "；".join(f"{燈}{名}：{說}" for 名, 燈, 說 in 項們) if 項們 else ""
+
+
+# ========== 30. 老王的停損紀律：破 5 日線減半、破 10 日線出清 ==========
+def 停損紀律狀態(K):
+    """老王的 SOP：收盤跌破 5 日線先賣一半，跌破 10 日線全部出清；站上 5、10、20 日線才算重新轉強。
+    回傳 dict(燈, 建議, 說明, 今天) ；今天＝今天剛跌破／站回的那條線（給 LINE），沒有就是 None。"""
+    if K is None or len(K) < 25:
+        return None
+    c = K["close"].reset_index(drop=True)
+    均 = {n: c.rolling(n).mean() for n in (5, 10, 20)}
+    收 = float(c.iloc[-1])
+    在 = {n: 收 >= float(均[n].iloc[-1]) for n in 均}
+    昨在 = {n: float(c.iloc[-2]) >= float(均[n].iloc[-2]) for n in 均}
+    小數 = 0 if 收 > 1000 else 2
+    f = lambda n: f"{float(均[n].iloc[-1]):,.{小數}f}"
+    if not 在[10]:
+        燈, 建議 = "🔴", "出清"
+        說 = f"收盤在 10 日線 {f(10)} 下面：照老王的紀律，持股應該已經全部出清，等重新站上 5、10、20 日線再說"
+    elif not 在[5]:
+        燈, 建議 = "🟡", "減碼一半"
+        說 = f"跌破 5 日線 {f(5)}、還守著 10 日線 {f(10)}：先賣一半，跌破 10 日線再全出"
+    elif 在[20]:
+        燈, 建議 = "🟢", "續抱"
+        說 = f"站在 5 日 {f(5)}、10 日 {f(10)}、20 日線 {f(20)} 上面，紀律上可以續抱；停損看 5 日線 {f(5)}"
+    else:
+        燈, 建議 = "🟡", "觀察"
+        說 = f"站回 5、10 日線但還在 20 日線 {f(20)} 下面，反彈還沒確認"
+    今天 = None
+    if 昨在[10] and not 在[10]:
+        今天 = ("跌破", "10 日線（老王紀律：出清）", float(均[10].iloc[-1]))
+    elif 昨在[5] and not 在[5]:
+        今天 = ("跌破", "5 日線（老王紀律：減碼一半）", float(均[5].iloc[-1]))
+    elif all(在.values()) and not all(昨在.values()):
+        今天 = ("站回", "5、10、20 日線（老王紀律：重新轉強）", None)
+    return {"燈": 燈, "建議": 建議, "說明": 說, "今天": 今天}
+
+
+def 停損紀律回測(歷史, 年數=5):
+    """這檔股票過去幾年用三種方式抱股的結果：一直抱著、只看 10 日線（全進全出）、老王紀律（破 5 日線減半、破 10 日線出清）。
+    進場都是收盤站上 5、10、20 日線；訊號收盤產生，隔天收盤成交，已扣手續費與證交稅。回傳 DataFrame 或空表。"""
+    if 歷史 is None or len(歷史) < 120:
+        return pd.DataFrame()
+    h = 歷史.sort_values("date").reset_index(drop=True)
+    h = h[h["date"] >= h["date"].iloc[-1] - pd.DateOffset(years=年數)].reset_index(drop=True)
+    p, r = h["還原價"], h["日報酬"].fillna(0).values
+    m5, m10, m20 = (p.rolling(n).mean() for n in (5, 10, 20))
+    強 = ((p > m5) & (p > m10) & (p > m20)).values
+    破5, 破10 = (p < m5).values, (p < m10).values
+    費, 稅 = 手續費率, 稅率(str(h["代號"].iloc[-1]) if "代號" in h else "")
+
+    def 跑(規則):
+        倉, 資產, 高, 回撤, 次 = 0.0, 1.0, 1.0, 0.0, 0
+        目標 = 0.0
+        for i in range(len(h)):
+            資產 *= 1 + 倉 * r[i]
+            if 目標 != 倉:   # 昨天收盤的訊號，今天收盤成交
+                變 = 目標 - 倉
+                資產 -= 資產 * abs(變) * (費 + (稅 if 變 < 0 else 0))
+                次 += 變 > 0
+                倉 = 目標
+            高 = max(高, 資產)
+            回撤 = min(回撤, 資產 / 高 - 1)
+            目標 = 規則(i, 倉)
+        return 資產, 回撤, 次
+
+    def 只看十日(i, 倉):
+        return 0.0 if 破10[i] else (1.0 if 強[i] else 倉)
+
+    def 老王(i, 倉):
+        if 破10[i]:
+            return 0.0
+        if 破5[i]:
+            return min(倉, 0.5)
+        return 1.0 if 強[i] or (倉 > 0 and not 破5[i]) else 倉
+
+    列們 = []
+    for 名, 規則 in (("一直抱著", lambda i, 倉: 1.0), ("只看 10 日線（全進全出）", 只看十日), ("老王紀律（破 5 日減半、破 10 日出清）", 老王)):
+        資產, 回撤, 次 = 跑(規則)
+        列們.append({"方法": 名, "總報酬%": round((資產 - 1) * 100, 1), "最大回檔%": round(回撤 * 100, 1), "進場次數": 次})
+    t = pd.DataFrame(列們)
+    t.attrs["起"] = h["date"].iloc[0]
+    return t
+
+
+# ========== 31. 網紅說法收件匣：貼上 Gemini 整理的影片重點，抓出股票與看法、紅旗、到期對答案 ==========
+看法詞 = (("看空", "看空"), ("偏空", "看空"), ("看多", "看多"), ("偏多", "看多"))
+紅旗規則 = (
+    (r"賺了?\s*\d|帳上|大賺|會員.{0,6}賺|獲利\s*\d+\s*%", "用自己或會員的績效建立可信度"),
+    (r"保證|穩賺|必漲|一定會漲|閉眼買", "保證獲利的用語"),
+    (r"開戶|手續費|下載|定期定額|基金平台|業配|贊助|課程|訂閱", "可能有業配或推銷"),
+)
+
+
+def _段落(文字, 開頭, 結尾):
+    m = re.search(開頭 + r"(.*?)(?=" + 結尾 + r"|\Z)", 文字, re.S)
+    return m.group(1) if m else ""
+
+
+def 解析影片整理(文字, 名稱表=None):
+    """把照網站指令請 Gemini 整理的影片重點（一、基本資料 … 七、矛盾處）拆成結構化資料。
+    名稱表＝{名稱: 代號}，影片沒講代號時用名稱找。回傳 dict(頻道, 日期, 股票, 條件數, 紅旗)；看不懂回傳 None。"""
+    文字 = str(文字 or "")
+    if "三、" not in 文字:
+        return None
+    頻道 = re.search(r"頻道[：:]\s*([^\n]+)", 文字)
+    日 = re.search(r"日期[：:][^\n]*?(\d{4})\s*[年/-]\s*(\d{1,2})\s*[月/-]\s*(\d{1,2})", 文字)
+    名稱表 = 名稱表 or {}
+    股票 = []
+    for 行 in _段落(文字, r"三、[^\n]*\n", r"\n\s*四、").splitlines():
+        行 = 行.strip(" \t•*-·")
+        前段 = re.split(r"[：:]", 行, maxsplit=1)
+        if len(前段) == 2 and "、" in 前段[0]:   # 「8027 鈦昇、8064 東捷：中性偏多」一行好幾檔，拆開
+            行們 = [f"{x.strip()}：{前段[1]}" for x in 前段[0].split("、") if x.strip()]
+        else:
+            行們 = [行]
+        for 行 in 行們:
+            股票 += _解析一行(行, 名稱表)
+    return _整理影片(文字, 頻道, 日, 股票)
+
+
+def _解析一行(行, 名稱表):
+    """一行「代號 名稱（括號）：看法。理由：…」拆成一筆；沒有代號時用名稱表找。"""
+    m = re.match(r"(?:\d+\.\s*)?(?:(\d{4,6}[A-Z]?)\s*)?([^：:（(]{1,20}?)\s*(?:[（(]([^）)]*)[）)])?\s*[：:]\s*(.+)", 行)
+    if not m:
+        return []
+    代, 名, 括, 後 = m.groups()
+    if not 代 and 括:
+        找 = re.search(r"(?<!\d)(\d{4,6}[A-Z]?)(?!\d)", 括)
+        代 = 找.group(1) if 找 else None
+    名 = 名.strip()
+    if not 代 and re.fullmatch(r"[A-Z]{1,5}", 括 or ""):
+        代 = 括
+    if not 代:
+        代 = 名稱表.get(名) or 名稱表.get(名.replace("-KY", ""))
+    看段 = 後.split("。")[0]
+    看 = next((v for k, v in 看法詞 if k in 看段), "中立")
+    理 = re.search(r"理由[：:]\s*(.+)", 後)
+    return [{"代號": 代 or "", "名稱": 名, "看法": 看, "原文看法": 看段[:20], "理由": (理.group(1) if 理 else 後)[:120]}]
+
+
+def _整理影片(文字, 頻道, 日, 股票):
+    """算「如果…就…」條件數與紅旗，組成一支影片的紀錄。"""
+    四 = _段落(文字, r"四、[^\n]*\n", r"\n\s*五、")
+    條件數 = 0 if re.search(r"未出現|沒有出現", 四) else len(re.findall(r"如果", 四))
+    正文 = 文字.split("七、")[0]   # 第七段是整理者自己的評論，不算影片內容
+    紅旗 = [說 for 式, 說 in 紅旗規則 if re.search(式, 正文)]
+    if 條件數 == 0:
+        紅旗.append("沒有任何「如果…就…」條件，說錯了無法驗證")
+    if len(股票) >= 5 and sum(x["看法"] == "看多" for x in 股票) / len(股票) >= 0.9:
+        紅旗.append(f"點名 {len(股票)} 檔幾乎全部看多")
+    if len(股票) >= 12:
+        紅旗.append(f"一支影片點名 {len(股票)} 檔，每檔分析很淺")
+    if 股票 and not re.search(r"支撐|壓力|停損|均線|目標價|\d+\s*元", _段落(文字, r"三、", r"\n\s*四、")):
+        紅旗.append("沒有給任何價位或停損")
+    return {"頻道": 頻道.group(1).strip() if 頻道 else "未知頻道",
+            "日期": f"{日.group(1)}-{int(日.group(2)):02d}-{int(日.group(3)):02d}" if 日 else None,
+            "股票": 股票, "條件數": 條件數, "紅旗": 紅旗}
+
+
+def 拆開多支影片(文字):
+    """一次貼好幾支時，用「一、」開頭切開。"""
+    片們 = re.split(r"\n(?=[^\n]*\n?\s*一、[^\n]*頻道)", "\n" + str(文字))
+    return [p for p in (x.strip() for x in 片們) if "三、" in p]
+
+
+def 讀取網紅說法(設定):
+    try:
+        return (讀取設定檔(設定, "influencer_notes.json") or {}).get("影片", [])
+    except Exception:
+        return []
+
+
+def 儲存網紅說法(設定, 影片們):
+    return 儲存設定檔(設定, "influencer_notes.json", {"影片": 影片們}, f"網紅說法 {len(影片們)} 支")
+
+
+def 合併網紅說法(舊, 新):
+    鍵 = lambda x: (x.get("頻道"), x.get("日期"))
+    表 = {鍵(x): x for x in 舊}
+    for x in 新:
+        表[鍵(x)] = x
+    return sorted(表.values(), key=lambda x: str(x.get("日期") or ""), reverse=True)
+
+
+def 網紅對答案(影片們, 價格們, 加權=None, 天數=20):
+    """每一則看多／看空，影片日之後 天數 個交易日的報酬（不到期用最新），扣掉同期加權算超額報酬。
+    看多且超額報酬 > 0、看空且 < 0 算說對。回傳 (明細 DataFrame, 依頻道彙總 DataFrame)。"""
+    列們 = []
+    加 = None
+    if 加權 is not None and len(加權):
+        加 = 加權.set_index("date")["close"]
+    for v in 影片們:
+        起 = pd.to_datetime(v.get("日期"), errors="coerce")
+        if pd.isna(起):
+            continue
+        for x in v.get("股票", []):
+            p = 價格們.get(str(x.get("代號")))
+            if p is None or x.get("看法") not in ("看多", "看空"):
+                continue
+            p = p.sort_values("date")
+            前, 後 = p[p["date"] <= 起], p[p["date"] > 起].head(天數)
+            if not len(前):
+                continue
+            基 = float(前["收盤"].iloc[-1])
+            if not len(後):
+                列們.append({"頻道": v["頻道"], "日期": 起, "代號": x["代號"], "名稱": x["名稱"], "看法": x["看法"],
+                           "天數": 0, "報酬%": np.nan, "超額%": np.nan, "結果": "等資料"})
+                continue
+            報 = (float(後["收盤"].iloc[-1]) / 基 - 1) * 100
+            超 = 報
+            if 加 is not None:
+                a, b = 加[加.index <= 起], 加[加.index <= 後["date"].iloc[-1]]
+                if len(a) and len(b):
+                    超 = 報 - (float(b.iloc[-1]) / float(a.iloc[-1]) - 1) * 100
+            對 = 超 > 0 if x["看法"] == "看多" else 超 < 0
+            列們.append({"頻道": v["頻道"], "日期": 起, "代號": x["代號"], "名稱": x["名稱"], "看法": x["看法"],
+                       "天數": len(後), "報酬%": round(報, 1), "超額%": round(超, 1),
+                       "結果": ("說對" if 對 else "說錯") if len(後) >= 天數 else ("暫時對" if 對 else "暫時錯")})
+    明細 = pd.DataFrame(列們)
+    if 明細.empty:
+        return 明細, pd.DataFrame()
+    g = 明細.groupby("頻道")
+    彙 = pd.DataFrame({"則數": g.size(), "到期": g["結果"].apply(lambda s: s.isin(["說對", "說錯"]).sum()),
+                      "說對": g["結果"].apply(lambda s: (s == "說對").sum()),
+                      "看多比例%": g["看法"].apply(lambda s: round((s == "看多").mean() * 100)),
+                      "平均超額%": g["超額%"].mean().round(1)})
+    彙["命中率%"] = (彙["說對"] / 彙["到期"].replace(0, np.nan) * 100).round(0)
+    return 明細, 彙.sort_values("則數", ascending=False)
