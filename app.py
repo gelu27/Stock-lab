@@ -116,6 +116,16 @@ h1, h2, h3 {{ font-family: 'Space Grotesk', 'Noto Sans TC', sans-serif !importan
 .lamp.g {{ border-left: 3px solid {綠}; }} .lamp.y {{ border-left: 3px solid #FFC24B; }} .lamp.r {{ border-left: 3px solid {紅}; }}
 .verdict {{ border: 1px solid #1E1E1E; border-left: 3px solid {青}; background: #050505; padding: 10px 14px; margin: 8px 0;
     font-family: 'Noto Sans TC', sans-serif; font-size: 15px; line-height: 1.7; color: #DADADA; }}
+.verdict.sub {{ border-left-color: #8F7CFF; font-size: 14px; padding: 8px 14px; }}
+.pv {{ display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; align-items: center; }}
+.pv span {{ font-family: 'JetBrains Mono', 'Noto Sans TC', monospace; font-size: 12px; padding: 3px 8px; border: 1px solid #222;
+    background: #080808; color: #9A9A9A; }}
+.pv span b {{ font-weight: 700; margin-left: 4px; }}
+.pv span.now {{ border-color: #8F7CFF; color: #EDEDED; }}
+.thermo {{ position: relative; height: 12px; margin: 10px 0 4px;
+    background: linear-gradient(90deg, {紅} 0%, #555 45%, #555 55%, {綠} 100%); opacity: .9; }}
+.thermo i {{ position: absolute; top: -5px; width: 4px; height: 22px; background: #FFF; box-shadow: 0 0 6px #FFF; }}
+.thermo-l {{ display: flex; justify-content: space-between; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #777; }}
 @media (max-width: 640px) {{ .lamps {{ grid-template-columns: 1fr; gap: 6px; }} .verdict {{ font-size: 14px; }} }}
 /* 手機：頁首縮小、頁面選單改成一排可左右滑 */
 @media (max-width: 640px) {{
@@ -149,9 +159,9 @@ def 卡片格(卡們):
     st.markdown(f'<div class="grid3">{"".join(卡們)}</div>', unsafe_allow_html=True)
 
 
-def 排行表(表, 額外=None):
-    """額外欄位：週轉率、鎖死（漲跌停的首次觸及與鎖死時間）。"""
-    標題額外 = {"週轉率": "週轉率", "鎖死": "觸及 / 鎖死"}.get(額外, "")
+def 排行表(表, 額外=None, 額外標題=None):
+    """額外欄位：週轉率、鎖死（漲跌停的首次觸及與鎖死時間）、法人（表要有「法人值」與「法人單位」欄）。"""
+    標題額外 = 額外標題 or {"週轉率": "週轉率", "鎖死": "觸及 / 鎖死"}.get(額外, "")
     鎖們 = 鎖死資訊(表) if 額外 == "鎖死" else {}
     列們 = []
     for _, r in 表.iterrows():
@@ -170,6 +180,10 @@ def 排行表(表, 額外=None):
             else:
                 字 = "—"
             加 = f'<td class="t">{字}</td>'
+        elif 額外 == "法人":
+            v = r["法人值"]
+            加 = (f'<td style="color:{漲跌色(v)};font-weight:700">'
+                 + (f"{v:+,.0f}" if r["法人單位"] == "張數" else f"{v:+,.2f} 億") + "</td>")
         else:
             加 = ""
         列們.append(
@@ -1391,6 +1405,7 @@ def 國際行情():
 
 def 族群熱力圖():
     段落("SECTOR // 族群熱力圖")
+    避風港區()
     a, b, c = st.columns(3)
     分類 = a.segmented_control("分類", ["產業", "概念股"], default="產業", key="族群分類") or "產業"
     期間 = b.segmented_control("漲跌期間", list(engine.族群期間), default="今日", key="族群期間") or "今日"
@@ -1410,6 +1425,27 @@ def 族群熱力圖():
     if 分類 == "概念股":
         st.caption("概念股是自己整理的題材清單（data/concepts.csv，約 25 個題材），一檔股票可以同時屬於好幾個概念；"
                    "想增刪可以直接在 GitHub 編輯這個檔案。")
+
+
+def 避風港區():
+    大盤5日 = None
+    if 加權 is not None and len(加權) > 5:
+        大盤5日 = (float(加權["close"].iloc[-1]) / float(加權["close"].iloc[-6]) - 1) * 100
+    try:
+        港, 提 = engine.避風港與提款機(今日, 大盤5日)
+    except Exception:
+        return
+    if 港.empty and 提.empty:
+        return
+    句 = []
+    if 大盤5日 is not None:
+        句.append(f"近 5 日加權 {大盤5日:+.1f}%。")
+    if len(港):
+        句.append("<b>避風港</b>（比大盤抗跌）：" + "、".join(f"{k} {r['5日']:+.1f}%" for k, r in 港.iterrows()) + "。")
+    if len(提):
+        句.append("<b>提款機</b>（前面漲多、這 5 天被賣）：" + "、".join(
+            f"{k}（20 日 {r['20日']:+.1f}% → 5 日 {r['5日']:+.1f}%）" for k, r in 提.iterrows()) + "。")
+    st.markdown(f'<div class="verdict sub">{"".join(句)}</div>', unsafe_allow_html=True)
 
 
 def 輪動氣泡圖(族群, 期間):
@@ -1660,16 +1696,24 @@ def 指數K線(代號, _資料版本):
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
+def 指數成交值(代號, _資料版本):
+    """加權＝上市、櫃買＝上櫃每天的成交金額（億），算分價量和量價關係用。"""
+    t = 指標[指標["市場"] == ("上市" if 代號 == "TAIEX" else "上櫃")]
+    return t.groupby("date")["成交值億"].sum()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def 價位分析(代號, _資料版本):
     K = 指數K線(代號, _資料版本)
     if K is None or len(K) < 60:
         return None
-    sr = engine.支撐壓力(K)
+    量 = 指數成交值(代號, _資料版本)
+    sr = engine.支撐壓力(K, 量=量)
     區們 = engine.共振區(sr["價位"])
-    return K, sr, 區們, engine.位置解讀(sr, 區們), engine.黑K一半(K)
+    return K, sr, 區們, engine.位置解讀(sr, 區們), engine.黑K一半(K), engine.量價標籤(K, 量)
 
 
-價位色 = {"回檔": "#FFC24B", "缺口": "#FF8A3D", "前高低": "#BDBDBD", "整數": "#555555"}
+價位色 = {"回檔": "#FFC24B", "缺口": "#FF8A3D", "前高低": "#BDBDBD", "整數": "#555555", "分價量": "#8F7CFF"}
 
 
 def 支撐壓力圖(K, sr, 區們, 天數=120, 高=440, 均線們=((20, 青, "月線"), (60, "#FF00E5", "季線"), (120, "#FFC24B", "半年線"))):
@@ -1714,12 +1758,33 @@ def 支撐壓力圖(K, sr, 區們, 天數=120, 高=440, 均線們=((20, 青, "�
         圖.add_annotation(x=1, xref="paper", xanchor="right", y=t["價"], yanchor="bottom", showarrow=False,
                           text=f"{'／'.join(t['名'])} {t['價']:,.{小數}f}", font=dict(size=10, color=t["色"]),
                           bgcolor="rgba(0,0,0,0.55)")
+    分量 = sr.get("分價量")
+    if 分量:   # 左側橫條＝分價量（近 120 日每個價位累積的成交金額），條越長越多人在這裡買賣
+        t = 分量["表"]
+        圖.add_trace(go.Bar(x=t["量"], y=t["中"], orientation="h", xaxis="x2", width=(t["上"] - t["下"]) * 0.9,
+                            marker=dict(color=["#8F7CFF" if 分量["VAL"] <= y <= 分量["VAH"] else "#3A3550" for y in t["中"]]),
+                            opacity=0.35, name="分價量", hovertemplate="%{y:,.0f} 附近<br>成交 %{x:,.0f} 億<extra>分價量</extra>"))
+        圖.update_layout(xaxis2=dict(overlaying="x", side="top", range=[0, float(t["量"].max()) * 4], visible=False,
+                                     fixedrange=True))
     圖.add_hline(y=收, line=dict(color="#FFFFFF", width=1), opacity=0.35)
     缺日 = pd.bdate_range(k["date"].min(), k["date"].max()).difference(pd.DatetimeIndex(k["date"]))
     圖.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"]), dict(values=list(缺日))])
     圖.update_yaxes(range=[下界 * 0.995, 上界 * 1.005], side="right")
     圖.update_layout(xaxis_rangeslider_visible=False, legend=dict(orientation="h", y=1.06, x=0))
     return 圖表外觀(圖, 高)
+
+
+def 量價條(量價):
+    """最近 5 天的量價標籤，最後一個是今天，附白話。"""
+    if not 量價:
+        return
+    色 = lambda 標: 紅 if 標.startswith("價漲") else (綠 if 標.startswith("價跌") else "#BDBDBD")
+    片們 = [f'<span class="{"now" if i == len(量價) - 1 else ""}">{d:%m/%d}<b style="color:{色(標)}">{標}</b></span>'
+           for i, (d, 標, 比) in enumerate(量價)]
+    d, 標, 比 = 量價[-1]
+    st.markdown(f'<div class="pv"><span style="border:0;background:none;padding-left:0">量價</span>{"".join(片們)}</div>'
+                f'<div class="verdict sub">{d:%m/%d} {標}：{engine.量價說明[標]}（成交金額是前 5 日平均的 {比:.2f} 倍）</div>',
+                unsafe_allow_html=True)
 
 
 def 黑K卡(黑):
@@ -1768,9 +1833,10 @@ def 關鍵價位區():
     if 結果 is None:
         st.info(f"{選}的開高低資料下次更新後就會出現。")
         return
-    K, sr, 區們, 解, 黑 = 結果
+    K, sr, 區們, 解, 黑, 量價 = 結果
     價位卡片(sr, 解, float(K["close"].iloc[-2]))
     st.markdown(f'<div class="verdict">{解["文字"]}</div>', unsafe_allow_html=True)
+    量價條(量價)
     try:
         項們, 總結 = engine.三條件燈號(指數K線("TAIEX", _版本), 指數K線("TPEX", _版本), engine.讀取美股())
     except Exception:
@@ -1782,13 +1848,34 @@ def 關鍵價位區():
         st.markdown(黑K卡(黑), unsafe_allow_html=True)
     天數 = st.segmented_control("圖表區間", [60, 120, 250], default=120, format_func=lambda d: {60: "3 個月", 120: "半年", 250: "1 年"}[d],
                               key="價位區間", label_visibility="collapsed") or 120
-    st.plotly_chart(支撐壓力圖(K, sr, 區們, 天數), width="stretch", config={"displayModeBar": False})
+    圖分頁 = st.tabs(["支撐壓力圖", "櫃買 ÷ 加權 強弱"])
+    with 圖分頁[0]:
+        st.plotly_chart(支撐壓力圖(K, sr, 區們, 天數), width="stretch", config={"displayModeBar": False})
+    with 圖分頁[1]:
+        強弱圖(天數)
     with st.expander("📋 完整價位表"):
         價位明細(sr, 區們, "價位明細")
     st.caption("自動計算，不是人工畫線：月線／季線／半年線＝20／60／120 日均線；黃線＝最近一段漲勢（或跌勢）的費波那契回檔；"
-               "橘色＝還沒回補的跳空缺口；白虛線＝波段高低點；灰虛線＝整數關卡；青色色帶＝2 種以上方法重疊的「共振區」，通常比單一條線重要。"
+               "橘色＝還沒回補的跳空缺口；白虛線＝波段高低點；灰虛線＝整數關卡；紫線與左側橫條＝分價量（近 120 日每個價位累積的成交金額，"
+               "最長那條＝成交最密集，深紫＝7 成成交集中的區間）；青色色帶＝2 種以上方法重疊的「共振區」，通常比單一條線重要。"
+               "量價：漲跌看收盤，量看成交金額比前 5 日平均（多 15% 算量增、少 15% 算量縮）。"
                "三條件燈號參考週報分析者的觀察清單；黑 K 一半規則＝大跌那天之後的反彈，收盤要站上那根黑 K 實體的一半才算有力。"
                "僅供研究參考，不是買賣建議。")
+
+
+def 強弱圖(天數=120):
+    r, 均, 文字 = engine.櫃買加權比(指數K線("TAIEX", _版本), 指數K線("TPEX", _版本), max(天數, 60))
+    if r is None:
+        st.caption("櫃買指數資料不足。")
+        return
+    st.markdown(f'<div class="verdict sub">{文字}</div>', unsafe_allow_html=True)
+    圖 = go.Figure()
+    圖.add_trace(go.Scatter(x=r.index, y=r, name="櫃買 ÷ 加權", line=dict(color="#8F7CFF", width=2)))
+    圖.add_trace(go.Scatter(x=均.index, y=均, name="20 日均線", line=dict(color="#555", width=1, dash="dot")))
+    圖.add_hline(y=100, line=dict(color=灰, width=1, dash="dot"))
+    圖表外觀(圖, 300).update_layout(legend=dict(orientation="h", y=1.08, x=0))
+    st.plotly_chart(圖, width="stretch", config={"displayModeBar": False})
+    st.caption("起點＝100。線往上＝櫃買（中小型股）比加權（大型權值股）強，往下＝資金集中在權值股。")
 
 
 def 個股K線(代號):
@@ -1809,11 +1896,15 @@ def 個股價位區(代號):
     if K is None:
         st.caption("資料不足，無法計算支撐壓力。")
         return
-    sr = engine.支撐壓力(K)
+    歷史 = 個股全史(代號, _版本)
+    量 = (歷史.set_index("date")["成交值億"] if 歷史 is not None and "成交值億" in 歷史 else None)
+    sr = engine.支撐壓力(K, 量=量)
     區們 = engine.共振區(sr["價位"])
     解 = engine.位置解讀(sr, 區們)
     價位卡片(sr, 解, float(K["close"].iloc[-2]))
     st.markdown(f'<div class="verdict">{解["文字"]}</div>', unsafe_allow_html=True)
+    if 量 is not None:
+        量價條(engine.量價標籤(K, 量))
     黑 = engine.黑K一半(K)
     if 黑:
         st.markdown(黑K卡(黑), unsafe_allow_html=True)
@@ -1827,7 +1918,7 @@ def 排行區():
     段落("RANKING // 排行（前 50 檔，含上市櫃）")
     排行 = engine.排行資料(今日)
     漲停數, 跌停數 = int(排行["漲停"].sum()), int(排行["跌停"].sum())
-    榜 = st.tabs(["漲幅", "跌幅", "成交量", "成交值", "週轉率", f"漲停 {漲停數}", f"跌停 {跌停數}"])
+    榜 = st.tabs(["漲幅", "跌幅", "成交量", "成交值", "週轉率", f"漲停 {漲停數}", f"跌停 {跌停數}", "法人買賣超"])
     with 榜[0]:
         排行表(排行.nlargest(50, "幅度"), "鎖死")
     with 榜[1]:
@@ -1843,8 +1934,29 @@ def 排行區():
         排行表(排行[排行["漲停"]].sort_values("週轉率", ascending=False), "鎖死")
     with 榜[6]:
         排行表(排行[排行["跌停"]].sort_values("週轉率", ascending=False), "鎖死")
+    with 榜[7]:
+        法人排行(排行)
     st.caption("觸及 / 鎖死：第一次碰到漲跌停的時間 / 最後一次鎖住到收盤的時間（「未鎖住」表示收盤前又打開），"
                "依 Yahoo 1 分鐘線計算，可能有幾分鐘誤差。")
+
+
+def 法人排行(排行):
+    if "外資買超" not in 排行.columns or 排行["外資買超"].isna().all():
+        st.caption("今天的法人買賣超資料還沒出來（通常 16:30 後）。")
+        return
+    a, b, c = st.columns([2, 1, 1])
+    誰 = a.segmented_control("法人", ["外資", "投信", "自營商", "三大法人"], default="外資", key="法人排行誰",
+                           label_visibility="collapsed") or "外資"
+    向 = b.segmented_control("方向", ["買超", "賣超"], default="買超", key="法人排行向", label_visibility="collapsed") or "買超"
+    單位 = c.segmented_control("單位", ["張數", "金額"], default="張數", key="法人排行單位", label_visibility="collapsed") or "張數"
+    欄 = {"外資": "外資買超", "投信": "投信買超", "自營商": "自營買超", "三大法人": "法人買超"}[誰]
+    t = 排行.dropna(subset=[欄]).copy()
+    t["法人值"] = t[欄] if 單位 == "張數" else t[欄] * 1000 * t["close"] / 1e8
+    t["法人單位"] = 單位
+    t = t[t["法人值"] > 0].nlargest(50, "法人值") if 向 == "買超" else t[t["法人值"] < 0].nsmallest(50, "法人值")
+    排行表(t, "法人", f"{誰}{向}{'（張）' if 單位 == '張數' else ''}")
+    st.caption("用張數排，低價股容易排很前面；用金額排（張數 × 1000 × 收盤價）比較看得出法人真正把錢押在哪裡。"
+               "新聞常用張數排，所以兩種排法的前幾名常常不一樣。")
 
 
 def 權值區():
@@ -1880,6 +1992,8 @@ def 權值區():
     族 = 表[表["產業"].fillna("") != ""].groupby("產業")["貢獻點數"].sum().sort_values()
     族 = pd.concat([族.head(5), 族.tail(5)])
     族 = 族[~族.index.duplicated()]
+    _, 撐盤 = engine.撐盤分組(表)
+    st.markdown(f'<div class="verdict sub"><b>誰在撐盤</b>　{撐盤}</div>', unsafe_allow_html=True)
     st.markdown("**依族群合計**　" + "　".join(
         f'<font color="{漲跌色(v)}">{k} {v:+.0f}</font>' for k, v in 族.sort_values(ascending=False).items()),
         unsafe_allow_html=True)
@@ -1960,8 +2074,26 @@ def 狀態區():
                "僅供研究參考，不是買賣建議。")
 
 
+def 恐慌溫度計區():
+    try:
+        項們, 溫, 級, 話 = engine.恐慌溫度計(engine.讀取美股(), engine.讀取匯率())
+    except Exception:
+        return
+    if not 項們:
+        return
+    色 = 綠 if 溫 >= 55 else (紅 if 溫 < 30 else "#EDEDED")
+    卡片格([卡片("恐慌溫度計", f"{溫:.0f}", f"{級}（0 樂觀 → 100 恐慌）", 色)]
+          + [卡片(名, 值, 說, 綠 if 分 >= 70 else ("#EDEDED" if 分 >= 30 else 紅)) for 名, 值, 說, 分 in 項們])
+    st.markdown(f'<div class="thermo"><i style="left:calc({溫:.0f}% - 2px)"></i></div>'
+                '<div class="thermo-l"><span>樂觀</span><span>中性</span><span>恐慌</span></div>'
+                f'<div class="verdict sub">{話}</div>', unsafe_allow_html=True)
+    st.caption("恐慌溫度計＝VIX 在過去一年排第幾、美元兌台幣在一年區間的位置（台幣越貶分數越高），兩項平均。"
+               "參考反向型分析者的看法：大家最怕的時候常接近低點，但仍要等止跌訊號，不是買賣建議。")
+
+
 def 情緒區():
     段落("SENTIMENT // 市場情緒：法人 × 散戶 × 國際 × 資金")
+    恐慌溫度計區()
     情 = 情緒資料(_版本)
     if 情.empty or 情[["散戶", "法人", "資金溫度", "全球"]].dropna(how="all").empty:
         st.info("情緒指數資料累積中。")
