@@ -3010,7 +3010,13 @@ def 大盤價位摘要(指標, 今日, 權=None):
     except Exception as e:
         print("避風港失敗：", repr(e))
     try:
-        項們, 溫, 級, 話 = 恐慌溫度計(美股, 讀取匯率())
+        文 = 殺估值摘要(指標, 美股)
+        if 文:
+            行.append(文)
+    except Exception as e:
+        print("殺估值觀察失敗：", repr(e))
+    try:
+        項們, 溫, 級, 話 = 恐慌溫度計(美股, 讀取匯率(), 讀取小台散戶())
         if 項們:
             行.append(f"【恐慌溫度計】{溫:.0f} 分（{級}）：" + "；".join(f"{n} {v}（{說}）" for n, v, 說, _ in 項們) + f"。{話}")
     except Exception:
@@ -3475,10 +3481,27 @@ def 避風港與提款機(今日, 大盤5日=None, 最少家數=5):
     return 港, 提
 
 
-def 恐慌溫度計(美股=None, 匯率=None):
-    """反向思考用：VIX 在過去一年的位置、美元兌台幣在一年區間的位置（台幣越貶＝外資匯出壓力越大）。
-    每項換成 0～100 的「恐慌分數」再平均。回傳 (項目 [(名稱, 數值字, 說明, 分數)], 溫度, 等級, 白話)。"""
+def 讀取小台散戶():
+    """data/mtx_retail.csv：小台散戶多空比（%，正＝散戶淨多單）。沒有資料回傳 None。"""
+    f = 資料夾 / "mtx_retail.csv"
+    if not f.exists():
+        return None
+    t = pd.read_csv(f, parse_dates=["date"]).sort_values("date")
+    return t if len(t) else None
+
+
+def 恐慌溫度計(美股=None, 匯率=None, 散戶=None):
+    """反向思考用：VIX 在過去一年的位置、美元兌台幣在一年區間的位置（台幣越貶＝外資匯出壓力越大）、
+    小台散戶多空比（散戶越看空＝越絕望）。每項換成 0～100 的「恐慌分數」再平均。
+    回傳 (項目 [(名稱, 數值字, 說明, 分數)], 溫度, 等級, 白話)。"""
     項們 = []
+    if 散戶 is not None and len(散戶) >= 20:
+        x = 散戶.set_index("date")["ratio"].dropna().tail(252)
+        現 = float(x.iloc[-1])
+        分 = float((x > 現).mean() * 100)   # 散戶越看空，恐慌分數越高
+        級 = "散戶大舉做多" if 現 >= 20 else "散戶偏多" if 現 >= 5 else "散戶大舉做空" if 現 <= -20 else "散戶偏空" if 現 <= -5 else "中性"
+        項們.append(("韭菜指數（小台散戶多空比）", f"{現:+.1f}%", f"{級}・比過去一年 {100 - 分:.0f}% 的日子看多；"
+                    "散戶通常是反向指標，大舉做多時要小心", 分))
     if 美股 is not None and "VIX" in 美股:
         v = 美股["VIX"].dropna().tail(252)
         if len(v) >= 60:
@@ -4536,3 +4559,51 @@ def 網紅對答案(影片們, 價格們, 加權=None, 天數=20):
                       "平均超額%": g["超額%"].mean().round(1)})
     彙["命中率%"] = (彙["說對"] / 彙["到期"].replace(0, np.nan) * 100).round(0)
     return 明細, 彙.sort_values("則數", ascending=False)
+
+
+# ========== 32. 殺估值觀察組：高本益比領頭股還有沒有在破底 ==========
+殺估值觀察 = {"2383": "台光電", "6274": "台燿", "6213": "聯茂", "2308": "台達電", "2327": "國巨", "LITE": "Lumentum"}
+
+
+def 殺估值觀察組(指標, 美股=None, 名單=殺估值觀察):
+    """通勤族：高本益比的領頭股「不再創新低」，殺估值才可能告一段落。
+    每檔看近 5 日低點有沒有低於前 20 日低點（還在破底）、距 60 日高點跌多少、本益比從 60 日內最高降了多少。
+    回傳 (DataFrame, 燈, 白話)。"""
+    列們 = []
+    for 代, 名 in 名單.items():
+        if 代.isdigit():
+            h = 指標[指標["代號"] == 代].sort_values("date").tail(60)
+            if len(h) < 30:
+                continue
+            價 = h["還原價"]
+            低 = h["low"] * h["還原價"] / h["收盤"] if "low" in h else 價
+            本 = h["本益比"].where(h["本益比"] > 0)
+            本降 = (float(本.iloc[-1]) / float(本.max()) - 1) * 100 if 本.notna().any() and pd.notna(本.iloc[-1]) else np.nan
+        else:
+            if 美股 is None or 名 not in 美股:
+                continue
+            價 = 美股[名].dropna().tail(60)
+            if len(價) < 30:
+                continue
+            低, 本降 = 價, np.nan
+        破底 = float(低.tail(5).min()) < float(低.iloc[-25:-5].min())
+        列們.append({"代號": 代, "名稱": 名, "還在破底": "是" if 破底 else "否",
+                   "距60日高%": round((float(價.iloc[-1]) / float(價.max()) - 1) * 100, 1),
+                   "本益比降幅%": round(本降, 1) if pd.notna(本降) else np.nan})
+    t = pd.DataFrame(列們)
+    if t.empty:
+        return t, "", ""
+    停 = int((t["還在破底"] == "否").sum())
+    燈 = "🟢" if 停 >= len(t) * 2 / 3 else ("🔴" if 停 <= len(t) / 3 else "🟡")
+    話 = (f"{len(t)} 檔高本益比領頭股有 {停} 檔不再破底"
+         + ("，殺估值可能告一段落" if 燈 == "🟢" else "，殺估值還在進行" if 燈 == "🔴" else "，有止跌跡象但還沒全面"))
+    return t, 燈, 話
+
+
+def 殺估值摘要(指標, 美股=None):
+    t, 燈, 話 = 殺估值觀察組(指標, 美股)
+    if t.empty:
+        return ""
+    return (f"【殺估值觀察組】{燈}{話}：" + "、".join(
+        f"{r['名稱']} {'破底中' if r['還在破底'] == '是' else '止跌'}（距 60 日高 {r['距60日高%']:+.0f}%"
+        + (f"、本益比降 {-r['本益比降幅%']:.0f}%" if pd.notna(r["本益比降幅%"]) else "") + "）" for _, r in t.iterrows()))
