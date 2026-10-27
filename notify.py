@@ -528,6 +528,15 @@ def 大盤解讀(模式):
     if not (設定.get("GEMINI_API_KEY") or 設定.get("ANTHROPIC_API_KEY")):
         print("沒有設定 GEMINI_API_KEY 或 ANTHROPIC_API_KEY，略過 AI 大盤解讀")
         return
+    現在 = dt.datetime.now(台北)
+    if os.environ.get("BRIEF_AUTO") == "1":  # 排程或外部定時觸發：已寫過、或時間太晚就不重複發
+        if f"{現在:%Y-%m-%d}_{模式}" in engine.讀取大盤解讀(設定):
+            print(f"今天的{模式}解讀已經寫過，略過")
+            return
+        太晚 = {"盤前": 現在.time() > dt.time(9, 30), "夜盤": 現在.hour < 12}.get(模式, False)
+        if 太晚:
+            print(f"排程延遲到 {現在:%H:%M} 才執行，{模式}解讀已失去時效，略過")
+            return
     if 模式 == "收盤":
         日期, _ = 最新行情()
         if 日期.date() != dt.datetime.now(台北).date():

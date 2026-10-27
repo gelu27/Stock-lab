@@ -1,9 +1,16 @@
 name: 更新資料庫
 
 on:
+  # GitHub 排程在整點最擁擠、常延遲或漏跑，所以錯開整點，再加一個備援時間；
+  # 備援那次如果今天 18:00 後已經更新過就自動跳過，不會重複傳 LINE
   schedule:
-    - cron: "0 10 * * 1-5"   # 週一到週五 台灣時間 18:00
+    - cron: "17 10 * * 1-5"  # 週一到週五 台灣時間 18:17
+    - cron: "43 11 * * 1-5"  # 19:43 備援
   workflow_dispatch:          # 可以在 Actions 頁面手動按 Run workflow
+    inputs:
+      auto:
+        description: "true＝當成自動排程（今天已更新過就跳過）；外部定時服務請帶 true"
+        default: "false"
 
 permissions:
   contents: write
@@ -11,7 +18,31 @@ permissions:
 concurrency: data-update
 
 jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: data/updated.txt
+          sparse-checkout-cone-mode: false
+      - id: check
+        name: 今天 18:00 後已經更新過就跳過（只限自動排程）
+        run: |
+          TODAY=$(TZ=Asia/Taipei date '+%Y/%m/%d')
+          LAST=$(cat data/updated.txt 2>/dev/null || echo "")
+          echo "上次更新：$LAST"
+          if [ "$AUTO" = "1" ] && [ "${LAST:0:10}" = "$TODAY" ] && [ "${LAST:11:2}" \> "17" ]; then
+            echo "今天已經更新過，略過"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          AUTO: ${{ (github.event_name == 'schedule' || github.event.inputs.auto == 'true') && '1' || '0' }}
+
   update:
+    needs: gate
+    if: needs.gate.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 340
     steps:
