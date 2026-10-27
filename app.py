@@ -1790,14 +1790,28 @@ def 價位回測(代號, _資料版本):
 @st.cache_data(ttl=3600, show_spinner=False)
 def 指數跌破站回(代號, _資料版本):
     K = 指數K線(代號, _資料版本)
-    return engine.跌破站回(K, 指數成交值(代號, _資料版本)) if K is not None else []
+    if K is None:
+        return []
+    量 = 指數成交值(代號, _資料版本)
+    return engine.跌破站回(K, 量) + engine.技術訊號(K, 量)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def 指數技術觀察(代號, _資料版本):
+    K = 指數K線(代號, _資料版本)
+    return engine.技術觀察(K, 指數成交值(代號, _資料版本)) if K is not None else []
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def 守週線強勢(_資料版本):
+    return engine.守週線強勢股(指標)
 
 
 def 跌破站回條(項們):
     if 項們:
         st.markdown('<div class="cross">' + "".join(
             f'<span class="{"dn" if 動 == "跌破" else "up"}">{"⚠️" if 動 == "跌破" else "✅"} 今天{動}{名}'
-            f'{"" if "共振區" in 名 else f" {價:,.2f}"}</span>'
+            f'{"" if 價 is None or "共振區" in 名 else f" {價:,.2f}"}</span>'
             for 動, 名, 價 in 項們) + "</div>", unsafe_allow_html=True)
 
 
@@ -1935,9 +1949,13 @@ def 關鍵價位區():
         st.markdown(燈號卡(項們), unsafe_allow_html=True)
     if 黑:
         st.markdown(黑K卡(黑), unsafe_allow_html=True)
+    技術 = 指數技術觀察(代號, _版本)
+    if 技術:
+        st.markdown("**分析師常用條件**：週線、KD、扣抵值、爆量 K 棒")
+        st.markdown(燈號卡(技術), unsafe_allow_html=True)
     天數 = st.segmented_control("圖表區間", [60, 120, 250], default=120, format_func=lambda d: {60: "3 個月", 120: "半年", 250: "1 年"}[d],
                               key="價位區間", label_visibility="collapsed") or 120
-    圖分頁 = st.tabs(["支撐壓力圖", "櫃買 ÷ 加權 強弱", "缺口清單", "準不準？（回測）"])
+    圖分頁 = st.tabs(["支撐壓力圖", "櫃買 ÷ 加權 強弱", "缺口清單", "準不準？（回測）", "守 5 週線的強勢股"])
     with 圖分頁[0]:
         st.plotly_chart(支撐壓力圖(K, sr, 區們, 天數), width="stretch", config={"displayModeBar": False})
     with 圖分頁[1]:
@@ -1946,6 +1964,8 @@ def 關鍵價位區():
         缺口表(K, f"缺口{代號}")
     with 圖分頁[3]:
         回測區(代號)
+    with 圖分頁[4]:
+        守週線表()
     with st.expander("📋 完整價位表"):
         價位明細(sr, 區們, "價位明細")
     st.caption("自動計算，不是人工畫線：月線／季線／半年線＝20／60／120 日均線；黃線＝最近一段漲勢（或跌勢）的費波那契回檔；"
@@ -1953,7 +1973,23 @@ def 關鍵價位區():
                "最長那條＝成交最密集，深紫＝7 成成交集中的區間）；青色色帶＝2 種以上方法重疊的「共振區」，通常比單一條線重要。"
                "量價：漲跌看收盤，量看成交金額比前 5 日平均（多 15% 算量增、少 15% 算量縮）。"
                "三條件燈號參考週報分析者的觀察清單；黑 K 一半規則＝大跌那天之後的反彈，收盤要站上那根黑 K 實體的一半才算有力。"
+               "分析師常用條件整理自幾位 YouTube 分析師：20 週線守不守（宏爺）、KD 沒黃金交叉不算反轉（老王）、"
+               "扣抵值看 5 日線何時翻揚（通勤族）、跌破爆量那天的低點凶多吉少（老王）。"
                "僅供研究參考，不是買賣建議。")
+
+
+def 守週線表():
+    t = 守週線強勢(_版本)
+    if t.empty:
+        st.caption("目前沒有守在 5 週線上的股票。")
+        return
+    st.dataframe(t, hide_index=False, width="stretch", height=min(35 * (len(t) + 1) + 3, 520), key="守週線",
+                 column_config={"收盤": st.column_config.NumberColumn(format="%.2f"),
+                                "5週線": st.column_config.NumberColumn(format="%.2f"),
+                                "20日漲幅": st.column_config.NumberColumn("20 日漲幅%", format="%.1f"),
+                                "距5週線%": st.column_config.NumberColumn("距 5 週線%", format="%+.1f")})
+    st.caption("通勤族的選股方法：大盤被壓在 5 週線下時，先找還守在自己 5 週線上的股票，等大盤止跌時這些通常漲得比較快。"
+               "條件：4 碼股票、5 日均量 1,000 張以上，依 20 日漲幅排序，前 30 檔。漲很多的小型股波動也大，要搭配停損。")
 
 
 def 缺口表(K, key):
@@ -2030,13 +2066,21 @@ def 個股價位區(代號):
     區們 = engine.共振區(sr["價位"])
     解 = engine.位置解讀(sr, 區們)
     價位卡片(sr, 解, float(K["close"].iloc[-2]))
-    跌破站回條(engine.跌破站回(K, 量))
+    跌破站回條(engine.跌破站回(K, 量) + engine.技術訊號(K, 量))
     st.markdown(f'<div class="verdict">{解["文字"]}</div>', unsafe_allow_html=True)
     if 量 is not None:
         量價條(engine.量價標籤(K, 量))
     黑 = engine.黑K一半(K)
     if 黑:
         st.markdown(黑K卡(黑), unsafe_allow_html=True)
+    技術 = engine.技術觀察(K, 量)
+    if 技術:
+        st.markdown(燈號卡(技術), unsafe_allow_html=True)
+    貴 = engine.買貴檢查(歷史)
+    if 貴:
+        燈 = "r" if 貴["跌幅%"] <= -30 else ("y" if 貴["跌幅%"] <= -10 else "g")
+        st.markdown(f'<div class="lamp {燈}" style="margin:6px 0"><div class="t"><i>💸</i>買貴檢查</div>'
+                    f'<div class="s">{貴["說明"]}</div></div>', unsafe_allow_html=True)
     st.plotly_chart(支撐壓力圖(K, sr, 區們, 120, 420), width="stretch", config={"displayModeBar": False})
     with st.expander("📋 完整價位表與缺口清單"):
         價位明細(sr, 區們, f"個股價位明細{代號}")
