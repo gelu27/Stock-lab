@@ -16,7 +16,7 @@
 #   data/fundamental/insider.csv           每月內部人（董監經理人、大股東）持股與質押合計，逐月累積
 #   data/fundamental/dividend.csv          近 6 年除權息紀錄；dividend_upcoming.csv 除權息預告
 #   data/tdcc/20261022.csv.gz             集保每週股權分散（千張大戶、400 張大戶、散戶比例），每週累積
-#   data/fx.csv                           美元兌台幣匯率
+#   data/fx.csv                           美元兌台幣匯率（近 2 年，恐慌溫度計看一年高低點用）
 #   data/warning.csv                      處置股、注意股（交易所每日公告）
 #   data/sbl/20261022.csv.gz              借券賣出餘額（上市＋上櫃，單位：張，保留約一年）
 #   data/calendar.csv                     法說會日程（公開資訊觀測站，本月與下月）
@@ -804,7 +804,7 @@ def 抓匯率():
     """美元兌台幣每日收盤匯率（數字變小代表台幣升值）。"""
     新資料 = []
     try:
-        r = requests.get("https://query1.finance.yahoo.com/v8/finance/chart/TWD=X?range=3mo&interval=1d",
+        r = requests.get("https://query1.finance.yahoo.com/v8/finance/chart/TWD=X?range=2y&interval=1d",
                          headers=標頭, timeout=30)
         結果 = r.json()["chart"]["result"][0]
         for 時間, 收盤 in zip(結果["timestamp"], 結果["indicators"]["quote"][0]["close"]):
