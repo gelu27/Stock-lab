@@ -189,7 +189,11 @@ def 價位提醒(代號們):
             for c, 歷史 in 指標.groupby("代號"):
                 K = engine.還原K線(歷史)
                 量 = 歷史.set_index("date")["成交值億"]
-                for 動, 價名, 價 in (engine.跌破站回(K, 量) + engine.技術訊號(K, 量) if K is not None else []):
+                紀 = engine.停損紀律狀態(K) if K is not None else None
+                事件 = (engine.跌破站回(K, 量) + engine.技術訊號(K, 量) if K is not None else [])
+                if 紀 and 紀["今天"]:
+                    事件.append(紀["今天"])
+                for 動, 價名, 價 in 事件:
                     跌站.append(f"{'⚠️' if 動 == '跌破' else '✅'} {歷史['名稱'].iloc[-1]} {動}{價名}"
                               + ("" if 價 is None or "共振區" in 價名 else f" {價:,.2f}"))
     行們 = (["", "📍 跌破／站回重要價位"] + 跌站) if 跌站 else []
