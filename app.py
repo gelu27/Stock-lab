@@ -14,6 +14,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from pandas.io.formats.style import Styler
 import streamlit as st
 
 import importlib
@@ -73,7 +74,7 @@ h1, h2, h3 {{ font-family: 'Space Grotesk', 'Noto Sans TC', sans-serif !importan
 .grid3 .card {{ padding: 10px 10px; }}
 .rankwrap {{ overflow-x: auto; }}
 @media (max-width: 480px) {{ .rank td, .rank td.n {{ font-size: 14px; padding: 8px 6px; }} .rank th {{ padding: 8px 6px; }}
-    .rank td.n small, .rank td:nth-child(5), .rank th:nth-child(5) {{ display: none; }} }}
+    .rank td:nth-child(5), .rank th:nth-child(5) {{ display: none; }} }}
 .rank {{ width: 100%; border-collapse: collapse; font-family: 'Noto Sans TC', sans-serif; }}
 .rank th {{ background: #141414; color: #9A9A9A; font-weight: 400; padding: 8px 10px; text-align: right;
     font-size: 14px; }}
@@ -81,7 +82,7 @@ h1, h2, h3 {{ font-family: 'Space Grotesk', 'Noto Sans TC', sans-serif !importan
 .rank td {{ padding: 9px 10px; border-bottom: 1px solid #1E1E1E; text-align: right;
     font-family: 'JetBrains Mono', monospace; font-size: 16px; }}
 .rank td.n {{ font-family: 'Noto Sans TC', sans-serif; color: #EDEDED; font-size: 16px; white-space: nowrap; }}
-.rank td.n small {{ color: {灰}; font-size: 11px; margin-left: 4px; font-family: 'JetBrains Mono'; }}
+.rank td.n small {{ color: {灰}; font-size: 12px; margin-right: 5px; font-family: 'JetBrains Mono'; }}
 .rank td.n a {{ color: inherit; text-decoration: none; }}
 .rank td.t {{ color: #EDEDED; white-space: nowrap; font-size: 13px; }}
 .rank td.t small {{ color: {灰}; margin-left: 4px; font-size: 11px; }}
@@ -196,7 +197,7 @@ def 排行表(表, 額外=None, 額外標題=None):
         else:
             加 = ""
         列們.append(
-            f'<tr><td class="n"><a href="?s={r["code"]}{登入參數()}" target="_self">{r["name"]}<small>{r["code"]}</small></a></td>'
+            f'<tr><td class="n"><a href="?s={r["code"]}{登入參數()}" target="_self"><small>{r["code"]}</small>{r["name"]}</a></td>'
             f'<td style="{底 or "color:" + 色}">{r["close"]:,.2f}</td>'
             f'<td style="color:{色}">{r["change"]:+,.2f}</td>'
             f'<td style="color:{色}">{r["幅度"]:+.2f}%</td>'
@@ -582,6 +583,34 @@ with st.container(key="nav"):
     頁面 = st.segmented_control("頁面", 頁面們, key="頁面", label_visibility="collapsed") or 頁面們[0]
 
 
+def 加代號(資料, 參數):
+    """明細的「名稱」前面加上代號（例如「2330 台積電」），手機精簡表格藏掉代號欄時也看得到；合併後代號欄就不重複顯示。"""
+    表 = 資料.data if isinstance(資料, Styler) else 資料
+    if not isinstance(表, pd.DataFrame) or "名稱" not in 表.columns:
+        return 資料
+    if "代號" in 表.columns:
+        碼們 = 表["代號"]
+    elif 表.index.name == "代號":
+        碼們 = 表.index
+    else:
+        return 資料
+    名們 = [f"{c} {n}" if isinstance(n, str) and isinstance(c, str) and c and not n.startswith(c) else n
+          for c, n in zip(碼們, 表["名稱"])]
+    表 = 表.copy()
+    表["名稱"] = 名們
+    if "代號" in 表.columns:
+        參數["column_config"] = {"代號": None, **(參數.get("column_config") or {})}
+    if isinstance(資料, Styler):
+        資料.data = 表
+        return 資料
+    return 表
+
+
+def 表格(資料, **參數):
+    """st.dataframe，名稱前面自動加代號。"""
+    return st.dataframe(加代號(資料, 參數), **參數)
+
+
 def 點選表(表, 樣式, key, 動作=None, **參數):
     """可以點選列的表格：點一下就跳到那檔股票的個股查詢（或改做 動作(代號)）。"""
     def 點了():
@@ -592,7 +621,7 @@ def 點選表(表, 樣式, key, 動作=None, **參數):
         留 = [c for c in 表.columns if c in 精簡欄位]
         if len(留) >= 3:
             參數["column_config"] = {**{c: None for c in 表.columns if c not in 留}, **參數.get("column_config", {})}
-    st.dataframe(樣式, key=key, on_select=點了, selection_mode="single-row", hide_index=True, width="stretch", **參數)
+    表格(樣式, key=key, on_select=點了, selection_mode="single-row", hide_index=True, width="stretch", **參數)
 
 
 # 手機精簡表格只留這些欄（有的才顯示）
@@ -931,7 +960,7 @@ def 前後期表(歷史, 欄位, 比較們, 期名, 反向=()):
                 列[f"{比名} {期名(歷史.index[-1 - n])}"] = 式.format(舊[欄])
                 列[f"較{比名}"] = f"{色} {('+' if 差 > 0 else '')}{式.format(差)}"
         列們.append(列)
-    st.dataframe(pd.DataFrame(列們), hide_index=True, width="stretch")
+    表格(pd.DataFrame(列們), hide_index=True, width="stretch")
 
 
 @st.cache_data(ttl=43200, show_spinner="查詢內部人持股歷史中…", max_entries=50)
@@ -1358,7 +1387,7 @@ def 群組績效(自選):
     績 = pd.DataFrame(列們)
     數欄 = ["今日%", "5日%", "20日%", "加入至今%"]
     樣式 = 績.style.format({k: "{:+.2f}" for k in 數欄}, na_rep="—").map(lambda v: f"color:{漲跌色(v)}", subset=數欄)
-    st.dataframe(樣式, hide_index=True, width="stretch", height=35 * (len(績) + 1) + 3)
+    表格(樣式, hide_index=True, width="stretch", height=35 * (len(績) + 1) + 3)
     st.caption("各群組等權重平均；最強 = 今天漲最多的一檔。")
 
 
@@ -1439,7 +1468,7 @@ def 個股比較(代號):
                             "本益比": "{:.1f}", "殖利率": "{:.2f}", "淨值比": "{:.2f}", "營收年增%": "{:+.1f}",
                             "法人5日(張)": "{:+,.0f}"}, na_rep="—")
           .map(lambda v: f"color:{漲跌色(v)}", subset=漲欄).map(lambda v: f"color:{分數色(v)}", subset=["總分"]))
-    st.dataframe(樣式, hide_index=True, width="stretch", height=35 * (len(表) + 1) + 3)
+    表格(樣式, hide_index=True, width="stretch", height=35 * (len(表) + 1) + 3)
     st.caption("總分是規則計分（50 為中性），僅供參考，非投資建議。")
 
 
@@ -1576,7 +1605,7 @@ def 族群排行(族群, 期間, 來源):
     表 = 族群.reset_index().rename(columns={"產業": "族群"})[
         ["族群", "漲跌幅", "上漲", "下跌", "成交值億", "領漲股"]]
     st.markdown("**族群排行**　點一下族群，下方會列出成分股")
-    選 = st.dataframe(表.style.map(lambda v: f"color:{漲跌色(v)}", subset=["漲跌幅"])
+    選 = 表格(表.style.map(lambda v: f"color:{漲跌色(v)}", subset=["漲跌幅"])
                      .format({"漲跌幅": "{:+.2f}%", "成交值億": "{:,.1f}"}),
                      key="族群表", on_select="rerun", selection_mode="single-row", hide_index=True,
                      width="stretch", height=300)
@@ -1924,7 +1953,7 @@ def 價位明細(sr, 區們, key):
     共 = {n for z in 區們 for n in z["成員"]}
     t["共振"] = t["名稱"].map(lambda n: "◆" if n in 共 else "")
     t = t[["角色", "名稱", "價位", "距離%", "共振", "說明"]]
-    st.dataframe(t.style.map(lambda v: f"color:{紅 if v == '壓力' else 綠}", subset=["角色"])
+    表格(t.style.map(lambda v: f"color:{紅 if v == '壓力' else 綠}", subset=["角色"])
                  .format({"價位": "{:,.2f}", "距離%": "{:+.2f}"}), hide_index=True, width="stretch",
                  height=min(35 * (len(t) + 1) + 3, 520), key=key,
                  column_config={"說明": st.column_config.TextColumn(width="large")})
@@ -1995,7 +2024,7 @@ def 殺估值區():
         return
     st.markdown(燈號卡([("殺估值觀察組", 燈, 話)]), unsafe_allow_html=True)
     with st.expander("看每一檔"):
-        st.dataframe(t, hide_index=True, width="stretch",
+        表格(t, hide_index=True, width="stretch",
                      column_config={"距60日高%": st.column_config.NumberColumn(format="%+.1f"),
                                     "本益比降幅%": st.column_config.NumberColumn(format="%+.1f")})
         st.caption("通勤族的觀察法：這波下跌主要是「殺估值」（市場不願意再給高本益比），不是公司變差。"
@@ -2008,7 +2037,7 @@ def 守週線表():
     if t.empty:
         st.caption("目前沒有守在 5 週線上的股票。")
         return
-    st.dataframe(t, hide_index=False, width="stretch", height=min(35 * (len(t) + 1) + 3, 520), key="守週線",
+    表格(t, hide_index=False, width="stretch", height=min(35 * (len(t) + 1) + 3, 520), key="守週線",
                  column_config={"收盤": st.column_config.NumberColumn(format="%.2f"),
                                 "5週線": st.column_config.NumberColumn(format="%.2f"),
                                 "20日漲幅": st.column_config.NumberColumn("20 日漲幅%", format="%.1f"),
@@ -2022,7 +2051,7 @@ def 缺口表(K, key):
     if t.empty:
         st.caption("目前沒有還沒回補的缺口。")
         return
-    st.dataframe(t.style.map(lambda v: f"color:{綠 if '支撐' in v else 紅}", subset=["方向"])
+    表格(t.style.map(lambda v: f"color:{綠 if '支撐' in v else 紅}", subset=["方向"])
                  .format({"日期": "{:%Y/%m/%d}", "下緣": "{:,.2f}", "上緣": "{:,.2f}", "缺口大小%": "{:.2f}",
                           "距離%": "{:+.1f}"}), hide_index=True, width="stretch",
                  height=min(35 * (len(t) + 1) + 3, 400), key=key)
@@ -2052,7 +2081,7 @@ def 回測區(代號):
         樣式 = 樣式.map(lambda v, b=b: "" if pd.isna(v) or abs(v - b) < 2 else
                         f"background-color:rgba({'255,59,92' if v > b else '0,214,143'},{min(abs(v - b) / 15, 1) * 0.5 + 0.08:.2f})",
                         subset=[c])
-    st.dataframe(樣式.format(
+    表格(樣式.format(
         {"守住率%": "{:.0f}", "支撐守住%": "{:.0f}", "壓力守住%": "{:.0f}"}, na_rep="—"),
         hide_index=True, width="stretch", height=35 * (len(t) + 1) + 3)
     st.caption("回測方法：近 5 年每隔 5 個交易日，只用「當時」以前的資料畫價位，看之後 20 天有沒有碰到（差 0.3% 內）；"
@@ -2130,7 +2159,7 @@ def 停損紀律回測表(代號):
     if t.empty:
         st.caption("資料不足，無法回測。")
         return
-    st.dataframe(t, hide_index=True, width="stretch",
+    表格(t, hide_index=True, width="stretch",
                  column_config={"總報酬%": st.column_config.NumberColumn(format="%+.1f"),
                                 "最大回檔%": st.column_config.NumberColumn(format="%.1f")})
     抱, 老 = t.iloc[0], t.iloc[2]
@@ -2201,20 +2230,30 @@ def 權值區():
                 漲跌色(前十["貢獻點數"].sum())),
            卡片("台積電貢獻", f"{表.loc[表['代號'] == '2330', '貢獻點數'].sum():+,.0f} 點",
                 f"權重 {表.loc[表['代號'] == '2330', '權重'].sum():.1f}%", 漲跌色(表.loc[表['代號'] == '2330', '貢獻點數'].sum()))])
-    撐 = 表.nlargest(10, "貢獻點數")
-    拖 = 表.nsmallest(10, "貢獻點數").iloc[::-1]
-    圖表 = pd.concat([拖, 撐.iloc[::-1]])
-    圖表 = 圖表[~圖表.index.duplicated()]
-    圖 = go.Figure(go.Bar(x=圖表["貢獻點數"], y=圖表["名稱"] + " " + 圖表["代號"], orientation="h",
-                          marker_color=[紅 if v > 0 else 綠 for v in 圖表["貢獻點數"]],
-                          text=圖表["貢獻點數"].map("{:+.1f}".format), textposition="outside", cliponaxis=False,
-                          customdata=np.stack([圖表["幅度"], 圖表["權重"]], axis=1),
-                          hovertemplate="%{y}<br>貢獻 %{x:+.1f} 點<br>漲跌 %{customdata[0]:+.2f}%<br>權重 %{customdata[1]:.2f}%<extra></extra>"))
-    圖.update_yaxes(type="category", gridcolor="#151515")
-    低, 高 = min(圖表["貢獻點數"].min(), 0), max(圖表["貢獻點數"].max(), 0)
-    留白 = (高 - 低) * 0.12 or 1  # 兩端留空間給數字，避免被切掉
-    圖.update_xaxes(range=[低 - 留白, 高 + 留白])
-    圖表外觀(圖, 30 * len(圖表) + 40).update_layout(hovermode="closest", showlegend=False)
+    撐 = 表[表["貢獻點數"] > 0].nlargest(10, "貢獻點數")
+    拖 = 表[表["貢獻點數"] < 0].nsmallest(10, "貢獻點數")
+    # 像一棵樹：中間一條線，撐盤紅條往左長、拖盤綠條往右長，「代號 名稱」在最外側；各 10 檔，由上往下影響越來越小
+    # 兩邊用同一個刻度才比得出大小
+    圖 = make_subplots(rows=1, cols=2, horizontal_spacing=0,
+                      subplot_titles=(f"撐盤 前 {len(撐)} 檔", f"拖盤 前 {len(拖)} 檔"))
+    for 欄, 組, 色 in ((1, 撐, 紅), (2, 拖, 綠)):
+        組 = 組.assign(值=組["貢獻點數"].abs())
+        圖.add_trace(go.Bar(x=組["值"], y=組["代號"] + " " + 組["名稱"], orientation="h", marker_color=色,
+                            text=組["貢獻點數"].map("{:+.1f}".format), textposition="auto", cliponaxis=False,
+                            insidetextanchor="end", textfont=dict(size=11), insidetextfont=dict(color="#000"),
+                            customdata=np.stack([組["貢獻點數"], 組["幅度"], 組["權重"]], axis=1),
+                            hovertemplate="%{y}<br>貢獻 %{customdata[0]:+.1f} 點<br>漲跌 %{customdata[1]:+.2f}%"
+                                          "<br>權重 %{customdata[2]:.2f}%<extra></extra>"), row=1, col=欄)
+    最大 = max(撐["貢獻點數"].abs().max() if len(撐) else 0, 拖["貢獻點數"].abs().max() if len(拖) else 0) or 1
+    圖.update_xaxes(showticklabels=False, showgrid=False, zeroline=False)
+    圖.update_xaxes(range=[最大 * 1.3, 0], row=1, col=1)  # 左邊反過來，條從中間往左長
+    圖.update_xaxes(range=[0, 最大 * 1.3], row=1, col=2)
+    圖.update_yaxes(type="category", autorange="reversed", showgrid=False, tickfont=dict(size=11), ticks="")
+    圖.update_yaxes(side="right", row=1, col=2)
+    圖.add_vline(x=0, line=dict(color="#555", width=1), row=1, col=1)
+    圖.update_annotations(font=dict(size=12, color="#BDBDBD"))
+    圖表外觀(圖, 30 * max(len(撐), len(拖), 1) + 60).update_layout(hovermode="closest", showlegend=False,
+                                                            margin=dict(l=4, r=4, t=28, b=6))
     st.plotly_chart(圖, width="stretch", config={"displayModeBar": False})
     族 = 表[表["產業"].fillna("") != ""].groupby("產業")["貢獻點數"].sum().sort_values()
     族 = pd.concat([族.head(5), 族.tail(5)])
@@ -2408,7 +2447,7 @@ def 行事曆區():
         return
     顯示 = 表.assign(日期=表["日期"].map(lambda d: f"{d:%m/%d}（{'一二三四五六日'[d.weekday()]}）"),
                    重要性=表["重要性"].map({"高": "🔴 高", "中": "🟡 中"}))[["日期", "時間", "類別", "事件", "重要性", "說明"]]
-    st.dataframe(顯示.style.apply(lambda r: ["background:#14080B" if "高" in r["重要性"] else "" for _ in r], axis=1),
+    表格(顯示.style.apply(lambda r: ["background:#14080B" if "高" in r["重要性"] else "" for _ in r], axis=1),
                  hide_index=True, width="stretch", height=min(35 * (len(顯示) + 1) + 3, 520),
                  column_config={"說明": st.column_config.TextColumn(width="large")})
     st.caption("時間為台灣時間。國際經濟數據與央行會議來自 ForexFactory（只列美、中、日、歐、英的中高重要性），"
@@ -2440,7 +2479,7 @@ def 連動區():
                   else (f"background:rgba(0,214,143,{min(abs(v), 1) * 0.6:.2f})" if pd.notna(v) else ""), subset=相關欄)
     樣式 = 樣式.map(lambda v: f"color:{漲跌色(v)}", subset=百分欄).format(
         {**{c: "{:+.2f}" for c in 相關欄}, **{c: "{:+.2f}" for c in 百分欄}, "費半敏感度": "{:.2f}"}, na_rep="—")
-    st.dataframe(樣式, hide_index=True, width="stretch", height=min(35 * (len(顯示) + 1) + 3, 460))
+    表格(樣式, hide_index=True, width="stretch", height=min(35 * (len(顯示) + 1) + 3, 460))
     st.caption("相關係數：近 120 個交易日，台股族群當天漲跌和「前一晚」美股漲跌的關聯（1＝完全同向、0＝沒關係、越紅越同向）。"
                "費半敏感度＝費半漲 1% 時族群平均漲幾 %；推估＝敏感度 × 昨晚費半漲跌；落差＝今天實際 − 推估。"
                "相關不代表因果，只是過去的統計。明天推估在美股比台股新一天時才會出現。")
@@ -2459,7 +2498,7 @@ def 美股龍頭區():
     st.markdown(f'<div class="verdict sub">{話}</div>', unsafe_allow_html=True)
     with st.expander("📋 美股龍頭 RSI 與乖離"):
         顯示 = t.reset_index(names="名稱")
-        st.dataframe(顯示.style.map(lambda v: f"color:{綠 if '超賣' in str(v) else (紅 if v == '過熱' else '#EDEDED')}",
+        表格(顯示.style.map(lambda v: f"color:{綠 if '超賣' in str(v) else (紅 if v == '過熱' else '#EDEDED')}",
                                     subset=["狀態"]).map(lambda v: f"color:{漲跌色(v)}", subset=["距月線%", "距60日高%"])
                      .format({"日期": "{:%m/%d}", "收盤": "{:,.2f}", "RSI": "{:.1f}", "距月線%": "{:+.1f}",
                               "距60日高%": "{:+.1f}", "連跌天數": "{:.0f}"}),
@@ -2516,7 +2555,7 @@ def AI解讀區():
         分 = engine.解讀記分(驗)
         with st.expander(f"🎯 AI 解讀記分板：近 {分['篇數']} 篇看法對 {分['看法命中']}/{分['看法篇數']}、"
                          f"條件成立 {分['條件成立']}/{分['條件數']}"):
-            st.dataframe(pd.DataFrame([{
+            表格(pd.DataFrame([{
                 "解讀": f"{x['時間']} {x['模式']}", "看法": x["看法"] or "—", "驗收日": f"{x['驗收日']:%m/%d}",
                 "加權": f"{x['加權漲跌%']:+.2f}%", "看法對": "—" if x["看法對"] is None else ("✅" if x["看法對"] else "❌"),
                 "條件": "；".join(f"{'✅' if c['成立'] else '❌'}{c['說明']}" for c in x["條件"])} for x in 驗[:20]]),
@@ -2588,7 +2627,7 @@ def 券商報告上傳區():
     預覽 = st.session_state.get("券商預覽")
     if 預覽:
         st.markdown(f"**讀到 {len(預覽)} 筆**，確認數字沒問題再存檔：")
-        st.dataframe(engine.券商報告表(預覽).drop(columns=["前次目標價"]), hide_index=True, width="stretch")
+        表格(engine.券商報告表(預覽).drop(columns=["前次目標價"]), hide_index=True, width="stretch")
         a, b = st.columns(2)
         if a.button("💾 存檔", key="存券商", type="primary"):
             舊 = engine.讀取券商報告(_設定())
@@ -2626,7 +2665,7 @@ def 券商報告總覽():
         st.caption("近 30 天沒有上修紀錄。")
     段落("LIST // 全部報告")
     表 = engine.加潛在空間(表, dict(zip(今日["代號"].astype(str), 今日["收盤"])))
-    st.dataframe(表.drop(columns=["報告收盤價"]), hide_index=True, width="stretch",
+    表格(表.drop(columns=["報告收盤價"]), hide_index=True, width="stretch",
                  column_config={"日期": st.column_config.DateColumn(format="YYYY-MM-DD"),
                                 "潛在空間%": st.column_config.NumberColumn(format="%+.1f%%")})
     st.caption("潛在空間＝目標價 ÷ 今天收盤 − 1，每天跟著收盤價更新；負數代表股價已經超過目標價。")
@@ -2636,7 +2675,7 @@ def 券商報告總覽():
     if 命.empty:
         st.caption("還沒有可以驗收的報告。")
     else:
-        st.dataframe(命, width="stretch")
+        表格(命, width="stretch")
         st.caption("達標＝報告後 6 個月內股價碰到目標價；平均報酬＝報告日收盤到現在（最多 6 個月）。"
                    "多數報告定義「買進」是 6 個月報酬 15～30%，時間還不到 6 個月的算進行中。")
 
@@ -2671,7 +2710,7 @@ def 網紅說法上傳區():
         for v in 預覽:
             st.markdown(f"**{v['頻道']}**（{v['日期'] or '沒有日期'}）：{len(v['股票'])} 檔、{v['條件數']} 個條件"
                         + (f"，🚩 {len(v['紅旗'])}" if v["紅旗"] else ""))
-            st.dataframe(pd.DataFrame(v["股票"])[["代號", "名稱", "看法", "理由"]], hide_index=True, width="stretch")
+            表格(pd.DataFrame(v["股票"])[["代號", "名稱", "看法", "理由"]], hide_index=True, width="stretch")
         a, b = st.columns(2)
         if a.button("💾 存檔", key="存網紅", type="primary"):
             全 = engine.合併網紅說法(engine.讀取網紅說法(_設定()), 預覽)
@@ -2700,7 +2739,7 @@ def 網紅說法總覽():
     if 彙.empty:
         st.caption("還沒有可以對答案的資料。")
     else:
-        st.dataframe(彙, width="stretch", column_config={"平均超額%": st.column_config.NumberColumn(format="%+.1f")})
+        表格(彙, width="stretch", column_config={"平均超額%": st.column_config.NumberColumn(format="%+.1f")})
         st.caption("超額報酬＝個股報酬減同期加權報酬。看多且贏大盤、看空且輸大盤算說對；不到 20 天的算「暫時」，不計入命中率。"
                    "中立的不算。樣本少的時候命中率只是參考。")
     段落("FLAGS // 紅旗：哪些說法要打折")
@@ -2710,7 +2749,7 @@ def 網紅說法總覽():
                     f"{v.get('條件數', 0)} 個「如果…就…」條件" + (f"。{'；'.join(旗)}" if 旗 else "。沒有明顯紅旗"))
     if not 明細.empty:
         段落("LIST // 每一則看法")
-        st.dataframe(明細.sort_values("日期", ascending=False), hide_index=True, width="stretch",
+        表格(明細.sort_values("日期", ascending=False), hide_index=True, width="stretch",
                      column_config={"日期": st.column_config.DateColumn(format="YYYY-MM-DD"),
                                     "報酬%": st.column_config.NumberColumn(format="%+.1f"),
                                     "超額%": st.column_config.NumberColumn(format="%+.1f")})
@@ -2745,7 +2784,7 @@ def 個股券商報告(代號, 收盤):
                卡片("中位數距現價", f"{(目.median() / 收盤 - 1) * 100:+.1f}%", f"中位數 {目.median():,.0f}"),
                卡片("最新修正", f"目標價{表['目標價修正'].iloc[0]}", f"EPS {表['EPS修正'].iloc[0]} · {表['券商'].iloc[0]}")])
     表 = engine.加潛在空間(表, {str(代號): 收盤})
-    st.dataframe(表.drop(columns=["代號", "名稱", "現價"]), hide_index=True, width="stretch",
+    表格(表.drop(columns=["代號", "名稱", "現價"]), hide_index=True, width="stretch",
                  column_config={"日期": st.column_config.DateColumn(format="YYYY-MM-DD"),
                                 "潛在空間%": st.column_config.NumberColumn(format="%+.1f%%")})
     營收 = engine.讀取營收歷史(代號)
@@ -2849,7 +2888,7 @@ if 頁面 == 頁面們[1]:
         if 日程.empty:
             st.caption("近 30 天沒有庫存、自選股的法說會。")
         else:
-            st.dataframe(日程.assign(日期=日程["日期"].dt.strftime("%m/%d（%a）"))[["日期", "類型", "股票", "說明"]],
+            表格(日程.assign(日期=日程["日期"].dt.strftime("%m/%d（%a）"))[["日期", "類型", "股票", "說明"]],
                          hide_index=True, width="stretch")
         警 = {c: 警示表(_版本)[c] for c in 關注 if c in 警示表(_版本)}
         if 警:
@@ -2874,7 +2913,7 @@ if 頁面 == 頁面們[3]:
     st.caption("多＝適合找買點（講義：強勢股買拉回、盤整突破）；空＝轉弱、避開或減碼（講義：跌破十日線、弱勢股）。"
                "資料日期 " + 最新日.strftime("%Y-%m-%d"))
     段落("SUMMARY // 各策略符合檔數")
-    st.dataframe(總表.style.map(lambda v: f"color:{紅 if v == '多' else 綠}", subset=["多空"]),
+    表格(總表.style.map(lambda v: f"color:{紅 if v == '多' else 綠}", subset=["多空"]),
                  hide_index=True, width="stretch",
                  column_config={"說明": st.column_config.TextColumn(width="large")})
     段落("OVERLAP // 同時符合多個策略")
@@ -3086,7 +3125,7 @@ if 頁面 == 頁面們[7]:
             if 報告["交易"].empty:
                 st.write("這段期間沒有任何股票符合條件。")
             else:
-                st.dataframe(上色(報告["交易"]), hide_index=True, width="stretch", height=360)
+                表格(上色(報告["交易"]), hide_index=True, width="stretch", height=360)
 
     with 回測分頁[1]:
         st.caption("訊號在收盤後產生，隔一個交易日以收盤價成交；已計入手續費（可打折）與證交稅，價格使用還原股價。")
@@ -3141,7 +3180,7 @@ if 頁面 == 頁面們[7]:
             if 交易.empty:
                 st.write("這段期間沒有產生任何交易。")
             else:
-                st.dataframe(上色(交易), hide_index=True, width="stretch")
+                表格(上色(交易), hide_index=True, width="stretch")
 
 
 # ---------- 03 個股查詢 ----------
@@ -3433,7 +3472,7 @@ if 頁面 == 頁面們[2]:
                 顯示 = pd.DataFrame({"除權息日": 表["date"].dt.strftime("%Y/%m/%d"), "類型": 表["type"],
                                     "權值+息值": 表["value"], "除權息前收盤": 表["pre_close"], "參考價": 表["ref"],
                                     "填息天數": 表["填息"]})
-                st.dataframe(顯示.style.format({"權值+息值": "{:.4g}", "除權息前收盤": "{:,.2f}", "參考價": "{:,.2f}"}),
+                表格(顯示.style.format({"權值+息值": "{:.4g}", "除權息前收盤": "{:,.2f}", "參考價": "{:,.2f}"}),
                              hide_index=True, width="stretch", height=min(35 * (len(顯示) + 1) + 3, 320))
                 st.caption("填息天數 = 除權息後，收盤價回到除權息前收盤價花了幾個交易日。資料：證交所、櫃買中心（近 6 年）。")
 
@@ -3799,7 +3838,7 @@ def 評分驗證區():
                        "分數與報酬的相關（IC）": v["IC"], "顯著性 t": v["t"], "相關為正的月份": v["勝率"] * 100,
                        "最高分組超額 %": 驗["五分組"][k][-1]["超額"], "最低分組超額 %": 驗["五分組"][k][0]["超額"]}
                       for k, v in 相.items()])
-    st.dataframe(表.style.format({"分數與報酬的相關（IC）": "{:+.3f}", "顯著性 t": "{:+.1f}", "相關為正的月份": "{:.0f}%",
+    表格(表.style.format({"分數與報酬的相關（IC）": "{:+.3f}", "顯著性 t": "{:+.1f}", "相關為正的月份": "{:.0f}%",
                                  "最高分組超額 %": "{:+.2f}", "最低分組超額 %": "{:+.2f}"}),
                  hide_index=True, width="stretch")
     前, 後 = 驗["前後半"]["前半"][-1]["超額"], 驗["前後半"]["後半"][-1]["超額"]
@@ -4171,7 +4210,7 @@ if 頁面 == 頁面們[4]:
             "營收(億)": 群["營收"].sum() / 1e5,
         }).reset_index().sort_values("合計年增%", ascending=False)
         st.caption("合計年增＝整個產業營收加總比去年同月；年增中位數比較不會被單一大公司左右。只套用「更多篩選」裡的公告日、規模條件。")
-        st.dataframe(色階(概況.style, 概況, ["合計年增%", "年增中位數%", "近3月年增%", "營收(億)"])
+        表格(色階(概況.style, 概況, ["合計年增%", "年增中位數%", "近3月年增%", "營收(億)"])
                      .format({"合計年增%": "{:+.1f}", "年增中位數%": "{:+.1f}", "年增為正%": "{:.0f}",
                               "近3月年增%": "{:+.1f}", "營收(億)": "{:,.0f}", "5年新高": "{:.0f}"}, na_rep="—"),
                      hide_index=True, width="stretch", height=min(35 * (len(概況) + 1) + 3, 700))
@@ -4389,7 +4428,7 @@ if 頁面 == 頁面們[5]:
 
     with ETF頁[2]:
         段落("FUNDS // 各檔 ETF 總覽")
-        st.dataframe(總表.style.format({"規模(億)": "{:,.0f}", "申贖%": "{:+.2f}"}, na_rep="—")
+        表格(總表.style.format({"規模(億)": "{:,.0f}", "申贖%": "{:+.2f}"}, na_rep="—")
                      .map(lambda v: f"color:{漲跌色(v)}", subset=["申贖%"]),
                      hide_index=True, width="stretch", height=35 * (len(總表) + 1) + 3)
         st.caption("每檔都和自己的前一份持股比；申贖%＝在外流通單位數的變化（正＝有人申購、基金變大）。"
@@ -4573,7 +4612,7 @@ if 頁面 == 頁面們[5]:
         if "動作" in 反:
             樣式 = 樣式.map(lambda v: f"color:{類型色.get(v, '#EDEDED')}", subset=["動作"]).map(
                 lambda v: f"color:{漲跌色(v)}", subset=["扣申贖"])
-        st.dataframe(樣式, hide_index=True, width="stretch", height=35 * (len(反) + 1) + 3)
+        表格(樣式, hide_index=True, width="stretch", height=35 * (len(反) + 1) + 3)
         史 = 持股[持股["code"] == 股].groupby("date")["shares"].sum() / 1000
         if len(史) >= 2:
             圖 = go.Figure(go.Scatter(x=史.index, y=史.values, mode="lines+markers", line=dict(color=青, width=2), name="合計張數"))
@@ -4594,7 +4633,7 @@ def 新鮮度表(_版本):
 _鮮 = 新鮮度表(_版本)
 _落後 = (~_鮮["狀態"].str.startswith("✅")).sum()
 with st.expander(f"🩺 資料新鮮度：{'全部正常' if not _落後 else f'{_落後} 項落後'}", expanded=bool(_落後)):
-    st.dataframe(_鮮, hide_index=True, width="stretch")
+    表格(_鮮, hide_index=True, width="stretch")
     st.caption("每日資料跟最新交易日比；月營收、內部人、季報看距離該期結束多久。休市日不算落後。")
 
 st.markdown(f'<div class="sub" style="color:{灰};font-family:JetBrains Mono;font-size:11px;margin-top:30px">'
