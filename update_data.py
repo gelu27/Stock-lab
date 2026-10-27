@@ -21,6 +21,13 @@
 #   data/sbl/20261022.csv.gz              借券賣出餘額（上市＋上櫃，單位：張，保留約一年）
 #   data/calendar.csv                     法說會日程（公開資訊觀測站，本月與下月）
 #   data/index_ohlc.csv                   加權指數、櫃買指數每日開高低收（證交所、櫃買中心，近 5 年），畫支撐壓力用
+#   data/options_pc.csv, options_inst.csv 臺指選擇權 P/C ratio、三大法人買賣權未平倉（期交所）
+#   data/options_oi.csv                   臺指選擇權最近月份、最近一週各履約價未平倉量（保留 20 天）
+#   data/ipo.csv                          新股公開申購抽籤日程（證交所，今年與去年）
+#   data/daytrade.csv.gz, daytrade_market.csv 上市個股當沖成交股數、上市櫃整體當沖比重
+#   data/fundamental/balance.csv, cashflow.csv 各季資產負債（季底）、現金流量（今年累計），千元
+#   data/buyback.csv                      庫藏股（買回自己公司股份）近一年；data/cb.csv 國內可轉債發行資料
+#   data/qfii.csv.gz                      個股外資持股比率（證交所 MI_QFIIS、櫃買，每天累積約一年）
 #   data/mtx_retail.csv                   小台散戶多空比（期交所三大法人小台淨部位、小台未平倉量）
 #   data/us_daily.csv                     美股指數、VIX、台股供應鏈龍頭每日收盤（Yahoo，近 2 年）
 #   data/econ_calendar.csv                國際經濟數據、央行會議（ForexFactory 本週與下週，逐週累積）
@@ -383,6 +390,7 @@ def 抓基本面():
     抓內部人()
     抓歷史營收()
     抓損益表()
+    抓財報()
     抓除權息()
     抓集保()
 
@@ -1047,6 +1055,337 @@ def 抓美股財報(天數=35):
     print(f"美股財報完成：未來 {len(新)} 筆")
 
 
+# ---------- 新資料：外資持股比、當沖、選擇權籌碼、財報體質、公司事件、新股申購 ----------
+def _期交所分段(檔, 天數, 下載, 名稱):
+    """期交所資料一次抓 30 天一段：從 檔 最後一天接著補（第一次補近 天數 天），下載(起, 迄) 回傳 DataFrame（要有 date 欄）或 None。"""
+    舊 = pd.read_csv(檔) if 檔.exists() else pd.DataFrame()
+    有資料 = [d for d, 狀態 in 讀狀態().items() if 狀態 == "ok"]
+    if not 有資料:
+        return
+    今天 = pd.Timestamp(max(有資料)).date()
+    起 = (pd.Timestamp(舊["date"].max()).date() + dt.timedelta(days=1)) if len(舊) else 今天 - dt.timedelta(days=天數)
+    列們 = []
+    while 起 <= 今天:
+        迄 = min(起 + dt.timedelta(days=30), 今天)
+        t = 下載(起, 迄)
+        if t is None:
+            break  # 缺一段就先停，下次從缺的那天接著補
+        列們.append(t)
+        起 = 迄 + dt.timedelta(days=1)
+    if not 列們:
+        print(f"{名稱}沒有新資料")
+        return
+    表 = pd.concat([舊] + 列們).drop_duplicates("date", keep="last").sort_values("date")
+    表.to_csv(檔, index=False)
+    print(f"{名稱}完成，共 {len(表)} 天（最新 {表['date'].max()}）")
+
+
+def 抓選擇權():
+    """臺指選擇權：Put/Call Ratio → options_pc.csv；三大法人買賣權未平倉 → options_inst.csv；
+    最新一天各履約價未平倉量（最近月份與最近一週）→ options_oi.csv（保留 20 天）。"""
+    def PC(起, 迄):
+        t = _期交所下載("https://www.taifex.com.tw/cht/3/pcRatioDown",
+                       {"queryStartDate": f"{起:%Y/%m/%d}", "queryEndDate": f"{迄:%Y/%m/%d}"}, f"P/C ratio {起}～{迄}")
+        if t is None:
+            return None
+        t.columns = [str(c).strip() for c in t.columns]
+        return pd.DataFrame({"date": pd.to_datetime(t["日期"]).dt.strftime("%Y-%m-%d"),
+                             "put_vol": t["賣權成交量"], "call_vol": t["買權成交量"], "pc_vol": t["買賣權成交量比率%"],
+                             "put_oi": t["賣權未平倉量"], "call_oi": t["買權未平倉量"], "pc_oi": t["買賣權未平倉量比率%"]})
+
+    def 法人(起, 迄):
+        t = _期交所下載("https://www.taifex.com.tw/cht/3/callsAndPutsDateDown",
+                       {"queryStartDate": f"{起:%Y/%m/%d}", "queryEndDate": f"{迄:%Y/%m/%d}", "commodityId": "TXO"},
+                       f"選擇權法人 {起}～{迄}")
+        if t is None:
+            return None
+        t.columns = [str(c).strip() for c in t.columns]
+        身份 = {"外資及陸資": "foreign", "投信": "trust", "自營商": "dealer"}
+        t = t.assign(date=pd.to_datetime(t["日期"]).dt.strftime("%Y-%m-%d"),
+                     who=t["身份別"].astype(str).str.strip().map(身份),
+                     cp=t["買賣權別"].astype(str).str.strip().str.upper().map({"CALL": "call", "PUT": "put"}))
+        t = t.dropna(subset=["who", "cp"])
+        t["欄"] = t["who"] + "_" + t["cp"]
+        口 = t.pivot_table(index="date", columns="欄", values="未平倉口數買賣淨額", aggfunc="sum").add_suffix("_oi")
+        額 = t.pivot_table(index="date", columns="欄", values="未平倉契約金額買賣淨額(千元)", aggfunc="sum").add_suffix("_amt")
+        return 口.join(額).reset_index()
+
+    _期交所分段(資料夾 / "options_pc.csv", 400, PC, "選擇權 P/C ratio")
+    _期交所分段(資料夾 / "options_inst.csv", 400, 法人, "選擇權三大法人")
+
+    有資料 = [d for d, 狀態 in 讀狀態().items() if 狀態 == "ok"]
+    if not 有資料:
+        return
+    日 = pd.Timestamp(max(有資料))
+    t = _期交所下載("https://www.taifex.com.tw/cht/3/dlOptDataDown",
+                   {"down_type": "1", "commodity_id": "TXO", "commodity_id2": "",
+                    "queryStartDate": f"{日:%Y/%m/%d}", "queryEndDate": f"{日:%Y/%m/%d}"}, "選擇權每日行情")
+    if t is None:
+        return
+    t.columns = [str(c).strip() for c in t.columns]
+    t = t[(t["契約"].astype(str).str.strip() == "TXO") & (t["交易時段"].astype(str).str.strip() == "一般")]
+    t = t.assign(expiry=t["到期月份(週別)"].astype(str).str.strip(),
+                 strike=pd.to_numeric(t["履約價"], errors="coerce"),
+                 cp=t["買賣權"].astype(str).str.strip().map({"買權": "call", "賣權": "put"}),
+                 oi=pd.to_numeric(t["未沖銷契約數"], errors="coerce"),
+                 end=pd.to_datetime(t["契約到期日"].astype(str).str.strip(), format="%Y%m%d", errors="coerce"))
+    t = t.dropna(subset=["strike", "cp", "oi"])
+    t = t[t["end"].isna() | (t["end"] >= 日)]
+    月 = sorted(x for x in t["expiry"].unique() if re.fullmatch(r"\d{6}", x))
+    到期 = t.dropna(subset=["end"]).groupby("expiry")["end"].min().sort_values()
+    要 = {("month", 月[0])} if 月 else set()
+    if len(到期):
+        要.add(("week", 到期.index[0]))
+    列們 = []
+    for 類, 契 in 要:
+        s = t[t["expiry"] == 契]
+        列們.append(s.assign(kind=類, date=f"{日:%Y-%m-%d}")[["date", "kind", "expiry", "cp", "strike", "oi"]])
+    if not 列們:
+        return
+    新 = pd.concat(列們)
+    新 = 新[新["oi"] > 0]
+    檔 = 資料夾 / "options_oi.csv"
+    舊 = pd.read_csv(檔, dtype={"expiry": str}) if 檔.exists() else pd.DataFrame(columns=新.columns)
+    表 = pd.concat([舊[舊["date"] != f"{日:%Y-%m-%d}"], 新])
+    表 = 表[表["date"].isin(sorted(表["date"].unique())[-20:])]
+    表.sort_values(["date", "kind", "cp", "strike"]).to_csv(檔, index=False)
+    print(f"選擇權未平倉分布完成（{日:%Y-%m-%d}，{'、'.join(f'{k} {e}' for k, e in sorted(要))}）")
+
+
+def 抓新股申購():
+    """證交所「公開申購公告－抽籤日程表」今年與去年 → data/ipo.csv（不含公債）。"""
+    今年 = dt.datetime.now(台北時區).year
+    列們 = []
+    for 年 in (今年 - 1, 今年):
+        資料 = 證交所(f"https://www.twse.com.tw/rwd/zh/announcement/publicForm?date={年}0101&response=json")
+        if not 資料 or 資料.get("stat") != "OK":
+            continue
+        欄 = [str(f).strip() for f in 資料["fields"]]
+        for 列 in 資料.get("data", []):
+            x = dict(zip(欄, [str(v).strip() for v in 列]))
+            if "債" in x.get("發行市場", "") or not re.fullmatch(代號格式, x.get("證券代號", "")):
+                continue
+            數 = lambda k: 轉數字(x.get(k, ""))
+            列們.append({"draw_date": _民國日期(x.get("抽籤日期")), "code": x["證券代號"], "name": x.get("證券名稱", ""),
+                        "market": x.get("發行市場", ""), "start": _民國日期(x.get("申購開始日")),
+                        "end": _民國日期(x.get("申購結束日")), "shares": 數("實際承銷股數") or 數("承銷股數"),
+                        "price": 數("實際承銷價(元)") or 數("承銷價(元)"), "list_date": _民國日期(x.get("撥券日期(上市、上櫃日期)")),
+                        "broker": x.get("主辦券商", ""), "apply_shares": 數("申購股數"), "qualified": 數("總合格件"),
+                        "win_rate": 數("中籤率(%)"), "cancelled": x.get("取消公開抽籤", "")})
+    if 列們:
+        表 = pd.DataFrame(列們).dropna(subset=["draw_date"]).drop_duplicates(["code", "draw_date"], keep="last")
+        表.sort_values("draw_date").to_csv(資料夾 / "ipo.csv", index=False)
+        print(f"新股申購完成，共 {len(表)} 筆")
+
+
+def _外資持股一天(日):
+    """某一天上市＋上櫃的外資持股比率（%）→ DataFrame(code, ratio)，那天沒資料回傳空表。"""
+    列們 = []
+    資料 = 證交所(f"https://www.twse.com.tw/rwd/zh/fund/MI_QFIIS?date={日:%Y%m%d}&selectType=ALLBUT0999&response=json")
+    if 資料 and 資料.get("stat") == "OK":
+        for _, 欄, 列 in 取得表格(資料):
+            if "證券代號" in 欄 and "全體外資及陸資持股比率" in 欄:
+                for x in 列:
+                    列們.append((str(x[欄.index("證券代號")]).strip(), 轉數字(x[欄.index("全體外資及陸資持股比率")])))
+    time.sleep(3)
+    try:
+        r = requests.post("https://www.tpex.org.tw/www/zh-tw/insti/qfii", headers=標頭, timeout=30,
+                          data={"date": f"{日:%Y/%m/%d}", "response": "json"})
+        for _, 欄, 列 in 取得表格(r.json()):
+            代 = next((c for c in 欄 if c == "代號"), None)
+            比 = next((c for c in 欄 if c.startswith("僑外資及陸資持股比率")), None)
+            if 代 and 比:
+                for x in 列:
+                    列們.append((str(x[欄.index(代)]).strip(), 轉數字(str(x[欄.index(比)]).replace("%", ""))))
+    except Exception as 錯誤:
+        print(f"  櫃買外資持股 {日} 失敗：{錯誤}")
+    t = pd.DataFrame(列們, columns=["code", "ratio"])
+    return t[t["code"].str.fullmatch(代號格式)].dropna().drop_duplicates("code")
+
+
+def 抓外資持股(天數=40):
+    """每天上市櫃個股外資持股比率 → data/qfii.csv.gz（date, code, ratio），保留約一年；第一次補近 天數 個交易日。"""
+    檔 = 資料夾 / "qfii.csv.gz"
+    舊 = pd.read_csv(檔, dtype={"code": str}) if 檔.exists() else pd.DataFrame(columns=["date", "code", "ratio"])
+    有 = set(舊["date"])
+    交易日 = sorted(d for d, 狀態 in 讀狀態().items() if 狀態 == "ok")[-天數:]
+    缺 = [pd.Timestamp(d) for d in 交易日 if f"{pd.Timestamp(d):%Y-%m-%d}" not in 有][::-1]
+    新們 = []
+    for 日 in 缺:
+        t = _外資持股一天(日)
+        if len(t) > 500:
+            新們.append(t.assign(date=f"{日:%Y-%m-%d}"))
+    if not 新們:
+        print("外資持股沒有新資料")
+        return
+    表 = pd.concat([舊] + 新們)[["date", "code", "ratio"]]
+    表 = 表[表["date"] >= f"{pd.Timestamp.now() - pd.Timedelta(days=370):%Y-%m-%d}"]
+    表.drop_duplicates(["date", "code"], keep="last").sort_values(["date", "code"]).to_csv(
+        檔, index=False, compression="gzip")
+    print(f"外資持股完成，共 {表['date'].nunique()} 天（新增 {len(新們)} 天）")
+
+
+def 抓當沖(天數=20):
+    """上市個股當沖成交股數（證交所 TWTB4U）→ data/daytrade.csv.gz（date, code, shares, buy, sell，保留約半年）；
+    上市、上櫃整體當沖比重 → data/daytrade_market.csv。第一次補近 天數 個交易日。櫃買沒有提供個股當沖量。"""
+    檔 = 資料夾 / "daytrade.csv.gz"
+    市檔 = 資料夾 / "daytrade_market.csv"
+    舊 = pd.read_csv(檔, dtype={"code": str}) if 檔.exists() else pd.DataFrame(columns=["date", "code", "shares", "buy", "sell"])
+    市舊 = pd.read_csv(市檔) if 市檔.exists() else pd.DataFrame(columns=["date", "market", "vol_pct", "value_pct"])
+    有 = set(舊["date"])
+    交易日 = sorted(d for d, 狀態 in 讀狀態().items() if 狀態 == "ok")[-天數:]
+    新們, 市們 = [], []
+    for d in reversed(交易日):
+        日 = pd.Timestamp(d)
+        if f"{日:%Y-%m-%d}" in 有:
+            continue
+        資料 = 證交所(f"https://www.twse.com.tw/rwd/zh/dayTrading/TWTB4U?date={日:%Y%m%d}&selectType=All&response=json")
+        if not 資料 or 資料.get("stat") != "OK":
+            continue
+        for _, 欄, 列 in 取得表格(資料):
+            if "證券代號" in 欄 and "當日沖銷交易成交股數" in 欄:
+                t = pd.DataFrame(列, columns=欄)
+                新們.append(pd.DataFrame({"date": f"{日:%Y-%m-%d}", "code": t["證券代號"].astype(str).str.strip(),
+                                         "shares": t["當日沖銷交易成交股數"].map(轉數字),
+                                         "buy": t["當日沖銷交易買進成交金額"].map(轉數字),
+                                         "sell": t["當日沖銷交易賣出成交金額"].map(轉數字)}))
+            elif "當日沖銷交易總成交股數占市場比重%" in 欄 and 列:
+                x = dict(zip(欄, 列[0]))
+                市們.append({"date": f"{日:%Y-%m-%d}", "market": "上市",
+                            "vol_pct": 轉數字(x["當日沖銷交易總成交股數占市場比重%"]),
+                            "value_pct": 轉數字(x.get("當日沖銷交易總買進成交金額占市場比重%", ""))})
+    資料 = 櫃買("https://www.tpex.org.tw/openapi/v1/tpex_intraday_trading_statistics")
+    for x in 資料 or []:
+        日 = _民國日期(x.get("Date"))
+        if 日:
+            市們.append({"date": 日, "market": "上櫃",
+                        "vol_pct": 轉數字(str(x.get("DayTradingVolumeOfTheMarket", "")).replace("%", "")),
+                        "value_pct": 轉數字(str(x.get("DayTradingValueOfBuyOfTheMarket", "")).replace("%", ""))})
+    if 市們:
+        市 = pd.concat([市舊, pd.DataFrame(市們)]).drop_duplicates(["date", "market"], keep="last")
+        市.sort_values(["date", "market"]).to_csv(市檔, index=False)
+    if not 新們:
+        print("當沖沒有新資料")
+        return
+    表 = pd.concat([舊] + 新們)
+    表 = 表[表["code"].str.fullmatch(代號格式) & (表["date"] >= f"{pd.Timestamp.now() - pd.Timedelta(days=190):%Y-%m-%d}")]
+    表.drop_duplicates(["date", "code"], keep="last").sort_values(["date", "code"]).to_csv(
+        檔, index=False, compression="gzip")
+    print(f"當沖完成，共 {表['date'].nunique()} 天（新增 {len(新們)} 天）")
+
+
+def _解析彙總(html, 欄們):
+    """公開資訊觀測站「彙總報表」HTML（各產業一張表）→ DataFrame(code, 欄們的鍵)。
+    欄們 = {輸出欄: [可能的表頭…]}，不同產業表頭不一樣，取第一個找得到的。"""
+    去標籤 = lambda t: re.sub(r"<[^>]+>|&nbsp;|\s", "", t)
+    列們 = []
+    for 表 in re.findall(r"<table[^>]*>(.*?)</table>", html, re.S):
+        標題 = [去標籤(t) for t in re.findall(r"<th[^>]*>(.*?)</th>", 表, re.S)]
+        if "公司代號" not in 標題:
+            continue
+        位 = {鍵: next((標題.index(h) for h in 候選 if h in 標題), None) for 鍵, 候選 in 欄們.items()}
+        for 列 in re.findall(r"<tr[^>]*>(.*?)</tr>", 表, re.S):
+            格 = [去標籤(t) for t in re.findall(r"<td[^>]*>(.*?)</td>", 列, re.S)]
+            if len(格) < len(標題) or not re.fullmatch(r"\d{4}", 格[標題.index("公司代號")]):
+                continue
+            列們.append({"code": 格[標題.index("公司代號")],
+                        **{鍵: (轉數字(格[i]) if i is not None else None) for 鍵, i in 位.items()}})
+    return pd.DataFrame(列們)
+
+
+資產負債欄 = {"assets": ["資產總計", "資產總額"], "liabilities": ["負債總計", "負債總額"],
+            "cur_assets": ["流動資產"], "cur_liab": ["流動負債"], "equity": ["權益總計", "權益總額"]}
+現金流量欄 = {"cfo": ["營業活動之淨現金流入（流出）"], "cfi": ["投資活動之淨現金流入（流出）"],
+            "cff": ["籌資活動之淨現金流入（流出）"], "cash_end": ["期末現金及約當現金餘額"]}
+
+
+def 抓財報(季數=12):
+    """各季資產負債表（季底餘額）與現金流量表（今年累計）彙總 → fundamental/balance.csv、cashflow.csv（千元）。
+    已經有的季度不重抓（最近 2 季會重抓）。"""
+    今天 = dt.date.today()
+    for 頁, 檔名, 欄們, 名 in (("ajax_t163sb05", "balance.csv", 資產負債欄, "資產負債表"),
+                            ("ajax_t163sb20", "cashflow.csv", 現金流量欄, "現金流量表")):
+        檔案 = 資料夾 / "fundamental" / 檔名
+        舊 = pd.read_csv(檔案, dtype={"code": str}) if 檔案.exists() else pd.DataFrame(columns=["code", "quarter"])
+        已有 = set(舊["quarter"])
+        年, 季 = 今天.year, (今天.month - 1) // 3 + 1
+        新們 = []
+        for i in range(季數):
+            季 -= 1
+            if 季 == 0:
+                年, 季 = 年 - 1, 4
+            季度 = f"{年}Q{季}"
+            if 季度 in 已有 and i >= 2:
+                continue
+            for 類 in ("sii", "otc"):
+                time.sleep(3)
+                try:
+                    r = requests.post(f"https://mopsov.twse.com.tw/mops/web/{頁}", headers=標頭, timeout=90,
+                                      data={"encodeURIComponent": 1, "step": 1, "firstin": 1, "off": 1, "isQuery": "Y",
+                                            "TYPEK": 類, "year": str(年 - 1911), "season": f"{季:02d}"})
+                    表 = _解析彙總(r.text, 欄們)
+                    if len(表):
+                        新們.append(表.assign(quarter=季度))
+                        print(f"  {名} {季度} {類}：{len(表)} 家")
+                except Exception as 錯誤:
+                    print(f"  {名} {季度} {類} 失敗：{錯誤}")
+        if 新們:
+            表 = pd.concat([舊] + 新們).drop_duplicates(["code", "quarter"], keep="last").sort_values(["code", "quarter"])
+            表.to_csv(檔案, index=False)
+            print(f"{名}完成，共 {表['quarter'].nunique()} 季")
+
+
+def 抓庫藏股(天數=400):
+    """公開資訊觀測站「買回自己公司股份彙總統計表」（上市＋上櫃，董事會決議日在近 天數 天內）→ data/buyback.csv。"""
+    今天 = dt.datetime.now(台北時區).date()
+    起 = 今天 - dt.timedelta(days=天數)
+    民國 = lambda d: f"{d.year - 1911}{d:%m%d}"
+    去標籤 = lambda t: re.sub(r"<[^>]+>|&nbsp;|\s", "", t)
+    列們 = []
+    for 類 in ("sii", "otc"):
+        time.sleep(3)
+        try:
+            r = requests.post("https://mopsov.twse.com.tw/mops/web/ajax_t35sc09", headers=標頭, timeout=60,
+                              data={"encodeURIComponent": 1, "step": 1, "firstin": 1, "off": 1, "TYPEK": 類,
+                                    "d1": 民國(起), "d2": 民國(今天), "RD": "1"})
+        except requests.RequestException as 錯誤:
+            print(f"庫藏股 {類} 失敗：{錯誤}")
+            continue
+        for 列 in re.findall(r"<tr[^>]*>(.*?)</tr>", r.text, re.S):
+            格 = [去標籤(t) for t in re.findall(r"<td[^>]*>(.*?)</td>", 列, re.S)]
+            if len(格) < 19 or not re.fullmatch(r"\d{4}", 格[1]) or not _民國日期(格[3]):
+                continue
+            列們.append({"code": 格[1], "name": 格[2], "board_date": _民國日期(格[3]), "purpose": 格[4],
+                        "planned": 轉數字(格[6]), "price_low": 轉數字(格[7]), "price_high": 轉數字(格[8]),
+                        "start": _民國日期(格[9]), "end": _民國日期(格[10]), "done": 格[11],
+                        "bought": 轉數字(格[13]), "pct_done": 轉數字(格[15]), "amount": 轉數字(格[16]),
+                        "avg_price": 轉數字(格[17]), "pct_shares": 轉數字(格[18])})
+    if 列們:
+        表 = pd.DataFrame(列們).drop_duplicates(["code", "board_date"], keep="last").sort_values("board_date")
+        表.to_csv(資料夾 / "buyback.csv", index=False)
+        print(f"庫藏股完成，共 {len(表)} 筆")
+    else:
+        print("庫藏股沒有資料")
+
+
+def 抓可轉債():
+    """櫃買中心「轉(交)換公司債發行資料」（上市櫃公司發行的）→ data/cb.csv：code、name、issue_date、maturity、
+    amount、outstanding（元）、conv_price（發行時轉換價）。"""
+    資料 = 櫃買("https://www.tpex.org.tw/openapi/v1/bond_ISSBD5_data")
+    if not 資料:
+        print("可轉債沒有資料")
+        return
+    t = pd.DataFrame(資料)
+    日期 = lambda s: pd.to_datetime(s.astype(str).str.strip(), format="%Y%m%d", errors="coerce").dt.strftime("%Y-%m-%d")
+    表 = pd.DataFrame({"code": t["IssuerCode"].astype(str).str.strip(), "name": t["ShortName"].astype(str).str.strip(),
+                       "issue_date": 日期(t["IssueDate"]), "maturity": 日期(t["MaturityDate"]),
+                       "amount": t["IssueAmount"].map(轉數字), "outstanding": t["OutstandingAmount"].map(轉數字),
+                       "conv_price": t["Conversion/ExchangePriceAtIssuance"].map(轉數字)})
+    表 = 表[表["code"].str.fullmatch(r"\d{4}")].dropna(subset=["issue_date"])
+    表.sort_values("issue_date").to_csv(資料夾 / "cb.csv", index=False)
+    print(f"可轉債完成，共 {len(表)} 筆")
+
+
 # ---------- 主程式 ----------
 def main():
     參數 = argparse.ArgumentParser()
@@ -1095,7 +1434,7 @@ def main():
 
     if not 參數.skip_latest:
         for 工作 in (抓分時, 抓興櫃, 抓基本面, 抓匯率, 抓處置注意, 抓借券, 抓法說會, 抓融資金額, 抓期貨未平倉, 抓小台散戶,
-                     抓美股日線, 抓經濟行事曆, 抓美股財報, 抓指數K線):  # 這些出問題不影響主資料庫
+                     抓美股日線, 抓經濟行事曆, 抓美股財報, 抓指數K線, 抓選擇權, 抓新股申購, 抓外資持股, 抓當沖, 抓庫藏股, 抓可轉債):  # 這些出問題不影響主資料庫
             try:
                 工作()
             except Exception as 錯誤:

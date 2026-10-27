@@ -398,6 +398,13 @@ def 資金面區():
         差 = 期.iloc[-1] - 期.iloc[-2] if len(期) >= 2 else np.nan
         卡們.append(卡片(f"外資台指期淨未平倉 · {期.index[-1]:%m/%d}", f"{期.iloc[-1]:+,.0f} 口",
                        "" if pd.isna(差) else f"較前一日 {差:+,.0f} 口", 漲跌色(期.iloc[-1])))
+    當沖 = engine.讀取當沖大盤()
+    if 當沖 is not None and "上市" in 當沖 and 當沖["上市"].notna().any():
+        沖 = 當沖["上市"].dropna()
+        卡們.append(卡片(f"上市當沖比重 · {沖.index[-1]:%m/%d}", f"{沖.iloc[-1]:.1f}%",
+                       f"近 20 日平均 {沖.tail(20).mean():.1f}%" + (f"；上櫃 {當沖['上櫃'].dropna().iloc[-1]:.1f}%"
+                                                                 if "上櫃" in 當沖 and 當沖["上櫃"].notna().any() else ""),
+                       "#FFC24B" if 沖.iloc[-1] >= 30 else "#EDEDED"))
     淨 = 每日["上漲"] - 每日["下跌"]
     卡們.append(卡片("上漲減下跌（今日）", f"{淨.iloc[-1]:+,.0f} 家", f"近 20 日平均 {淨.tail(20).mean():+,.0f}", 漲跌色(淨.iloc[-1])))
     卡片格(卡們)
@@ -1076,7 +1083,115 @@ def 三十秒卡():
     st.caption("燈號＝費半、加權、櫃買三個觀察條件；跌破支撐或站上壓力時，到下方「價位」區看下一個價位。僅供研究參考。")
 
 
-首頁區塊 = ["30秒", "市場", "狀態", "價位", "AI解讀", "焦點", "國際", "連動", "加權指數", "權值", "資金", "情緒", "族群", "行事曆", "排行"]
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=1)
+def 選擇權資料(_資料版本):
+    return engine.讀取選擇權()
+
+
+def 選擇權區():
+    段落("OPTIONS // 選擇權籌碼：Put/Call Ratio、外資買賣權、最大未平倉")
+    pc, 法, 分布 = 選擇權資料(_版本)
+    if pc is None and 法 is None:
+        st.caption("選擇權資料還沒下載，收盤後的資料更新會自動補上。")
+        return
+    卡們 = []
+    if pc is not None and len(pc):
+        v = pc["pc_oi"].iloc[-1]
+        差 = v - pc["pc_oi"].iloc[-2] if len(pc) > 1 else np.nan
+        卡們.append(卡片(f"P/C ratio（未平倉）· {pc.index[-1]:%m/%d}", f"{v:.1f}%",
+                       ("" if pd.isna(差) else f"較前一日 {差:+.1f}　") + ("偏多" if v >= 100 else ("偏空" if v < 80 else "中性")),
+                       紅 if v >= 100 else (綠 if v < 80 else "#EDEDED")))
+    if 法 is not None and {"foreign_call_amt", "foreign_put_amt"} <= set(法.columns):
+        買, 賣 = 法["foreign_call_amt"].iloc[-1] / 1e5, 法["foreign_put_amt"].iloc[-1] / 1e5
+        卡們.append(卡片(f"外資買權淨未平倉 · {法.index[-1]:%m/%d}", f"{買:+.2f} 億", "正＝外資買進買權較多（偏多）", 漲跌色(買)))
+        卡們.append(卡片("外資賣權淨未平倉", f"{賣:+.2f} 億", "正＝外資買進賣權較多（偏空避險）", 漲跌色(-賣)))
+    for 種類, 名 in (("week", "本週"), ("month", "本月")):
+        壓支 = engine.選擇權壓力支撐(分布, 種類, 1)
+        if 壓支 and 壓支["壓力"] and 壓支["支撐"]:
+            卡們.append(卡片(f"{名}選擇權壓力／支撐 · {壓支['合約']}", f"{壓支['壓力'][0][0]:,.0f}／{壓支['支撐'][0][0]:,.0f}",
+                           f"買權最大未平倉 {壓支['壓力'][0][1]:,.0f} 口；賣權 {壓支['支撐'][0][1]:,.0f} 口", 青))
+    卡片格(卡們)
+    壓支 = engine.選擇權壓力支撐(分布, "month", 3)
+    圖們 = st.columns(2)
+    if 壓支:
+        t = 壓支["表"]
+        中心 = 加權["close"].iloc[-1] if 加權 is not None and len(加權) else t["strike"].median()
+        t = t[t["strike"].between(中心 * 0.9, 中心 * 1.1)]
+        圖 = go.Figure([go.Bar(x=t[t["cp"] == "call"]["strike"], y=t[t["cp"] == "call"]["oi"], name="買權（壓力）", marker_color=綠),
+                        go.Bar(x=t[t["cp"] == "put"]["strike"], y=t[t["cp"] == "put"]["oi"], name="賣權（支撐）", marker_color=紅)])
+        圖.add_vline(x=中心, line=dict(color="#FFFFFF", dash="dot", width=1))
+        圖.update_layout(barmode="group", title=dict(text=f"{壓支['合約']} 各履約價未平倉（口）", font=dict(size=12)),
+                         legend=dict(orientation="h", y=1.12))
+        圖們[0].plotly_chart(圖表外觀(圖, 300), width="stretch")
+    if pc is not None and len(pc) > 5:
+        近 = pc.tail(120)
+        圖 = make_subplots(specs=[[{"secondary_y": True}]])
+        圖.add_trace(go.Scatter(x=近.index, y=近["pc_oi"], name="P/C ratio（未平倉）%", line=dict(color="#FFB020", width=2)))
+        if 加權 is not None and len(加權):
+            指 = 加權.set_index("date")["close"].reindex(近.index)
+            圖.add_trace(go.Scatter(x=近.index, y=指, name="加權指數", line=dict(color="#FFFFFF", width=1)), secondary_y=True)
+        圖.add_hline(y=100, line=dict(color=灰, dash="dot", width=1))
+        圖.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+        圖.update_layout(title=dict(text="P/C ratio 與加權指數", font=dict(size=12)), legend=dict(orientation="h", y=1.12))
+        圖們[1].plotly_chart(圖表外觀(圖, 300), width="stretch")
+    st.caption("P/C ratio＝賣權未平倉量 ÷ 買權未平倉量。台灣通常解讀為：超過 100% 偏多（賣權多，代表有人賣出 put 當支撐）、"
+               "低於 80% 偏空。買權未平倉最多的履約價常被當成壓力、賣權最多的當成支撐，結算日前參考性最高。"
+               "外資買賣權淨額單位是契約金額（億元）。資料：期交所。")
+
+
+def 事件區():
+    段落("EVENTS // 新股申購抽籤、庫藏股、可轉債")
+    分頁們 = st.tabs(["🎫 新股申購抽籤", "🛒 庫藏股", "📜 可轉債"])
+    現價 = 今日.set_index("代號")["收盤"]
+    with 分頁們[0]:
+        申 = engine.讀取新股申購()
+        if 申 is None:
+            st.caption("公開申購資料還沒下載。")
+        else:
+            t = engine.申購試算(申, 現價)
+            近 = t[t["draw_date"] >= 最新日 - pd.Timedelta(days=7)].sort_values("draw_date")
+            if not len(近):
+                st.caption("最近沒有可以申購的股票，下面是最近 10 筆。")
+                近 = t.sort_values("draw_date").tail(10)
+            顯示 = pd.DataFrame({"抽籤日": 近["draw_date"].dt.strftime("%m/%d"), "代號": 近["code"], "名稱": 近["name"],
+                                "類型": 近["market"], "申購期間": 近["start"].dt.strftime("%m/%d") + "～" + 近["end"].dt.strftime("%m/%d"),
+                                "承銷價": 近["price"], "現價": 近["現價"], "每簽獲利": 近["每簽獲利"], "報酬%": 近["報酬%"],
+                                "中籤率%": 近["win_rate"].where(近["win_rate"] > 0), "撥券日": 近["list_date"].dt.strftime("%m/%d")})
+            點選表(顯示, 上色(顯示).format({"承銷價": "{:,.2f}", "現價": "{:,.2f}", "每簽獲利": "{:+,.0f}", "報酬%": "{:+.1f}",
+                                         "中籤率%": "{:.2f}"}, na_rep="—"), "申購表", column_config={"代號": None})
+            st.caption("每簽獲利＝（現價 − 承銷價）× 1,000 股，沒扣申購手續費 20 元與中籤通知郵資 50 元；"
+                       "初上市櫃的股票還沒有現價。抽籤前一天價差可能變很多，申購前再確認一次。資料：證交所公開申購公告。")
+    with 分頁們[1]:
+        庫 = engine.讀取庫藏股()
+        if 庫 is None:
+            st.caption("庫藏股資料還沒下載。")
+        else:
+            近 = 庫[(庫["end"] >= 最新日) | (庫["board_date"] >= 最新日 - pd.Timedelta(days=45))].sort_values("board_date", ascending=False)
+            顯示 = pd.DataFrame({"決議日": 近["board_date"].dt.strftime("%m/%d"), "代號": 近["code"], "名稱": 近["name"],
+                                "預定張數": 近["planned"] / 1000, "價格下限": 近["price_low"], "價格上限": 近["price_high"],
+                                "現價": 近["code"].map(現價), "買回期間": 近["start"].dt.strftime("%m/%d") + "～" + 近["end"].dt.strftime("%m/%d"),
+                                "狀態": np.where(近["done"].astype(str).str.upper() == "Y", "已完畢", "執行中"),
+                                "已買回%": 近["pct_done"], "佔股本%": 近["pct_shares"]})
+            點選表(顯示, 上色(顯示).format({"預定張數": "{:,.0f}", "價格下限": "{:,.2f}", "價格上限": "{:,.2f}", "現價": "{:,.2f}",
+                                         "已買回%": "{:.1f}", "佔股本%": "{:.2f}"}, na_rep="—"), "庫藏股表", column_config={"代號": None})
+            st.caption("近 45 天董事會決議、或還在買回期間的庫藏股。現價接近或低於價格下限時，公司較可能進場買。"
+                       "資料：公開資訊觀測站。")
+    with 分頁們[2]:
+        債 = engine.讀取可轉債()
+        if 債 is None:
+            st.caption("可轉債資料還沒下載。")
+        else:
+            近 = 債[債["issue_date"] >= 最新日 - pd.Timedelta(days=120)].sort_values("issue_date", ascending=False)
+            顯示 = pd.DataFrame({"發行日": 近["issue_date"].dt.strftime("%Y/%m/%d"), "代號": 近["code"], "債券名稱": 近["name"],
+                                "發行億元": 近["amount"] / 1e8, "轉換價": 近["conv_price"], "現價": 近["code"].map(現價),
+                                "到期日": 近["maturity"].dt.strftime("%Y/%m/%d")})
+            點選表(顯示, 上色(顯示).format({"發行億元": "{:,.1f}", "轉換價": "{:,.2f}", "現價": "{:,.2f}"}, na_rep="—"),
+                  "可轉債表", column_config={"代號": None})
+            st.caption("近 120 天發行的國內可轉換公司債。可轉債將來轉成股票會稀釋股本；現價高於轉換價越多，越可能被轉換。"
+                       "資料：櫃買中心債券發行資料。")
+
+
+首頁區塊 = ["30秒", "市場", "狀態", "價位", "AI解讀", "焦點", "國際", "連動", "加權指數", "權值", "資金", "選擇權", "情緒", "族群", "行事曆", "事件", "排行"]
 
 
 新手區塊 = ["30秒", "市場", "狀態", "AI解讀", "焦點", "排行"]
@@ -1121,7 +1236,7 @@ def _國際():
     except Exception:
         st.caption("國際行情暫時無法顯示。")
 區塊函式 = {"30秒": 三十秒卡, "市場": 市場卡片, "狀態": 狀態區, "價位": 關鍵價位區, "AI解讀": AI解讀區, "焦點": 焦點區, "國際": _國際, "連動": 連動區,
-         "加權指數": 加權圖 if 加權 is not None and len(加權) > 1 else None, "權值": 權值區, "資金": 資金面區,
+         "加權指數": 加權圖 if 加權 is not None and len(加權) > 1 else None, "權值": 權值區, "資金": 資金面區, "選擇權": 選擇權區, "事件": 事件區,
          "情緒": 情緒區, "族群": 族群熱力圖, "行事曆": 行事曆區, "排行": 排行區}
 盤中即時條()
 要畫 = [x for x in 顯示 if 區塊函式.get(x)]

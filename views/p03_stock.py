@@ -367,6 +367,77 @@ def 停損紀律回測表(代號):
                "停損紀律的好處是避開大跌，代價是盤整時被來回洗、手續費變多；適合短線操作，長期好公司不一定適用。")
 
 
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=30)
+def 外資持股歷史(代號, _資料版本):
+    q = engine.讀取外資持股()
+    return None if q is None else q[q["code"] == 代號][["date", "ratio"]].sort_values("date").reset_index(drop=True)
+
+
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=30)
+def 當沖資料(代號, _資料版本):
+    """這檔每天的當沖比率（當沖成交股數 ÷ 成交股數，%），只有上市股票。"""
+    d = engine.讀取當沖()
+    if d is None:
+        return None
+    d = d[d["code"] == 代號]
+    史 = 個股全史(代號, _資料版本)
+    if not len(d) or 史 is None:
+        return None
+    t = d.merge(史[["date", "成交張數"]], on="date")
+    t["比率"] = (t["shares"] / 1000 / t["成交張數"] * 100).where(t["成交張數"] > 0)
+    return t.dropna(subset=["比率"])[["date", "比率", "shares"]].sort_values("date").reset_index(drop=True)
+
+
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=30)
+def 財報資料(代號, _資料版本):
+    t = engine.讀取財報(代號)
+    return None if t is None or not len(t) else t.sort_values("quarter").reset_index(drop=True)
+
+
+def 個股事件(代號):
+    """這檔近一年的公司事件：庫藏股、可轉債、公開申購（初上市櫃、現金增資）。回傳 DataFrame（日期、事件、內容）。"""
+    列們 = []
+    庫 = engine.讀取庫藏股()
+    if 庫 is not None:
+        for _, x in 庫[庫["code"] == 代號].iterrows():
+            狀態 = "已執行完畢" if str(x["done"]).upper() == "Y" else "執行中"
+            列們.append({"日期": x["board_date"], "事件": "🛒 庫藏股",
+                        "內容": f"預定買回 {x['planned'] / 1000:,.0f} 張，價格 {x['price_low']:g}～{x['price_high']:g} 元，"
+                               f"期間 {x['start']:%m/%d}～{x['end']:%m/%d}（{狀態}"
+                               + (f"，已買回 {x['bought'] / 1000:,.0f} 張、均價 {x['avg_price']:g} 元" if pd.notna(x["bought"]) else "")
+                               + "）"})
+    債 = engine.讀取可轉債()
+    if 債 is not None:
+        for _, x in 債[債["code"] == 代號].iterrows():
+            列們.append({"日期": x["issue_date"], "事件": "📜 可轉債",
+                        "內容": str(x["name"]) + (f"，發行 {x['amount'] / 1e8:,.1f} 億元" if pd.notna(x["amount"]) else "")
+                               + (f"，轉換價 {x['conv_price']:g} 元" if pd.notna(x["conv_price"]) else "")})
+    申 = engine.讀取新股申購()
+    if 申 is not None:
+        for _, x in 申[申["code"] == 代號].iterrows():
+            列們.append({"日期": x["draw_date"], "事件": "🎫 " + ("現金增資" if "增資" in str(x["market"]) else "公開申購"),
+                        "內容": f"{x['market']}，承銷價 {x['price']:g} 元、{x['shares'] / 1000:,.0f} 張，"
+                               f"申購 {x['start']:%m/%d}～{x['end']:%m/%d}，抽籤 {x['draw_date']:%m/%d}"
+                               + (f"，中籤率 {x['win_rate']:g}%" if pd.notna(x["win_rate"]) and x["win_rate"] else "")})
+    if not 列們:
+        return None
+    t = pd.DataFrame(列們).dropna(subset=["日期"]).sort_values("日期", ascending=False)
+    return t[t["日期"] >= pd.Timestamp.now() - pd.Timedelta(days=400)]
+
+
+def 個股筆記(代號):
+    if not 可編輯():
+        return
+    筆 = engine.研究時間軸(研究筆記(), 代號=代號)
+    段落("NOTES // 我的研究筆記")
+    for _, x in 筆.head(8).iterrows():
+        圖 = {"看多": "🔴", "看空": "🟢"}.get(x["看法"], "⚪")
+        st.markdown(f"- `{x['日期']:%Y/%m/%d}` {圖} {x['內容']}")
+    with st.expander("✏️ 幫這檔寫一則筆記", expanded=筆.empty):
+        筆記輸入(f"個股{代號}", 代號)
+    st.caption("所有筆記、券商報告、網紅說法的時間軸在「04 選股 → 📝 研究筆記」。")
+
+
 def 個股網紅說法(代號):
     說們 = [(v, x) for v in 網紅說法清單(st.session_state.get("_網紅版本", 0)) for x in v.get("股票", [])
            if str(x.get("代號")) == str(代號)]
@@ -647,6 +718,38 @@ with 分頁[1]:
         st.caption("借券賣出＝法人借股票來放空。餘額增加代表看空的人變多（綠）；減少代表空方回補（紅），"
                    "股價上漲時空方回補會加大漲勢。")
 
+    外資史, 當沖史 = 外資持股歷史(代號, _版本), 當沖資料(代號, _版本)
+    投信佔 = r.get("投信60日買超佔股本")
+    if (外資史 is not None and len(外資史)) or (當沖史 is not None and len(當沖史)) or pd.notna(投信佔):
+        段落("HOLDING // 外資持股比、投信買超佔股本、當沖比率")
+        卡們 = []
+        if 外資史 is not None and len(外資史):
+            最, 前 = 外資史.iloc[-1], 外資史.iloc[max(len(外資史) - 21, 0)]
+            差 = 最["ratio"] - 前["ratio"]
+            卡們.append(卡片(f"外資持股比 · {最['date']:%m/%d}", f"{最['ratio']:.2f}%",
+                           f"較 {前['date']:%m/%d} {差:+.2f} 個百分點", 漲跌色(差)))
+        if pd.notna(投信佔):
+            卡們.append(卡片("投信近 60 日買超佔股本", f"{投信佔:+.2f}%", "投信不公布持股，用累計買超估算", 漲跌色(投信佔)))
+        if 當沖史 is not None and len(當沖史):
+            近5 = 當沖史.tail(5)["比率"].mean()
+            卡們.append(卡片(f"當沖比率 · {當沖史['date'].iloc[-1]:%m/%d}", f"{當沖史['比率'].iloc[-1]:.1f}%",
+                           f"近 5 日平均 {近5:.1f}%、近 20 日 {當沖史.tail(20)['比率'].mean():.1f}%",
+                           "#FFC24B" if 近5 >= 40 else "#EDEDED"))
+        卡片格(卡們)
+        if 外資史 is not None and len(外資史) >= 5:
+            價 = 個股全史(代號, _版本)[["date", "收盤"]]
+            價 = 價[價["date"] >= 外資史["date"].min()]
+            圖 = make_subplots(specs=[[{"secondary_y": True}]])
+            圖.add_trace(go.Scatter(x=外資史["date"], y=外資史["ratio"], name="外資持股比 %", line=dict(color="#FFB020", width=2)))
+            if 當沖史 is not None and len(當沖史):
+                圖.add_trace(go.Bar(x=當沖史["date"], y=當沖史["比率"], name="當沖比率 %", marker_color="#5A3A8C", opacity=0.6))
+            圖.add_trace(go.Scatter(x=價["date"], y=價["收盤"], name="股價", line=dict(color="#FFFFFF", width=1.2)),
+                         secondary_y=True)
+            圖.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+            st.plotly_chart(圖表外觀(圖, 260), width="stretch")
+        st.caption("外資持股比：證交所、櫃買中心每天公布，持續上升代表外資長線布局。"
+                   "當沖比率＝當沖成交股數 ÷ 成交股數（只有上市股票），超過 40% 代表短線客多、股價容易暴漲暴跌。")
+
 with 分頁[2]:
     段落("FUNDAMENTAL // 基本面")
     營收 = r.get("營收年增率")
@@ -708,6 +811,43 @@ with 分頁[2]:
             表格(顯示.style.format({"權值+息值": "{:.4g}", "除權息前收盤": "{:,.2f}", "參考價": "{:,.2f}"}),
                          hide_index=True, width="stretch", height=min(35 * (len(顯示) + 1) + 3, 320))
             st.caption("填息天數 = 除權息後，收盤價回到除權息前收盤價花了幾個交易日。資料：證交所、櫃買中心（近 6 年）。")
+
+    財 = 財報資料(代號, _版本)
+    if 財 is not None and "cfo" in 財.columns and 財["cfo"].notna().any():
+        段落("HEALTH // 財務體質：負債與現金流")
+        最 = 財.dropna(subset=["assets"]).iloc[-1] if "assets" in 財 and 財["assets"].notna().any() else None
+        卡片格([
+            卡片("負債比", 數(r.get("負債比"), "{:.1f}", "%"), f"{最['quarter']} 季底" if 最 is not None else "",
+                 "#FFC24B" if (r.get("負債比") or 0) >= 70 else "#EDEDED"),
+            卡片("流動比", 數(r.get("流動比"), "{:.0f}", "%"), "流動資產 ÷ 流動負債，低於 100% 要留意"),
+            卡片("近四季營業現金流", 數(r.get("近四季營業現金流億"), "{:+,.1f}", " 億"), "", 漲跌色(r.get("近四季營業現金流億") or 0)),
+            卡片("近四季自由現金流", 數(r.get("近四季自由現金流億"), "{:+,.1f}", " 億"), "營業＋投資現金流",
+                 漲跌色(r.get("近四季自由現金流億") or 0)),
+            卡片("期末現金", 數(財["cash_end"].dropna().iloc[-1] / 1e5 if 財["cash_end"].notna().any() else np.nan, "{:,.1f}", " 億"),
+                 財.dropna(subset=["cash_end"])["quarter"].iloc[-1] if 財["cash_end"].notna().any() else ""),
+        ])
+        近 = 財.tail(8)
+        圖 = go.Figure([go.Bar(x=近["quarter"], y=近["cfo"] / 1e5, name="營業現金流（億）", marker_color=青),
+                        go.Bar(x=近["quarter"], y=近["fcf"] / 1e5, name="自由現金流（億）", marker_color="#FFB020")])
+        圖.update_layout(barmode="group", legend=dict(orientation="h", y=1.12))
+        st.plotly_chart(圖表外觀(圖, 260), width="stretch")
+        顯示 = pd.DataFrame({"季度": 近["quarter"], "營業現金流(億)": 近["cfo"] / 1e5, "投資現金流(億)": 近["cfi"] / 1e5,
+                            "自由現金流(億)": 近["fcf"] / 1e5, "籌資現金流(億)": 近["cff"] / 1e5,
+                            "期末現金(億)": 近["cash_end"] / 1e5,
+                            "負債比%": 近["liabilities"] / 近["assets"] * 100 if "assets" in 近 else np.nan,
+                            "流動比%": 近["cur_assets"] / 近["cur_liab"] * 100 if "cur_liab" in 近 else np.nan}).iloc[::-1]
+        表格(顯示.style.format("{:,.1f}", subset=[c for c in 顯示.columns if c != "季度"], na_rep="—"),
+             hide_index=True, width="stretch")
+        st.caption("資料：公開資訊觀測站各季財報彙總（單季數字由今年累計數相減而來）。自由現金流這裡用「營業＋投資現金流」簡單估算；"
+                   "營業現金流長期為負、或負債比持續升高的公司要特別小心。金融業沒有流動比。")
+
+    事件 = 個股事件(代號)
+    if 事件 is not None and len(事件):
+        段落("EVENTS // 公司事件：庫藏股、可轉債、現金增資")
+        表格(事件.assign(日期=事件["日期"].dt.strftime("%Y/%m/%d")), hide_index=True, width="stretch",
+             column_config={"內容": st.column_config.TextColumn(width="large")})
+        st.caption("庫藏股（公司買回自家股票）通常代表公司認為股價偏低；可轉債、現金增資會增加股數（稀釋），"
+                   "但募到的錢若用在擴產也可能是利多。資料：公開資訊觀測站、櫃買中心、證交所。")
 
     同業 = engine.同族群(今日, 代號)
     if 同業 is not None and len(同業) > 1:
@@ -1038,3 +1178,4 @@ with 分頁[4]:
                         st.divider()
     個股券商報告(代號, float(r["收盤"]))
     個股網紅說法(代號)
+    個股筆記(代號)

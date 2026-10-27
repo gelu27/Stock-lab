@@ -195,6 +195,40 @@ def 策略排行區():
                "會偷看未來，所以沒列入。這是歷史統計，不代表之後也會一樣。")
 
 
+def 研究筆記區():
+    段落("NOTES // 研究筆記")
+    st.caption("自己的筆記、券商報告、網紅說法放在同一條時間軸，可以只看某一檔。有設密碼時，自己的筆記會加密後才存到 GitHub。")
+    if not 可編輯():
+        st.caption("要先到「02 / 我的股票」輸入密碼解鎖，才能看和寫自己的筆記。")
+        筆記們 = []
+    else:
+        with st.expander("✏️ 寫一則筆記", expanded=not 研究筆記()):
+            筆記輸入("總頁")
+        筆記們 = 研究筆記()
+    a, b = st.columns([2, 1])
+    股 = a.selectbox("只看這檔", 股票選項, index=None, placeholder="全部股票", key="筆記篩選")
+    來源們 = b.pills("來源", ["📝 我的筆記", "🏦 券商報告", "🎬 網紅說法"], selection_mode="multi",
+                    default=["📝 我的筆記", "🏦 券商報告", "🎬 網紅說法"], key="筆記來源")
+    t = engine.研究時間軸(筆記們, 券商報告清單(st.session_state.get("_券商版本", 0)),
+                      網紅說法清單(st.session_state.get("_網紅版本", 0)), 股.split(" ")[0] if 股 else None)
+    t = t[t["來源"].isin(來源們 or [])]
+    if t.empty:
+        st.caption("沒有符合的紀錄。")
+    else:
+        t["名稱"] = t["代號"].map(市場名稱).fillna("")
+        t["日期"] = t["日期"].dt.strftime("%Y/%m/%d")
+        表格(t[["日期", "來源", "名稱", "出處", "看法", "內容", "代號"]].style
+             .map(lambda v: f"color:{紅}" if v in ("看多", "偏多", "買進") else (f"color:{綠}" if v in ("看空", "偏空", "賣出") else ""), subset=["看法"]),
+             hide_index=True, width="stretch", height=min(35 * (len(t) + 1) + 3, 600),
+             column_config={"內容": st.column_config.TextColumn(width="large")})
+    if 筆記們:
+        標籤 = [f"{x['日期']} {x.get('代號') or '（大盤）'} {市場名稱.get(x.get('代號'), '')}：{x['內容'][:30]}" for x in 筆記們]
+        刪 = st.multiselect("要刪除的筆記", range(len(筆記們)), format_func=lambda i: 標籤[i], key="刪筆記")
+        if 刪 and st.button(f"🗑️ 刪除 {len(刪)} 則", key="刪筆記鈕"):
+            存研究筆記([x for i, x in enumerate(筆記們) if i not in set(刪)])
+            st.rerun()
+
+
 def 訂閱清單():
     if "條件訂閱" not in st.session_state:
         try:
@@ -239,7 +273,9 @@ def 條件訂閱區(條件, 範本, 結果):
 
 
 # ---------- 04 選股 ----------
-選股分頁 = st.tabs(["條件選股", "烏賊每日功課", "烏賊策略總覽", "🏆 策略排行榜", "券商報告", "網紅說法"])
+選股分頁 = st.tabs(["條件選股", "烏賊每日功課", "烏賊策略總覽", "🏆 策略排行榜", "券商報告", "網紅說法", "📝 研究筆記"])
+with 選股分頁[6]:
+  研究筆記區()
 with 選股分頁[3]:
   策略排行區()
 with 選股分頁[4]:
@@ -309,6 +345,11 @@ with 選股分頁[0]:
                       "營收年增率", "營收月增率", "累計營收年增率", "EPS", "成交張數",
                       "外資買超", "投信買超", "法人5日買超", "外資連買", "投信連買", "融資5日增減",
                       "20日漲幅", "RSI", "量比", "距52週高點"] if c in 結果.columns]
+  for 鍵, 欄們 in (("外資持股比下限", ["外資持股比", "外資持股20日變化"]), ("外資持股20日變化下限", ["外資持股比", "外資持股20日變化"]),
+                 ("當沖比率上限", ["當沖比率"]), ("負債比上限", ["負債比", "流動比"]),
+                 ("自由現金流為正", ["近四季營業現金流億", "近四季自由現金流億"])):
+      if 條件.get(鍵) is not None:
+          顯示欄 += [c for c in 欄們 if c in 結果.columns and c not in 顯示欄]
   if 範本 != "自訂條件":  # 烏賊條件多看幾個相關欄位
       顯示欄[3:3] = [c for c in ["週轉率", "股本億", "量對5日均", "5日均量", "10日漲幅", "30日漲幅", "40日漲幅",
                                "法人10日買超", "近三季EPS"] if c in 結果.columns]

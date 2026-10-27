@@ -494,7 +494,8 @@ def 健康檢查():
     借 = _最新檔日("sbl")
     if 價 and 借 and 借 < 價:
         問題.append(f"借券賣出資料落後（最新 {借:%m/%d}，股價 {價:%m/%d}）")
-    for 名稱, 檔 in (("融資金額（融資維持率用）", "margin_total.csv"), ("外資台指期未平倉", "futures_oi.csv")):
+    for 名稱, 檔 in (("融資金額（融資維持率用）", "margin_total.csv"), ("外資台指期未平倉", "futures_oi.csv"),
+                     ("外資持股比", "qfii.csv.gz"), ("上市個股當沖", "daytrade.csv.gz"), ("選擇權籌碼", "options_pc.csv")):
         最新 = 讀(檔, "date")
         if 價 and 最新 and (價 - pd.Timestamp(最新).date()).days > 4:
             問題.append(f"{名稱}落後（最新 {pd.Timestamp(最新):%m/%d}，股價 {價:%m/%d}）")
@@ -518,11 +519,37 @@ def 健康檢查():
         except Exception as e:
             問題.append(f"{名稱}：連不上（{type(e).__name__}）")
 
+    try:
+        錯 = 網站錯誤()
+    except Exception as e:
+        print("網站錯誤紀錄讀取失敗：", repr(e))
+        錯 = []
+    if 錯:
+        推播("🐞 台股觀測實驗室：網站有新的錯誤\n" + "\n".join(f"・{x}" for x in 錯)
+             + "\n\n可以把這段訊息貼給 Claude 修。")
     if 問題:
         推播("⚠️ 台股觀測實驗室：資料來源異常\n" + "\n".join(f"・{x}" for x in 問題)
              + "\n\n網站其他功能照常，可以到 GitHub Actions 看「更新資料庫」的紀錄。")
     else:
         print("資料來源全部正常")
+
+
+def 網站錯誤():
+    """網站 errors.json 裡上次通知之後新發生（或又發生）的錯誤。"""
+    紀錄, _ = 讀設定("errors.json")
+    if not 紀錄:
+        return []
+    狀態, sha = 讀設定("alert_state.json")
+    已通知 = 狀態.get("網站錯誤已通知", {})
+    新 = [(k, v) for k, v in 紀錄.items() if v.get("次數", 0) > 已通知.get(k, 0)]
+    if not 新:
+        return []
+    狀態["網站錯誤已通知"] = {**已通知, **{k: v["次數"] for k, v in 新}}
+    try:
+        寫設定("alert_state.json", 狀態, sha)
+    except Exception as e:
+        print("提醒狀態存檔失敗：", repr(e))
+    return [f"{v['頁面']}：{v['類型']} {v['訊息'][:80]}（{v.get('位置', '')}，共 {v['次數']} 次，最近 {v['最近']}）" for _, v in 新]
 
 
 def 週報():
