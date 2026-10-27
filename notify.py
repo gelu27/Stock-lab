@@ -543,7 +543,7 @@ def 大盤解讀(模式):
         engine.儲存大盤解讀(設定, 模式, 內容, 模型)
     except Exception as e:
         print("存檔失敗：", repr(e))
-    文字 = re.sub(r"^#+\s*", "▍", 內容, flags=re.M).replace("**", "")
+    文字 = re.sub(r"^#+\s*", "▍", engine.拆解解讀條件(內容)[0], flags=re.M).replace("**", "")
     推播(f"🧠 {模式}大盤解讀（{dt.datetime.now(台北):%m/%d %H:%M}）\n\n{文字}")
 
 
