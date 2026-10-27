@@ -2179,8 +2179,9 @@ def 權值區():
                 f"權重 {表.loc[表['代號'] == '2330', '權重'].sum():.1f}%", 漲跌色(表.loc[表['代號'] == '2330', '貢獻點數'].sum()))])
     撐 = 表[表["貢獻點數"] > 0].nlargest(10, "貢獻點數")
     拖 = 表[表["貢獻點數"] < 0].nsmallest(10, "貢獻點數")
-    # 左右對照：左邊撐盤（紅）、右邊拖盤（綠），各 10 檔，由上往下影響越來越小；兩邊用同一個刻度才比得出大小
-    圖 = make_subplots(rows=1, cols=2, horizontal_spacing=0.06,
+    # 像一棵樹：中間一條線，撐盤紅條往左長、拖盤綠條往右長，「代號 名稱」在最外側；各 10 檔，由上往下影響越來越小
+    # 兩邊用同一個刻度才比得出大小
+    圖 = make_subplots(rows=1, cols=2, horizontal_spacing=0,
                       subplot_titles=(f"撐盤 前 {len(撐)} 檔", f"拖盤 前 {len(拖)} 檔"))
     for 欄, 組, 色 in ((1, 撐, 紅), (2, 拖, 綠)):
         組 = 組.assign(值=組["貢獻點數"].abs())
@@ -2191,8 +2192,12 @@ def 權值區():
                             hovertemplate="%{y}<br>貢獻 %{customdata[0]:+.1f} 點<br>漲跌 %{customdata[1]:+.2f}%"
                                           "<br>權重 %{customdata[2]:.2f}%<extra></extra>"), row=1, col=欄)
     最大 = max(撐["貢獻點數"].abs().max() if len(撐) else 0, 拖["貢獻點數"].abs().max() if len(拖) else 0) or 1
-    圖.update_xaxes(range=[0, 最大 * 1.25], showticklabels=False, gridcolor="#151515", zeroline=False)
-    圖.update_yaxes(type="category", autorange="reversed", gridcolor="#151515", tickfont=dict(size=11))
+    圖.update_xaxes(showticklabels=False, showgrid=False, zeroline=False)
+    圖.update_xaxes(range=[最大 * 1.3, 0], row=1, col=1)  # 左邊反過來，條從中間往左長
+    圖.update_xaxes(range=[0, 最大 * 1.3], row=1, col=2)
+    圖.update_yaxes(type="category", autorange="reversed", showgrid=False, tickfont=dict(size=11), ticks="")
+    圖.update_yaxes(side="right", row=1, col=2)
+    圖.add_vline(x=0, line=dict(color="#555", width=1), row=1, col=1)
     圖.update_annotations(font=dict(size=12, color="#BDBDBD"))
     圖表外觀(圖, 30 * max(len(撐), len(拖), 1) + 60).update_layout(hovermode="closest", showlegend=False,
                                                             margin=dict(l=4, r=4, t=28, b=6))
