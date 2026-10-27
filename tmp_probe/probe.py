@@ -30,3 +30,4 @@ for 名, 工作, 檔 in (("選擇權", u.抓選擇權, ["options_pc.csv", "optio
                 print(t[t["code"].isin(["2330", "2881", "6488", "5274"])].tail(8))
         else:
             print(f"--- {f} 沒有產生")
+# 第 2 次
