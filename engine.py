@@ -2854,7 +2854,8 @@ def 美股連動(指標, 分類="產業", 天數=120, 最少檔數=5):
 解讀模式 = {
     "盤前": "台股開盤前（08:30）的盤前解讀：昨晚美股、費半、台積電 ADR 與台指期夜盤怎麼走，今天開盤可能在哪個位置、受影響的族群、"
             "今天要注意的事件，以及今天盤中要看的 2～3 個價位或條件。",
-    "收盤": "台股收盤後的收盤分析：今天盤勢結構（指數位置、誰在撐盤、漲跌家數、量價）、強弱族群與避風港、資金流向（外資、投信、融資、期貨）、"
+    "收盤": "台股收盤後的收盤分析：如果數據裡有「收盤對答案」，第一段先用 2～3 句說早上與前一晚提出的條件哪些成立、哪些沒有，"
+            "沒成立的要說代表什麼；接著是今天盤勢結構（指數位置、誰在撐盤、漲跌家數、量價）、強弱族群與避風港、資金流向（外資、投信、融資、期貨）、"
             "今天有沒有跌破或站回重要價位、明天要看的 2～3 個價位或條件。",
     "夜盤": "晚上 22:00 的夜盤與美股解讀：美股開盤、費半與台指期夜盤表現、國際事件，對照台股的關鍵價位，提出明天的劇本。",
 }
@@ -3010,9 +3011,18 @@ def AI大盤解讀(摘要, 模式, 設定):
     """用 Gemini（有 GEMINI_API_KEY）或 Claude 寫大盤解讀。回傳 (Markdown, 模型名稱)。"""
     import datetime as dt
     現在 = dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).strftime("%Y-%m-%d %H:%M")
+    if 模式 == "收盤":
+        try:
+            回顧 = 條件回顧文字(驗收大盤解讀(讀取大盤解讀(設定), {"加權": 讀取指數K線("TAIEX"), "櫃買": 讀取指數K線("TPEX")}),
+                          讀取指數K線("TAIEX")["date"].iloc[-1])
+            if 回顧:
+                摘要 = f"{摘要}\n\n{回顧}"
+        except Exception as e:
+            print("條件回顧失敗：", repr(e))
     問題 = f"現在是台灣時間 {現在}。請寫「{模式}」解讀：{解讀模式[模式]}\n\n以下是最新數據：\n{摘要}"
+    系統 = 大盤解讀提示 + 解讀條件說明
     if str(設定.get("GEMINI_API_KEY", "")).strip():
-        內容 = {"systemInstruction": {"parts": [{"text": 大盤解讀提示}]},
+        內容 = {"systemInstruction": {"parts": [{"text": 系統}]},
                 "contents": [{"role": "user", "parts": [{"text": 問題}]}]}
         回應, 模型 = Gemini呼叫(內容, 清理金鑰(設定["GEMINI_API_KEY"]), str(設定.get("GEMINI_MODEL", "gemini-flash-latest")))
         候選 = (回應.json().get("candidates") or [{}])[0]
@@ -3021,7 +3031,7 @@ def AI大盤解讀(摘要, 模式, 設定):
         import anthropic
         模型 = str(設定.get("AI_MODEL", "claude-opus-5-5"))
         回應 = anthropic.Anthropic(api_key=清理金鑰(設定["ANTHROPIC_API_KEY"])).messages.create(
-            model=模型, max_tokens=4000, system=大盤解讀提示, messages=[{"role": "user", "content": 問題}])
+            model=模型, max_tokens=4000, system=系統, messages=[{"role": "user", "content": 問題}])
         文字 = "".join(b.text for b in 回應.content if b.type == "text").strip()
     else:
         raise RuntimeError("沒有設定 GEMINI_API_KEY 或 ANTHROPIC_API_KEY。")
@@ -3042,7 +3052,8 @@ def 儲存大盤解讀(設定, 模式, 內容, 模型, 保留=60):
     import datetime as dt
     現在 = dt.datetime.now(dt.timezone(dt.timedelta(hours=8)))
     全部 = 讀取大盤解讀(設定)
-    全部[f"{現在:%Y-%m-%d}_{模式}"] = {"時間": f"{現在:%Y-%m-%d %H:%M}", "模式": 模式, "內容": 內容, "模型": 模型}
+    內容, 條 = 拆解解讀條件(內容)
+    全部[f"{現在:%Y-%m-%d}_{模式}"] = {"時間": f"{現在:%Y-%m-%d %H:%M}", "模式": 模式, "內容": 內容, "模型": 模型, **條}
     全部 = dict(sorted(全部.items())[-保留:])
     return 儲存設定檔(設定, "briefs.json", 全部, f"{模式}大盤解讀 {現在:%m/%d}")
 
@@ -3731,3 +3742,326 @@ def 評價方法建議(產業, EPS=None):
     if 產業 in ("航運業", "鋼鐵工業", "塑膠工業", "水泥工業", "造紙工業"):
         return "景氣循環股：獲利高峰時本益比會偏低，建議同時看股價淨值比（P/B）與本益比"
     return "本益比（P/E）：未來 4 季或明年 EPS × 合理倍數"
+
+
+# ========== 26. 大盤解讀的觀察條件：對答案與記分板 ==========
+解讀條件說明 = """
+最後面另外附上一個 ```json 程式碼區塊（給網站對答案用，讀者看不到），最多 3 條條件，價位只能用數據裡的數字：
+{"看法": "偏多/中性/偏空", "條件": [{"說明": "加權收盤守住 45,000", "指數": "加權/櫃買", "方向": "站上/守住/跌破", "價位": 45000}]}"""
+
+
+def 拆解解讀條件(文字):
+    """把解讀最後的 json 區塊拆出來；回傳 (給人看的內文, {"看法", "條件"} 或 {})。"""
+    import json, re
+    配 = re.search(r"```json\s*(\{.*?\})\s*```", 文字, re.S)
+    if not 配:
+        return 文字, {}
+    try:
+        資料 = json.loads(配.group(1))
+    except Exception:
+        資料 = {}
+    條件 = []
+    for c in 資料.get("條件") or []:
+        try:
+            if c.get("指數") in ("加權", "櫃買") and c.get("方向") in ("站上", "守住", "跌破"):
+                條件.append({"說明": str(c.get("說明", ""))[:60], "指數": c["指數"], "方向": c["方向"], "價位": float(c["價位"])})
+        except (TypeError, ValueError):
+            continue
+    看法 = 資料.get("看法") if 資料.get("看法") in ("偏多", "中性", "偏空") else None
+    return (文字[: 配.start()] + 文字[配.end():]).strip(), {"看法": 看法, "條件": 條件[:3]}
+
+
+def 解讀驗收日(時間, 交易日):
+    """解讀寫完後第一個收盤（13:30）的交易日：盤前驗當天、收盤與夜盤驗下一個交易日。交易日＝由舊到新的日期。"""
+    t = pd.Timestamp(str(時間)[:16])
+    for d in 交易日:
+        if pd.Timestamp(d) + pd.Timedelta(hours=13, minutes=30) > t:
+            return pd.Timestamp(d)
+    return None
+
+
+def 驗收大盤解讀(紀錄, K們):
+    """K們＝{"加權": K, "櫃買": K}。回傳每篇解讀的對答案結果（由新到舊），還沒到驗收日的不列。
+    看法：偏多＋加權收紅、偏空＋加權收黑＝對；中性不計分。條件：站上／守住＝收盤 ≥ 價位，跌破＝收盤 < 價位。"""
+    加 = K們.get("加權")
+    if 加 is None or len(加) < 2:
+        return []
+    交易日 = list(加["date"])
+    收們 = {名: K.set_index("date")["close"] for 名, K in K們.items() if K is not None}
+    結果 = []
+    for 鍵, v in sorted(紀錄.items(), reverse=True):
+        條 = v.get("條件") or []
+        if not 條 and not v.get("看法"):
+            continue
+        日 = 解讀驗收日(v.get("時間", ""), 交易日)
+        if 日 is None or 日 not in 收們["加權"].index:
+            continue
+        i = 交易日.index(日)
+        if i == 0:
+            continue
+        幅 = (收們["加權"][日] / 收們["加權"][交易日[i - 1]] - 1) * 100
+        看 = v.get("看法")
+        對 = None if 看 in (None, "中性") else bool((看 == "偏多") == (幅 > 0))
+        明細 = []
+        for c in 條:
+            s = 收們.get(c["指數"])
+            if s is None or 日 not in s.index:
+                continue
+            收 = float(s[日])
+            成立 = 收 < c["價位"] if c["方向"] == "跌破" else 收 >= c["價位"]
+            明細.append({**c, "收盤": 收, "成立": bool(成立)})
+        結果.append({"鍵": 鍵, "時間": v.get("時間"), "模式": v.get("模式"), "看法": 看, "驗收日": 日,
+                   "加權漲跌%": float(幅), "看法對": 對, "條件": 明細})
+    return 結果
+
+
+def 條件回顧文字(驗收, 日期):
+    """收盤解讀用：今天（日期）要驗收的盤前與前一晚條件，整理成給 AI 的文字。"""
+    今 = [x for x in 驗收 if x["驗收日"] == pd.Timestamp(日期)]
+    if not 今:
+        return ""
+    行 = ["【今天早上與前一晚解讀提出的條件，收盤對答案】"]
+    for x in 今:
+        行.append(f"{x['時間']} {x['模式']}解讀（看法 {x['看法'] or '未標'}，加權今天 {x['加權漲跌%']:+.2f}%）：" + "；".join(
+            f"{c['說明']} → {'成立' if c['成立'] else '沒有成立'}（{c['指數']}收 {c['收盤']:,.2f}）" for c in x["條件"]))
+    return "\n".join(行)
+
+
+def 解讀記分(驗收, 篇數=20):
+    """最近 N 篇的看法命中率與條件成立率。"""
+    近 = 驗收[:篇數]
+    看 = [x["看法對"] for x in 近 if x["看法對"] is not None]
+    條 = [c["成立"] for x in 近 for c in x["條件"]]
+    return {"篇數": len(近), "看法篇數": len(看), "看法命中": sum(看), "條件數": len(條), "條件成立": sum(條)}
+
+
+# ========== 27. 券商報告收件匣：讀 PDF／截圖、修正追蹤、驗收、交叉驗證 ==========
+券商報告提示 = """你是台股研究助理。使用者上傳一份券商或投顧研究報告（PDF），或一張整理多檔目標價的截圖。
+請把裡面「每一檔股票」的評等資訊抽出來，只輸出一個 JSON 陣列（不要其他文字），每個元素：
+{"代號": "4 碼台股代號，美股用英文代號", "名稱": "", "券商": "券商或投顧名稱", "日期": "YYYY-MM-DD 報告日期",
+ "評等": "原文評等，例如 買進、Buy、增加持股、中立", "看法": "看多/中性/看空",
+ "目標價": 數字或 null, "前次目標價": 數字或 null, "報告收盤價": 數字或 null,
+ "EPS今年": 數字或 null, "EPS明年": 數字或 null, "前次EPS今年": 數字或 null, "前次EPS明年": 數字或 null,
+ "評價方法": "例如 25 倍 × 2027 EPS 32.5；沒寫就 null", "評等定義": "例如 買進＝6 個月絕對報酬 15～30%；沒寫就 null",
+ "理由": "用自己的話寫 60 字內的核心理由，不要照抄原文",
+ "風險": "30 字內", "追蹤指標": "30 字內，報告提到要觀察的事",
+ "白話": ["用 5 句白話向新手解釋：1 這份報告在說什麼 2 為什麼看好或看壞 3 目標價怎麼算出來 4 什麼情況代表看錯 5 現在價格貴不貴（用報告數字判斷）"],
+ "可核對": [{"項目": "月營收/季營收/收盤價/毛利率", "期間": "例如 2026-09 或 3Q26 或 2026-10-21", "數值": 數字, "單位": "億元/元/%", "年增%": 數字或 null, "月增%": 數字或 null}]}
+規則：數字填純數字；報告沒寫的填 null，不要猜；截圖裡每一列都是一筆（同一檔不同券商分開）；箭頭 ▲▼ 旁的「原 X」是前次數值；
+EPS 欄若有兩個數字，上面是今年、下面是明年；「可核對」只放報告裡明確寫出的實績數字（不要放預估）。
+截圖沒有理由、白話等資訊時，那些欄位填 null 或空陣列。"""
+
+
+def AI讀券商報告(檔案, 檔名, 引擎, 金鑰, 模型):
+    """把 PDF 或圖片交給 AI 抽出評等資料。回傳 list[dict]。"""
+    import base64, json, re
+    小 = 檔名.lower()
+    類 = "application/pdf" if 小.endswith(".pdf") else ("image/png" if 小.endswith(".png") else "image/jpeg")
+    if 引擎 == "Gemini":
+        內容 = {"contents": [{"role": "user", "parts": [
+                    {"inline_data": {"mime_type": 類, "data": base64.b64encode(檔案).decode()}},
+                    {"text": 券商報告提示}]}],
+                "generationConfig": {"responseMimeType": "application/json"}}
+        回應, _ = Gemini呼叫(內容, 金鑰, 模型)
+        候選 = (回應.json().get("candidates") or [{}])[0]
+        文字 = "".join(p.get("text", "") for p in (候選.get("content") or {}).get("parts", []))
+    else:
+        import anthropic
+        區 = ({"type": "document", "source": {"type": "base64", "media_type": 類, "data": base64.b64encode(檔案).decode()}}
+             if 類 == "application/pdf" else
+             {"type": "image", "source": {"type": "base64", "media_type": 類, "data": base64.b64encode(檔案).decode()}})
+        回應 = anthropic.Anthropic(api_key=金鑰).messages.create(
+            model=模型, max_tokens=8000, system=券商報告提示,
+            messages=[{"role": "user", "content": [區, {"type": "text", "text": "請抽出這份報告的資料。"}]}])
+        文字 = "".join(b.text for b in 回應.content if b.type == "text")
+    配 = re.search(r"\[.*\]", 文字, re.S)
+    if not 配:
+        raise RuntimeError("AI 沒有讀出任何報告資料，請確認檔案是券商報告或目標價截圖。")
+    資料 = json.loads(配.group(0))
+    結果 = []
+    for x in 資料 if isinstance(資料, list) else []:
+        if not isinstance(x, dict) or not x.get("代號"):
+            continue
+        x["代號"] = str(x["代號"]).strip().upper()
+        x["來源檔"] = 檔名
+        結果.append(x)
+    return 結果
+
+
+def 讀取券商報告(設定):
+    try:
+        return (讀取設定檔(設定, "broker_reports.json") or {}).get("報告", [])
+    except Exception:
+        return []
+
+
+def 合併券商報告(舊, 新):
+    """同一檔、同券商、同日期視為同一份，新的覆蓋舊的。回傳依日期由新到舊的清單。"""
+    鍵 = lambda x: (x.get("代號"), x.get("券商"), x.get("日期"))
+    表 = {鍵(x): x for x in 舊}
+    for x in 新:
+        表[鍵(x)] = {**表.get(鍵(x), {}), **x}
+    return sorted(表.values(), key=lambda x: str(x.get("日期") or ""), reverse=True)
+
+
+def 儲存券商報告(設定, 報告們):
+    return 儲存設定檔(設定, "broker_reports.json", {"報告": 報告們}, f"券商報告 {len(報告們)} 筆")
+
+
+def _數(v):
+    try:
+        f = float(v)
+        return f if np.isfinite(f) else np.nan
+    except (TypeError, ValueError):
+        return np.nan
+
+
+def 修正方向(x):
+    """目標價與 EPS 跟前次比：上修／下修／持平／首次。"""
+    方向 = {}
+    for 名, 今, 前 in (("目標價", "目標價", "前次目標價"), ("EPS今年", "EPS今年", "前次EPS今年"), ("EPS明年", "EPS明年", "前次EPS明年")):
+        a, b = _數(x.get(今)), _數(x.get(前))
+        方向[名] = "—" if np.isnan(a) or np.isnan(b) else ("上修" if a > b * 1.001 else ("下修" if a < b * 0.999 else "持平"))
+    return 方向
+
+
+def 券商報告表(報告們):
+    """整理成 DataFrame：一列一份報告，含修正方向。"""
+    if not 報告們:
+        return pd.DataFrame()
+    列們 = []
+    for x in 報告們:
+        方 = 修正方向(x)
+        列們.append({"日期": pd.to_datetime(x.get("日期"), errors="coerce"), "代號": x.get("代號"), "名稱": x.get("名稱"),
+                   "券商": x.get("券商"), "評等": x.get("評等"), "看法": x.get("看法"),
+                   "目標價": _數(x.get("目標價")), "前次目標價": _數(x.get("前次目標價")),
+                   "EPS今年": _數(x.get("EPS今年")), "EPS明年": _數(x.get("EPS明年")),
+                   "目標價修正": 方["目標價"], "EPS修正": "上修" if "上修" in (方["EPS今年"], 方["EPS明年"]) else
+                   ("下修" if "下修" in (方["EPS今年"], 方["EPS明年"]) else ("持平" if "持平" in (方["EPS今年"], 方["EPS明年"]) else "—")),
+                   "評價方法": x.get("評價方法"), "報告收盤價": _數(x.get("報告收盤價"))})
+    return pd.DataFrame(列們).sort_values("日期", ascending=False).reset_index(drop=True)
+
+
+def 上修名單(報告們, 天數=30):
+    """近 N 天有券商上修 EPS 或目標價的台股代號。"""
+    表 = 券商報告表(報告們)
+    if 表.empty:
+        return set()
+    近 = 表[表["日期"] >= pd.Timestamp.now().normalize() - pd.Timedelta(days=天數)]
+    return set(近.loc[(近["EPS修正"] == "上修") | (近["目標價修正"] == "上修"), "代號"].astype(str))
+
+
+def 驗收券商報告(x, 價格, 期限=126):
+    """價格＝這檔每日 date、high、low、收盤。看報告後 6 個月（約 126 個交易日）內有沒有碰到目標價。
+    回傳 {結果: 達標／進行中／到期未達標／無目標價, 天數, 報酬%, 基準價, 日期}。"""
+    目標 = _數(x.get("目標價"))
+    起 = pd.to_datetime(x.get("日期"), errors="coerce")
+    結果 = {"結果": "無目標價", "天數": 0, "報酬%": np.nan, "基準價": np.nan, "日期": pd.NaT}
+    if 價格 is None or len(價格) == 0 or pd.isna(起):
+        return 結果
+    p = 價格.sort_values("date")
+    前 = p[p["date"] <= 起]
+    基 = _數(x.get("報告收盤價"))
+    if np.isnan(基) and len(前):
+        基 = float(前["收盤"].iloc[-1])
+    之後 = p[p["date"] > 起].head(期限)
+    結果.update(基準價=基, 天數=len(之後))
+    if len(之後) and not np.isnan(基):
+        結果["報酬%"] = (float(之後["收盤"].iloc[-1]) / 基 - 1) * 100
+    if np.isnan(目標) or np.isnan(基):
+        return 結果
+    向上 = 目標 >= 基
+    碰 = 之後[之後["high"] >= 目標] if 向上 else 之後[之後["low"] <= 目標]
+    if len(碰):
+        return dict(結果, 結果="達標", 日期=碰["date"].iloc[0])
+    return dict(結果, 結果="到期未達標" if len(之後) >= 期限 else "進行中")
+
+
+def 交叉驗證(x, 營收表=None, 價格=None):
+    """報告裡寫的實績數字（月營收、收盤價）跟網站資料比對。營收表＝這檔的 month、revenue（千元）。回傳 [(說明, ✅／⚠️, 網站數字)]。"""
+    結果 = []
+    代號 = str(x.get("代號"))
+    for c in x.get("可核對") or []:
+        項, 期, 值 = str(c.get("項目", "")), str(c.get("期間", "")), _數(c.get("數值"))
+        if np.isnan(值):
+            continue
+        if 項 == "月營收" and 營收表 is not None:
+            r = 營收表[營收表["month"] == 期[:7]]
+            去 = 營收表[營收表["month"] == f"{int(期[:4]) - 1}{期[4:7]}"] if 期[:4].isdigit() else 營收表.iloc[:0]
+            if len(r):
+                網年 = (float(r["revenue"].iloc[0]) / float(去["revenue"].iloc[0]) - 1) * 100 if len(去) else np.nan
+                網 = float(r["revenue"].iloc[0]) / 1e5   # 千元 → 億元
+                單 = str(c.get("單位", ""))
+                換 = 1 / 100 if 單.startswith("百萬") else 1 / 1e5 if 單.startswith("千") else 1 / 1e4 if 單.startswith("萬") else 1
+                ok = bool(網) and abs(值 * 換 / 網 - 1) < 0.03
+                年 = _數(c.get("年增%"))
+                if ok and not np.isnan(年) and not np.isnan(網年):
+                    ok = abs(年 - 網年) < 1.5
+                結果.append((f"{期[:7]} 月營收 {值:g}{c.get('單位', '')}" + (f"、年增 {年:+.1f}%" if not np.isnan(年) else ""),
+                           "✅" if ok else "⚠️", f"網站 {網:.2f} 億" + (f"、年增 {網年:+.1f}%" if not np.isnan(網年) else "")))
+        elif 項 == "收盤價" and 價格 is not None:
+            d = pd.to_datetime(期, errors="coerce")
+            r = 價格[價格["date"] == d] if pd.notna(d) else pd.DataFrame()
+            if len(r):
+                網 = float(r["收盤"].iloc[0])
+                結果.append((f"{期} 收盤 {值:g}", "✅" if abs(值 / 網 - 1) < 0.005 else "⚠️", f"網站 {網:g}"))
+    收 = _數(x.get("報告收盤價"))
+    d = pd.to_datetime(x.get("日期"), errors="coerce")
+    if not np.isnan(收) and 價格 is not None and pd.notna(d):
+        前 = 價格[(價格["date"] <= d) & (價格["date"] >= d - pd.Timedelta(days=7))].sort_values("date")
+        if len(前):
+            近 = 前["收盤"].tail(2).tolist()
+            ok = any(abs(收 / v - 1) < 0.005 for v in 近)
+            結果.append((f"報告收盤價 {收:g}", "✅" if ok else "⚠️", f"網站報告日前後 {' / '.join(f'{v:g}' for v in 近)}"))
+    return 結果
+
+
+def 券商命中率(報告們, 價格們):
+    """價格們＝{代號: 價格表}。依券商彙總：報告數、已達標、到期未達標、進行中、平均報酬%。"""
+    列們 = []
+    for x in 報告們:
+        p = 價格們.get(str(x.get("代號")))
+        if p is None:
+            continue
+        v = 驗收券商報告(x, p)
+        if v["結果"] == "無目標價":
+            continue
+        列們.append({"券商": x.get("券商"), "結果": v["結果"], "報酬%": v["報酬%"]})
+    if not 列們:
+        return pd.DataFrame()
+    t = pd.DataFrame(列們)
+    g = t.groupby("券商")
+    表 = pd.DataFrame({"報告數": g.size(), "已達標": g["結果"].apply(lambda s: (s == "達標").sum()),
+                      "到期未達標": g["結果"].apply(lambda s: (s == "到期未達標").sum()),
+                      "進行中": g["結果"].apply(lambda s: (s == "進行中").sum()), "平均報酬%": g["報酬%"].mean().round(1)})
+    return 表.sort_values("報告數", ascending=False)
+
+
+# ========== 28. 產業鏈位置（data/supply_chain.csv，手動維護） ==========
+def 讀取產業鏈():
+    f = 資料夾 / "supply_chain.csv"
+    return pd.read_csv(f, dtype=str) if f.exists() else pd.DataFrame(columns=["chain", "stage", "group", "code"])
+
+
+def 產業鏈位置(代號, 名稱表=None):
+    """回傳一段文字：這檔在哪條產業鏈的哪一段、同組有誰、上下游是哪些環節。名稱表＝{代號: 名稱}。"""
+    t = 讀取產業鏈()
+    我 = t[t["code"] == str(代號)]
+    if 我.empty:
+        return ""
+    名 = lambda c: f"{(名稱表 or {}).get(c, '')}{c}"
+    行 = []
+    for _, r in 我.iterrows():
+        鏈 = t[t["chain"] == r["chain"]]
+        同 = 鏈[(鏈["group"] == r["group"]) & (鏈["code"] != r["code"])]["code"]
+        段們 = sorted(x for x in 鏈["stage"].unique() if "支援" not in x)   # 製程支援（設備、耗材）服務各段，不算上下游
+        if r["stage"] in 段們:
+            i = 段們.index(r["stage"])
+            上 = 段們[i - 1] if i > 0 else None
+            下 = 段們[i + 1] if i + 1 < len(段們) else "終端應用"
+        else:
+            上, 下 = None, None
+        行.append(f"{r['chain']} 產業鏈：{r['stage']}／{r['group']}"
+                 + (f"；同組：{'、'.join(名(c) for c in 同)}" if len(同) else "")
+                 + (f"；上游環節：{上}" if 上 else "") + (f"；下游環節：{下}" if 下 else ""))
+    return "\n".join(行)

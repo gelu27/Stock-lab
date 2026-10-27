@@ -2386,6 +2386,10 @@ def AI解讀區():
     段落("AI BRIEF // AI 大盤解讀")
     設定 = _設定()
     紀錄 = 大盤解讀紀錄(st.session_state.get("_解讀版本", 0))
+    try:
+        驗 = engine.驗收大盤解讀(紀錄, {"加權": 指數K線("TAIEX", _版本), "櫃買": 指數K線("TPEX", _版本)})
+    except Exception:
+        驗 = []
     分頁 = st.tabs(["收盤", "盤前", "夜盤"])
     for 模式, 頁 in zip(["收盤", "盤前", "夜盤"], 分頁):
         with 頁:
@@ -2400,8 +2404,27 @@ def AI解讀區():
                 時間們 = [v["時間"] for v in 這類][::-1]
                 t = st.selectbox("看哪一天", 時間們, key=f"解讀日{模式}", label_visibility="collapsed")
                 選 = next(v for v in 這類 if v["時間"] == t)
-            st.caption(f"🕒 {選['時間']}　·　{選.get('模型', '')}")
+            st.caption(f"🕒 {選['時間']}　·　{選.get('模型', '')}" + (f"　·　看法 {選['看法']}" if 選.get("看法") else ""))
             st.markdown(re.sub(r"^#{1,3}\s+", "##### ", 選["內容"], flags=re.M))  # 標題縮小，手機比較好讀
+            if 選.get("條件"):
+                結 = next((x for x in 驗 if x["時間"] == 選["時間"]), None)
+                行們 = []
+                for c in 選["條件"]:
+                    對 = next((d for d in (結 or {}).get("條件", []) if d["說明"] == c["說明"]), None)
+                    行們.append(f"- {'⏳' if 對 is None else ('✅' if 對['成立'] else '❌')} {c['說明']}"
+                               + ("" if 對 is None else f"（{結['驗收日']:%m/%d} {c['指數']}收 {對['收盤']:,.2f}）"))
+                st.markdown("**📌 這篇提出的觀察條件**　⏳ 還沒到收盤、✅ 成立、❌ 沒成立\n" + "\n".join(行們))
+    if 驗:
+        分 = engine.解讀記分(驗)
+        with st.expander(f"🎯 AI 解讀記分板：近 {分['篇數']} 篇看法對 {分['看法命中']}/{分['看法篇數']}、"
+                         f"條件成立 {分['條件成立']}/{分['條件數']}"):
+            st.dataframe(pd.DataFrame([{
+                "解讀": f"{x['時間']} {x['模式']}", "看法": x["看法"] or "—", "驗收日": f"{x['驗收日']:%m/%d}",
+                "加權": f"{x['加權漲跌%']:+.2f}%", "看法對": "—" if x["看法對"] is None else ("✅" if x["看法對"] else "❌"),
+                "條件": "；".join(f"{'✅' if c['成立'] else '❌'}{c['說明']}" for c in x["條件"])} for x in 驗[:20]]),
+                hide_index=True, width="stretch", column_config={"條件": st.column_config.TextColumn(width="large")})
+            st.caption("看法對＝偏多而隔一個收盤加權收紅、偏空而收黑（中性不計）。條件是 AI 自己提出的觀察價位，"
+                       "成立不代表看對，主要用來回頭檢查 AI 抓的價位有沒有參考價值。")
     有金鑰 = str(設定.get("GEMINI_API_KEY", "")).strip() or str(設定.get("ANTHROPIC_API_KEY", "")).strip()
     if 有金鑰 and 可編輯():
         a, b = st.columns([1, 2])
@@ -2419,6 +2442,135 @@ def AI解讀區():
                     st.error(f"產生失敗：{e}")
     st.caption("AI 只根據網站的大盤數據（指數、權值股、族群、法人、融資、期貨、情緒、國際行情、行事曆）撰寫，不會上網找新聞；"
                "僅供研究參考，不是買賣建議。")
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def 券商報告清單(_快取鍵):
+    return engine.讀取券商報告(_設定())
+
+
+def _AI引擎():
+    設定 = _設定()
+    if str(設定.get("GEMINI_API_KEY", "")).strip():
+        return "Gemini", engine.清理金鑰(設定["GEMINI_API_KEY"]), str(設定.get("GEMINI_MODEL", "gemini-flash-latest"))
+    return "Claude", engine.清理金鑰(設定.get("ANTHROPIC_API_KEY")), str(設定.get("AI_MODEL", "claude-opus-5-5"))
+
+
+def 個股價格(代號):
+    """驗收用的每日價格（date, high, low, 收盤）：先用常駐的近一年資料，沒有再讀這檔全史。"""
+    t = 指標[指標["代號"] == str(代號)]
+    if len(t) < 5:
+        全 = 個股全史(str(代號), _版本)
+        t = 全 if 全 is not None else t
+    return t[["date", "high", "low", "收盤"]] if len(t) else None
+
+
+def 券商報告上傳區():
+    if not 可編輯():
+        st.caption("上傳報告會用到 AI 額度，請先在 01 市場總覽的庫存區輸入密碼解鎖。")
+        return
+    引擎, 金鑰, 模型 = _AI引擎()
+    if not 金鑰:
+        st.caption("要讀報告需要在 Secrets 設定 GEMINI_API_KEY。")
+        return
+    檔們 = st.file_uploader("上傳券商報告 PDF，或「每日研究報告」這類目標價截圖（可一次多個）",
+                           type=["pdf", "png", "jpg", "jpeg"], accept_multiple_files=True, key="券商上傳")
+    if 檔們 and st.button(f"🤖 讀取 {len(檔們)} 個檔案", key="讀券商", type="primary"):
+        新們, 錯們 = [], []
+        進度 = st.progress(0.0, "AI 讀報告中…")
+        for i, f in enumerate(檔們):
+            try:
+                新們 += engine.AI讀券商報告(f.getvalue(), f.name, 引擎, 金鑰, 模型)
+            except Exception as e:
+                錯們.append(f"{f.name}：{e}")
+            進度.progress((i + 1) / len(檔們), f"已讀 {i + 1}/{len(檔們)}")
+        st.session_state["券商預覽"] = 新們
+        for e in 錯們:
+            st.warning(e)
+    預覽 = st.session_state.get("券商預覽")
+    if 預覽:
+        st.markdown(f"**讀到 {len(預覽)} 筆**，確認數字沒問題再存檔：")
+        st.dataframe(engine.券商報告表(預覽).drop(columns=["前次目標價"]), hide_index=True, width="stretch")
+        a, b = st.columns(2)
+        if a.button("💾 存檔", key="存券商", type="primary"):
+            舊 = engine.讀取券商報告(_設定())
+            全 = engine.合併券商報告(舊, 預覽)
+            永久 = engine.儲存券商報告(_設定(), 全)
+            st.session_state.pop("券商預覽", None)
+            st.session_state["_券商版本"] = st.session_state.get("_券商版本", 0) + 1
+            st.success(f"已存 {len(預覽)} 筆" + ("（GitHub 永久保存）" if 永久 else "（暫存在網站上）"))
+        if b.button("✖ 不要存", key="棄券商"):
+            st.session_state.pop("券商預覽", None)
+            st.rerun()
+    st.caption("網站只保存評等、目標價、EPS 等數字和 AI 用自己的話寫的摘要，不保存報告原文（報告有版權）。")
+
+
+def 券商報告總覽():
+    報告們 = 券商報告清單(st.session_state.get("_券商版本", 0))
+    段落("BROKER // 券商報告收件匣")
+    with st.expander("📥 上傳新報告", expanded=not 報告們):
+        券商報告上傳區()
+    if not 報告們:
+        st.caption("還沒有報告。上傳後這裡會整理目標價與 EPS 的上修／下修、到期驗收和各券商命中率。")
+        return
+    表 = engine.券商報告表(報告們)
+    上 = engine.上修名單(報告們)
+    卡片格([卡片("報告筆數", f"{len(表)}", f"{表['代號'].nunique()} 檔、{表['券商'].nunique()} 家券商"),
+           卡片("近 30 天上修", f"{len(上)}", "檔（EPS 或目標價）", 紅),
+           卡片("看多比例", f"{(表['看法'] == '看多').mean() * 100:.0f}%", "券商報告多半偏多，要打折看", 灰)])
+    段落("REVISION // 近 30 天被上修的股票")
+    if 上:
+        今上 = 今日[今日["代號"].isin(上)][["代號", "名稱", "收盤", "漲跌幅", "20日漲幅", "本益比"]]
+        if len(今上):
+            點選表(今上, 上色(今上), "上修表")
+        st.caption("EPS 被上修通常比評等本身更有資訊（券商幾乎都給買進），可以搭配下面的驗收與自己的選股條件一起看。")
+    else:
+        st.caption("近 30 天沒有上修紀錄。")
+    段落("LIST // 全部報告")
+    st.dataframe(表.drop(columns=["報告收盤價"]), hide_index=True, width="stretch",
+                 column_config={"日期": st.column_config.DateColumn(format="YYYY-MM-DD")})
+    段落("SCORE // 券商目標價驗收")
+    價們 = {c: 個股價格(c) for c in 表["代號"].unique() if str(c).isdigit()}
+    命 = engine.券商命中率(報告們, {k: v for k, v in 價們.items() if v is not None})
+    if 命.empty:
+        st.caption("還沒有可以驗收的報告。")
+    else:
+        st.dataframe(命, width="stretch")
+        st.caption("達標＝報告後 6 個月內股價碰到目標價；平均報酬＝報告日收盤到現在（最多 6 個月）。"
+                   "多數報告定義「買進」是 6 個月報酬 15～30%，時間還不到 6 個月的算進行中。")
+
+
+def 個股券商報告(代號, 收盤):
+    """03 個股 AI 分頁：這檔的券商報告、目標價區間、白話翻譯與交叉驗證。"""
+    報告們 = [x for x in 券商報告清單(st.session_state.get("_券商版本", 0)) if str(x.get("代號")) == str(代號)]
+    段落("BROKER // 券商報告")
+    if not 報告們:
+        st.caption("還沒有這檔的券商報告，可以到「04 選股 → 券商報告」上傳 PDF 或目標價截圖。")
+        return
+    表 = engine.券商報告表(報告們)
+    目 = 表["目標價"].dropna()
+    if len(目):
+        卡片格([卡片("目標價區間", f"{目.min():,.0f} ~ {目.max():,.0f}", f"{len(目)} 份報告，分歧 {(目.max() / 目.min() - 1) * 100:.0f}%"),
+               卡片("中位數距現價", f"{(目.median() / 收盤 - 1) * 100:+.1f}%", f"中位數 {目.median():,.0f}"),
+               卡片("最新修正", f"目標價{表['目標價修正'].iloc[0]}", f"EPS {表['EPS修正'].iloc[0]} · {表['券商'].iloc[0]}")])
+    st.dataframe(表.drop(columns=["代號", "名稱"]), hide_index=True, width="stretch",
+                 column_config={"日期": st.column_config.DateColumn(format="YYYY-MM-DD")})
+    營收 = engine.讀取營收歷史(代號)
+    價 = 個股價格(代號)
+    for x in 報告們[:5]:
+        驗 = engine.驗收券商報告(x, 價) if 價 is not None else {"結果": "無資料"}
+        標 = f"{x.get('日期')} {x.get('券商')} {x.get('評等')}，目標價 {x.get('目標價') or '—'}（{驗['結果']}）"
+        with st.expander(標):
+            if x.get("白話"):
+                st.markdown("**白話翻譯**\n" + "\n".join(f"{i}. {t}" for i, t in enumerate(x["白話"], 1)))
+            for k in ("理由", "評價方法", "風險", "追蹤指標", "評等定義"):
+                if x.get(k):
+                    st.markdown(f"**{k}**：{x[k]}")
+            if pd.notna(驗.get("報酬%", np.nan)):
+                st.caption(f"報告日到現在 {驗['報酬%']:+.1f}%（{驗['天數']} 個交易日）")
+            核 = engine.交叉驗證(x, 營收, 價)
+            if 核:
+                st.markdown("**數字核對（跟網站資料比）**\n" + "\n".join(f"- {燈} {說}（{網}）" for 說, 燈, 網 in 核))
 
 
 首頁區塊 = ["市場", "狀態", "價位", "AI解讀", "焦點", "國際", "連動", "加權指數", "權值", "資金", "情緒", "族群", "行事曆", "排行"]
@@ -2477,7 +2629,9 @@ if 頁面 == 頁面們[1]:
 
 # ---------- 04 選股 ----------
 if 頁面 == 頁面們[3]:
-  選股分頁 = st.tabs(["條件選股", "烏賊每日功課", "烏賊策略總覽"])
+  選股分頁 = st.tabs(["條件選股", "烏賊每日功課", "烏賊策略總覽", "券商報告"])
+  with 選股分頁[3]:
+    券商報告總覽()
   with 選股分頁[2]:
     總表, 名單, 重複 = engine.烏賊總覽(今日)
     多 = 總表[總表["多空"] == "多"]["符合檔數"].sum()
@@ -3209,6 +3363,14 @@ if 頁面 == 頁面們[2]:
                 摘要 += (f"\n- 近三年股價淨值比區間：最低 {淨.min():.2f}、中位數 {淨.median():.2f}、最高 {淨.max():.2f}"
                        f"（目前 {數(r['淨值比'], '{:.2f}')}，每股淨值約 {數(r['收盤'] / r['淨值比'] if r['淨值比'] else np.nan)}）")
             摘要 += f"\n- 建議評價方法：{engine.評價方法建議(r.get('產業'), r.get('近三季EPS'))}"
+            鏈 = engine.產業鏈位置(代號, dict(zip(今日["代號"], 今日["名稱"])))
+            if 鏈:
+                摘要 += f"\n- 產業鏈位置：{鏈}"
+            券們 = [x for x in 券商報告清單(st.session_state.get("_券商版本", 0)) if str(x.get("代號")) == 代號][:6]
+            if 券們:
+                摘要 += "\n\n使用者上傳的券商報告摘要（數字以此為準，再上網補充）：\n" + "\n".join(
+                    f"- {x.get('日期')} {x.get('券商')} {x.get('評等')}，目標價 {x.get('目標價')}（前次 {x.get('前次目標價')}），"
+                    f"EPS 今年 {x.get('EPS今年')}／明年 {x.get('EPS明年')}，{x.get('評價方法') or ''}；{x.get('理由') or ''}" for x in 券們)
             try:
                 K = 個股K線(代號)
                 價文 = engine.價位摘要(K, 全.set_index("date")["成交值億"] if "成交值億" in 全 else None)
@@ -3362,6 +3524,7 @@ if 頁面 == 頁面們[2]:
                             st.markdown(f"#### {舊['時間']}（當時收盤 {舊.get('收盤', '—')}，{舊.get('引擎', '')}）")
                             st.markdown(engine.拆解AI建議(舊["內容"])[0])
                             st.divider()
+        個股券商報告(代號, float(r["收盤"]))
 
 
 def 評分驗證區():
