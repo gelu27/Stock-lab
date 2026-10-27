@@ -2466,7 +2466,8 @@ def 資料新鮮度():
     季 = 欄最大("fundamental/eps.csv", "quarter")
     內 = 欄最大("fundamental/insider.csv", "month")
     列們 = [  # (名稱, 最新, 頻率, 判斷方式, 容許)
-        ("股價、成交量", 價, "每個交易日", "天", 4),
+        ("股價、成交量", 價, "每個交易日", "平日", 1),
+        ("指數開高低（支撐壓力）", (lambda v: v and pd.Timestamp(v))(欄最大("index_ohlc.csv", "date")), "每個交易日", "交易日", 0),
         ("三大法人、融資券", _最新檔日("chips"), "每個交易日", "交易日", 0),
         ("加權指數", 指數日, "每個交易日", "交易日", 0),
         ("借券賣出", _最新檔日("sbl"), "每個交易日", "交易日", 0),
@@ -2490,6 +2491,14 @@ def 資料新鮮度():
             落後 = sum(1 for d in 交易日們 if pd.Timestamp(d) > 最新)
             正常 = 落後 <= 容許
             說 = f"落後 {落後} 個交易日"
+        elif 方式 == "平日":  # 數股價最新日之後到昨天（今天 18:30 後也算）有幾個平日沒資料，已確認休市的不算
+            休市 = set()
+            for f in (資料夾 / "status").glob("*.txt"):
+                休市 |= {行.split(",")[0] for 行 in f.read_text().split() if 行.endswith(",closed")}
+            現在 = dt.datetime.now(dt.timezone(dt.timedelta(hours=8)))
+            截止 = 今天 if 現在.hour * 60 + 現在.minute >= 18 * 60 + 30 else 今天 - pd.Timedelta(days=1)
+            缺 = [d for d in pd.bdate_range(最新 + pd.Timedelta(days=1), 截止) if f"{d:%Y%m%d}" not in 休市]
+            正常, 說 = len(缺) <= 容許, f"有 {len(缺)} 個平日沒有資料（可能是休市還沒確認）"
         elif 方式 == "期末":
             起, 天 = 容許
             差 = (今天 - 起).days
@@ -2928,3 +2937,279 @@ def 儲存大盤解讀(設定, 模式, 內容, 模型, 保留=60):
     全部[f"{現在:%Y-%m-%d}_{模式}"] = {"時間": f"{現在:%Y-%m-%d %H:%M}", "模式": 模式, "內容": 內容, "模型": 模型}
     全部 = dict(sorted(全部.items())[-保留:])
     return 儲存設定檔(設定, "briefs.json", 全部, f"{模式}大盤解讀 {現在:%m/%d}")
+
+
+# ========== 22. 支撐壓力、共振區、三條件燈號、黑 K 一半 ==========
+指數名稱 = {"TAIEX": "加權指數", "TPEX": "櫃買指數"}
+回檔比例 = (0.236, 0.382, 0.5, 0.618, 0.786)
+均線名稱 = {20: "月線", 60: "季線", 120: "半年線", 240: "年線"}
+
+
+def 讀取指數K線(代號="TAIEX"):
+    """data/index_ohlc.csv 的加權（TAIEX）或櫃買（TPEX）日 K（date, open, high, low, close）。
+    加權還沒有開高低資料時，退回只有收盤的 data/index（開高低都用收盤代替）。"""
+    f = 資料夾 / "index_ohlc.csv"
+    if f.exists():
+        t = pd.read_csv(f, parse_dates=["date"])
+        t = t[t["symbol"] == 代號].drop(columns="symbol").sort_values("date").reset_index(drop=True)
+        if len(t) >= 60:
+            return t
+    if 代號 == "TAIEX":
+        t = 讀取加權指數()
+        if t is not None and len(t):
+            t = t[["date", "close"]].reset_index(drop=True)
+            return t.assign(open=t["close"], high=t["close"], low=t["close"])
+    return None
+
+
+def 有開高低(K):
+    return K is not None and len(K) and not (K["high"] == K["low"]).all()
+
+
+def 整數級距(價):
+    """整數關卡的間隔：4 萬多點→1000、2 千多元→100、300 多元→10、20 多元→1。"""
+    return 10 ** max(int(np.floor(np.log10(max(價, 1)))) - 1, 0)
+
+
+def 找缺口(K, 天數=250, 最小=0.001):
+    """還沒回補的跳空缺口：向上缺口（今天最低 > 昨天最高）是支撐，向下缺口是壓力。
+    後來的 K 線碰到一部分就把缺口縮小，整個碰到就算回補。回傳 [(下緣, 上緣, 日期, "向上"/"向下")]。"""
+    if not 有開高低(K):
+        return []
+    k = K.tail(天數).reset_index(drop=True)
+    高, 低, 日 = k["high"].values, k["low"].values, k["date"].values
+    結果 = []
+    for i in range(1, len(k)):
+        if 低[i] > 高[i - 1] * (1 + 最小):
+            下, 上 = 高[i - 1], 低[i]
+            後低 = 低[i + 1:].min() if i + 1 < len(k) else np.inf
+            上 = min(上, 後低)
+            if 上 > 下 * (1 + 最小):
+                結果.append((float(下), float(上), pd.Timestamp(日[i]), "向上"))
+        elif 高[i] < 低[i - 1] * (1 - 最小):
+            下, 上 = 高[i], 低[i - 1]
+            後高 = 高[i + 1:].max() if i + 1 < len(k) else -np.inf
+            下 = max(下, 後高)
+            if 上 > 下 * (1 + 最小):
+                結果.append((float(下), float(上), pd.Timestamp(日[i]), "向上" if False else "向下"))
+    return 結果
+
+
+def 最近波段(K, 門檻=None):
+    """用「轉折幅度超過門檻才算一個波段」的方法（ZigZag）找最近一段完整的漲勢或跌勢，算費波那契回檔用。
+    門檻依波動度自動調整（指數約 8～10%、個股較大）。回傳 dict(高, 高日, 低, 低日, 方向)。"""
+    k = K.reset_index(drop=True)
+    if 門檻 is None:
+        波動 = k["close"].pct_change().tail(120).std()
+        門檻 = float(np.clip(2.0 * 波動 * np.sqrt(10), 0.05, 0.2)) if pd.notna(波動) else 0.1
+    高, 低 = k["high"].values, k["low"].values
+    轉折 = []                       # [(位置, 種類)]，種類 "高"／"低"
+    方向, 極 = 0, 0                 # 方向 1＝往上找高點、-1＝往下找低點
+    for i in range(1, len(k)):
+        if 方向 == 0:
+            if 高[i] >= 低[:i + 1].min() * (1 + 門檻):
+                轉折.append((int(np.argmin(低[:i + 1])), "低"))
+                方向, 極 = 1, i
+            elif 低[i] <= 高[:i + 1].max() * (1 - 門檻):
+                轉折.append((int(np.argmax(高[:i + 1])), "高"))
+                方向, 極 = -1, i
+        elif 方向 == 1:
+            if 高[i] >= 高[極]:
+                極 = i
+            elif 低[i] <= 高[極] * (1 - 門檻):
+                轉折.append((極, "高"))
+                方向, 極 = -1, i
+        else:
+            if 低[i] <= 低[極]:
+                極 = i
+            elif 高[i] >= 低[極] * (1 + 門檻):
+                轉折.append((極, "低"))
+                方向, 極 = 1, i
+    if 方向 == 0:               # 整段都沒有大波動：用區間高低
+        i高, i低 = int(np.argmax(高)), int(np.argmin(低))
+    elif 方向 == 1:             # 目前在上漲段（高點還沒確認）：上一個確認的低點 → 目前最高
+        i低, i高 = 轉折[-1][0], 極
+    else:                       # 目前在下跌段：上一個確認的高點 → 目前最低
+        i高, i低 = 轉折[-1][0], 極
+    return {"高": float(高[i高]), "高日": k["date"].iat[i高], "低": float(低[i低]), "低日": k["date"].iat[i低],
+            "方向": "上漲" if i低 < i高 else "下跌", "門檻": 門檻}
+
+
+def 支撐壓力(K, 波段天數=120):
+    """把均線、波段費波那契回檔、未回補缺口、前高前低、整數關卡整理成一張價位表。
+    K＝date, open, high, low, close（由舊到新）。回傳 dict(收盤, 日期, 均線, 波段, 缺口, 價位 DataFrame)。"""
+    K = K.dropna(subset=["close"]).reset_index(drop=True)
+    收 = float(K["close"].iloc[-1])
+    列們 = []
+    均線 = {}
+    for n, 名 in 均線名稱.items():
+        if len(K) >= n:
+            均線[名] = float(K["close"].tail(n).mean())
+            列們.append((名, 均線[名], "均線", f"{n} 日均線"))
+    波段 = 最近波段(K.tail(波段天數 * 2))
+    高, 低 = 波段["高"], 波段["低"]
+    if 高 > 低:
+        段 = f"{波段['低日']:%m/%d} 低點 → {波段['高日']:%m/%d} 高點" if 波段["方向"] == "上漲" else \
+            f"{波段['高日']:%m/%d} 高點 → {波段['低日']:%m/%d} 低點"
+        for r in 回檔比例:
+            if 波段["方向"] == "上漲":   # 漲一段後回檔：從高點往下算
+                列們.append((f"回檔 {r:g}", 高 - r * (高 - 低), "回檔", f"費波那契，{段}"))
+            else:                          # 跌一段後反彈：從低點往上算
+                列們.append((f"反彈 {r:g}", 低 + r * (高 - 低), "回檔", f"費波那契，{段}"))
+        列們.append(("波段高點", 高, "前高低", f"{波段['高日']:%Y/%m/%d}"))
+        列們.append(("波段低點", 低, "前高低", f"{波段['低日']:%Y/%m/%d}"))
+    缺口 = 找缺口(K)
+    小數 = 0 if 收 > 1000 else 2
+    下方缺口 = sorted([g for g in 缺口 if g[1] < 收], key=lambda g: -g[1])[:2]   # 只列最近的兩個
+    上方缺口 = sorted([g for g in 缺口 if g[0] > 收], key=lambda g: g[0])[:2]
+    for 下, 上, 日, 向 in 下方缺口 + 上方缺口:
+        列們.append((f"{日:%m/%d} 缺口", 上 if 上 < 收 else 下, "缺口", f"{下:,.{小數}f}～{上:,.{小數}f} 還沒回補"))  # 先碰到的那一邊
+    近 = K.iloc[-61:-1]
+    if len(近):
+        for 名, v in (("近 60 日高點", float(近["high"].max())), ("近 60 日低點", float(近["low"].min()))):
+            if min(abs(v / 高 - 1), abs(v / 低 - 1)) > 0.002:  # 跟波段高低點一樣就不重複列
+                列們.append((名, v, "前高低", ""))
+    步 = 整數級距(收)
+    下關, 上關 = np.floor(收 / 步) * 步, np.ceil(收 / 步) * 步
+    if 收 - 下關 < 收 * 0.003:   # 收盤剛好在關卡上，往外再找一格
+        下關 -= 步
+    if 上關 - 收 < 收 * 0.003:
+        上關 += 步
+    列們 += [("整數關卡", float(下關), "整數", "心理關卡"), ("整數關卡", float(上關), "整數", "心理關卡")]
+    價位 = pd.DataFrame(列們, columns=["名稱", "價位", "類別", "說明"])
+    價位 = 價位[(價位["價位"] > 收 * 0.75) & (價位["價位"] < 收 * 1.25)]  # 太遠的價位短期用不到
+    價位["距離%"] = (價位["價位"] / 收 - 1) * 100
+    價位["角色"] = np.where(價位["價位"] < 收, "支撐", "壓力")
+    價位 = 價位.drop_duplicates(["名稱", "價位"]).sort_values("價位", ascending=False).reset_index(drop=True)
+    return {"收盤": 收, "日期": K["date"].iloc[-1], "均線": 均線, "波段": 波段, "缺口": 缺口, "價位": 價位}
+
+
+def 共振區(價位, 容忍=0.012):
+    """價位彼此在 ±容忍 以內、而且來自 2 種以上方法（或 3 個以上價位）就算共振區：多種方法都指向這裡，比較有參考價值。"""
+    t = 價位.sort_values("價位").reset_index(drop=True)
+    區們, 目前 = [], []
+    for _, r in t.iterrows():
+        if 目前 and r["價位"] > 目前[0]["價位"] * (1 + 容忍):
+            區們.append(目前)
+            目前 = []
+        目前.append(r)
+    if 目前:
+        區們.append(目前)
+    結果 = []
+    for 區 in 區們:
+        類 = {r["類別"] for r in 區}
+        if len(類) >= 2 or len(區) >= 3:
+            價 = [r["價位"] for r in 區]
+            結果.append({"下": min(價), "上": max(價), "中": float(np.mean(價)), "成員": [r["名稱"] for r in 區],
+                       "強度": len(區), "角色": 區[0]["角色"] if len({r["角色"] for r in 區}) == 1 else "目前位置"})
+    return 結果
+
+
+def 位置解讀(sr, 區們=None):
+    """一段白話：目前站上／跌破哪些均線，下方最近的支撐、上方最近的壓力，以及最重要的共振區。"""
+    收, 均線, 價位 = sr["收盤"], sr["均線"], sr["價位"]
+    區們 = 共振區(價位) if 區們 is None else 區們
+    小數 = 0 if 收 > 1000 else 2
+    f = lambda v: f"{v:,.{小數}f}"
+    距 = lambda v: "就在目前價位" if abs(v) < 0.15 else f"{v:+.1f}%"
+    區間 = lambda z: f(z["下"]) if z["上"] - z["下"] < 收 * 0.001 else f"{f(z['下'])}～{f(z['上'])}"
+    站上 = [k for k, v in 均線.items() if 收 >= v]
+    跌破 = [k for k, v in 均線.items() if 收 < v]
+    if 站上 and 跌破:
+        均線句 = f"站在{'、'.join(站上)}之上、{'、'.join(跌破)}之下"
+    elif 站上:
+        均線句 = "站上所有主要均線（多頭排列中）" if len(站上) == len(均線) else f"站上{'、'.join(站上)}"
+    else:
+        均線句 = "跌破所有主要均線（偏弱）"
+    支 = 價位[價位["角色"] == "支撐"].sort_values("價位", ascending=False)
+    壓 = 價位[價位["角色"] == "壓力"].sort_values("價位")
+    句們 = [f"收盤 {f(收)}，{均線句}。"]
+    if len(支):
+        a = 支.iloc[0]
+        句 = f"下方最近支撐是{a['名稱']} {f(a['價位'])}（{距(a['距離%'])}）"
+        if len(支) > 1:
+            b = 支.iloc[1]
+            句 += f"，再下來是{b['名稱']} {f(b['價位'])}（{距(b['距離%'])}）"
+        句們.append(句 + "。")
+    if len(壓):
+        a = 壓.iloc[0]
+        句們.append(f"上方最近壓力是{a['名稱']} {f(a['價位'])}（{距(a['距離%'])}）。")
+    下區 = [z for z in 區們 if z["上"] < 收]
+    上區 = [z for z in 區們 if z["下"] > 收]
+    if 下區:
+        z = max(下區, key=lambda z: z["中"])
+        句們.append(f"{區間(z)} 有{'、'.join(z['成員'][:4])} 重疊，是比較重要的支撐區（{距((z['中'] / 收 - 1) * 100)}）。")
+    if 上區:
+        z = min(上區, key=lambda z: z["中"])
+        句們.append(f"上方 {區間(z)} 有{'、'.join(z['成員'][:4])} 重疊，是比較重要的壓力區（{距((z['中'] / 收 - 1) * 100)}）。")
+    最近支 = 支.iloc[0] if len(支) else None
+    最近壓 = 壓.iloc[0] if len(壓) else None
+    return {"文字": "".join(句們), "站上": 站上, "跌破": 跌破, "最近支撐": 最近支, "最近壓力": 最近壓}
+
+
+def 黑K一半(K, 回看=10, 跌幅門檻=1.0):
+    """找最近一根「大黑 K」（收比開低 1% 以上、實體比近 20 日一般 K 線大），看之後的反彈收盤有沒有站上黑 K 實體的一半。
+    站上＝反彈有力；沒站上就要小心二次回落。資料沒有開高低時回傳 None。"""
+    if not 有開高低(K) or len(K) < 25:
+        return None
+    k = K.reset_index(drop=True)
+    實體 = (k["open"] - k["close"]).abs()
+    一般 = 實體.rolling(20).median()
+    for i in range(len(k) - 1, max(len(k) - 1 - 回看, 20), -1):
+        開, 收 = k.at[i, "open"], k.at[i, "close"]
+        if 收 < 開 and (開 - 收) / 開 * 100 >= 跌幅門檻 and (開 - 收) >= 1.2 * 一般.iat[i - 1]:
+            中 = (開 + 收) / 2
+            之後 = k.iloc[i + 1:]
+            基本 = {"日期": k.at[i, "date"], "開": float(開), "收": float(收), "中點": float(中), "高": float(k.at[i, "high"])}
+            if 之後.empty:
+                return {**基本, "燈": "🟡", "狀態": f"剛出現大黑 K，接下來反彈收盤要站上一半 {中:,.2f} 才算有力"}
+            最高收 = float(之後["close"].max())
+            if 之後["close"].iloc[-1] > 基本["高"]:
+                return {**基本, "燈": "🟢", "狀態": f"已收復整根黑 K（高點 {基本['高']:,.2f}），賣壓消化"}
+            if 最高收 > 中:
+                現在 = "目前仍在一半之上" if 之後["close"].iloc[-1] > 中 else "但目前又跌回一半之下，要小心"
+                return {**基本, "燈": "🟢" if 之後["close"].iloc[-1] > 中 else "🟡",
+                        "狀態": f"反彈收盤曾站上黑 K 一半 {中:,.2f}，{現在}"}
+            return {**基本, "燈": "🔴", "狀態": f"反彈收盤還沒站上黑 K 一半 {中:,.2f}（最高只到 {最高收:,.2f}），小心二次回落"}
+    return None
+
+
+def 三條件燈號(加權K, 櫃買K=None, 美股=None):
+    """參考週報分析者的三個觀察條件：費半守住前低與年線、加權守住半年線並收復季線、櫃買低點不再下移。
+    回傳 [(名稱, 燈, 說明)] 與一句總結。🟢＝改善、🟡＝觀察中、🔴＝轉弱。"""
+    結果 = []
+    if 美股 is not None and "費城半導體" in 美股:
+        s = 美股["費城半導體"].dropna()
+        if len(s) >= 60:
+            收 = float(s.iloc[-1])
+            前低 = float(s.iloc[-120:-10].min())
+            年線 = float(s.tail(240).mean()) if len(s) >= 240 else None
+            守低, 守年 = 收 > 前低, (年線 is None or 收 > 年線)
+            燈 = "🟢" if 守低 and 守年 and 收 > 前低 * 1.03 else ("🔴" if not 守低 or not 守年 else "🟡")
+            說 = f"費半 {收:,.0f}，前波低點 {前低:,.0f}（{(收 / 前低 - 1) * 100:+.1f}%）" + (
+                f"、年線 {年線:,.0f}（{(收 / 年線 - 1) * 100:+.1f}%）" if 年線 else "")
+            結果.append(("費半守住前低與年線", 燈, 說))
+    if 加權K is not None and len(加權K) >= 120:
+        c = 加權K["close"]
+        收, 季, 半年 = float(c.iloc[-1]), float(c.tail(60).mean()), float(c.tail(120).mean())
+        燈 = "🟢" if 收 >= 季 else ("🟡" if 收 >= 半年 else "🔴")
+        說 = f"加權 {收:,.0f}，季線 {季:,.0f}（{(收 / 季 - 1) * 100:+.1f}%）、半年線 {半年:,.0f}（{(收 / 半年 - 1) * 100:+.1f}%）"
+        結果.append(("加權守半年線、收復季線", 燈, 說))
+    if 櫃買K is not None and len(櫃買K) >= 30:
+        低 = 櫃買K["low"] if 有開高低(櫃買K) else 櫃買K["close"]
+        近, 前 = float(低.tail(5).min()), float(低.iloc[-10:-5].min())
+        收, 月 = float(櫃買K["close"].iloc[-1]), float(櫃買K["close"].tail(20).mean())
+        燈 = "🟢" if 近 > 前 and 收 >= 月 else ("🔴" if 近 < 前 else "🟡")
+        說 = f"櫃買 {收:,.2f}，近 5 日低點 {近:,.2f} {'高於' if 近 > 前 else ('低於' if 近 < 前 else '等於')}前 5 日 {前:,.2f}，月線 {月:,.2f}"
+        結果.append(("櫃買低點不再下移", 燈, 說))
+    綠 = sum(1 for _, 燈, _ in 結果 if 燈 == "🟢")
+    紅 = sum(1 for _, 燈, _ in 結果 if 燈 == "🔴")
+    if not 結果:
+        總結 = "資料不足"
+    elif 綠 == len(結果):
+        總結 = "條件都改善，反彈比較有品質"
+    elif 紅 >= 2:
+        總結 = "多數條件仍轉弱，反彈先當作短線，提防上方賣壓"
+    else:
+        總結 = "條件好壞參半，等更多條件轉綠再加碼"
+    return 結果, 總結

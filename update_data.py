@@ -20,6 +20,7 @@
 #   data/warning.csv                      處置股、注意股（交易所每日公告）
 #   data/sbl/20261022.csv.gz              借券賣出餘額（上市＋上櫃，單位：張，保留約一年）
 #   data/calendar.csv                     法說會日程（公開資訊觀測站，本月與下月）
+#   data/index_ohlc.csv                   加權指數、櫃買指數每日開高低收（證交所、櫃買中心，近 5 年），畫支撐壓力用
 #   data/us_daily.csv                     美股指數、VIX、台股供應鏈龍頭每日收盤（Yahoo，近 2 年）
 #   data/econ_calendar.csv                國際經濟數據、央行會議（ForexFactory 本週與下週，逐週累積）
 #   data/us_earnings.csv                  美股龍頭財報日（Nasdaq 財報行事曆，未來 5 週）
@@ -852,9 +853,13 @@ def 抓美股日線(範圍="2y"):
                              f"?range={範圍}&interval=1d", headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
             結果 = r.json()["chart"]["result"][0]
             時區 = 結果["meta"].get("gmtoffset", 0)
+            時間們 = 結果["timestamp"]
+            盤中 = 結果["meta"].get("currentTradingPeriod", {}).get("regular", {})
+            if 盤中 and 盤中.get("start", 0) <= time.time() < 盤中.get("end", 0) and 時間們[-1] >= 盤中["start"]:
+                時間們 = 時間們[:-1]  # 美股還沒收盤，最後一根是盤中價，先不存（收盤後下次更新再補）
             列們 = [{"date": dt.datetime.utcfromtimestamp(時 + 時區).strftime("%Y-%m-%d"), "symbol": 符號,
                     "name": 美股代號[符號], "close": round(收, 4)}
-                   for 時, 收 in zip(結果["timestamp"], 結果["indicators"]["quote"][0]["close"]) if 收]
+                   for 時, 收 in zip(時間們, 結果["indicators"]["quote"][0]["close"]) if 收]
             return 列們
         except Exception as 錯誤:
             print(f"美股 {符號} 失敗：{錯誤}")
@@ -872,6 +877,52 @@ def 抓美股日線(範圍="2y"):
     表 = 表[表["date"] >= (dt.date.today() - dt.timedelta(days=800)).isoformat()]
     表.to_csv(檔, index=False)
     print(f"美股日線完成：{表['symbol'].nunique()} 檔，最新 {表['date'].max()}")
+
+
+def 抓指數K線(年數=5):
+    """加權指數（證交所 MI_5MINS_HIST）與櫃買指數（櫃買中心 indexInfo/inx）每日開高低收 → data/index_ohlc.csv。
+    兩個來源都是一次一個月；第一次會補 5 年，之後只抓上個月和這個月。"""
+    檔 = 資料夾 / "index_ohlc.csv"
+    舊 = pd.read_csv(檔, dtype={"symbol": str}) if 檔.exists() else pd.DataFrame(columns=["date", "symbol"])
+    今天 = dt.datetime.now(台北時區).date()
+    最早 = (今天.replace(day=1) - dt.timedelta(days=365 * 年數)).replace(day=1)
+    列們 = []
+    for 代號, 網址 in (("TAIEX", "https://www.twse.com.tw/rwd/zh/TAIEX/MI_5MINS_HIST?date={:%Y%m}01&response=json"),
+                     ("TPEX", "https://www.tpex.org.tw/www/zh-tw/indexInfo/inx?date={:%Y/%m}/01&response=json")):
+        已有 = set(舊.loc[舊["symbol"] == 代號, "date"].str[:7])
+        月 = 最早
+        失敗 = 0
+        while 月 <= 今天:
+            # 已經有的月份跳過，只重抓最近兩個月（這個月每天都在增加）
+            if f"{月:%Y-%m}" not in 已有 or (今天 - 月).days < 40:
+                try:
+                    r = requests.get(網址.format(月), headers=標頭, timeout=30)
+                    for _, 欄位, 資料 in 取得表格(r.json()):
+                        if "最高" not in "".join(欄位):
+                            continue
+                        for 列 in 資料:
+                            日 = str(列[0]).strip()
+                            年, 月份, 日子 = re.split(r"[/-]", 日)
+                            年 = int(年) + (1911 if int(年) < 1000 else 0)
+                            數 = [轉數字(x) for x in 列[1:5]]
+                            if all(pd.notna(x) and x > 0 for x in 數):
+                                列們.append({"date": f"{年}-{int(月份):02d}-{int(日子):02d}", "symbol": 代號,
+                                            "open": 數[0], "high": 數[1], "low": 數[2], "close": 數[3]})
+                        break
+                except Exception as 錯誤:
+                    失敗 += 1
+                    print(f"{代號} {月:%Y-%m} 指數 K 線失敗：{錯誤}")
+                    if 失敗 >= 3:
+                        break
+                time.sleep(2)
+            月 = (月 + dt.timedelta(days=32)).replace(day=1)
+    if not 列們:
+        print("指數 K 線沒有新資料")
+        return
+    表 = pd.concat([舊, pd.DataFrame(列們)]).drop_duplicates(["date", "symbol"], keep="last")
+    表 = 表[表["date"] >= 最早.isoformat()].sort_values(["symbol", "date"])
+    表.to_csv(檔, index=False)
+    print(f"指數 K 線完成：{len(表)} 筆，最新 {表['date'].max()}")
 
 
 def 抓經濟行事曆():
@@ -984,7 +1035,7 @@ def main():
 
     if not 參數.skip_latest:
         for 工作 in (抓分時, 抓興櫃, 抓基本面, 抓匯率, 抓處置注意, 抓借券, 抓法說會, 抓融資金額, 抓期貨未平倉,
-                     抓美股日線, 抓經濟行事曆, 抓美股財報):  # 這些出問題不影響主資料庫
+                     抓美股日線, 抓經濟行事曆, 抓美股財報, 抓指數K線):  # 這些出問題不影響主資料庫
             try:
                 工作()
             except Exception as 錯誤:
