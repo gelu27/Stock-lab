@@ -61,6 +61,11 @@ h1, h2, h3 {{ font-family: 'Space Grotesk', 'Noto Sans TC', sans-serif !importan
 .stButton > button, .stDownloadButton > button {{ border-radius: 0; border: 1px solid {青}; color: {青};
     background: transparent; font-family: 'JetBrains Mono'; letter-spacing: .15em; }}
 .stButton > button:hover {{ background: {青}; color: #000; }}
+.grid2 {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 4px; }}
+.grid2 .card .v {{ font-size: clamp(18px, 5vw, 28px); }}
+.grid2 .card .k {{ font-size: clamp(9px, 2.4vw, 11px); letter-spacing: .1em; }}
+.grid2 .card .d {{ font-size: clamp(10px, 2.6vw, 12px); }}
+.grid2 .card {{ padding: 10px 10px; }}
 .grid3 {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }}
 .grid3 .card .v {{ font-size: clamp(17px, 4.6vw, 28px); }}
 .grid3 .card .k {{ font-size: clamp(9px, 2.4vw, 11px); letter-spacing: .1em; }}
@@ -1116,6 +1121,40 @@ def 分鐘線(代號, 市場="上市", 間隔="1m", 範圍="5d"):
         return None
 
 
+@st.cache_data(ttl=20, show_spinner=False)
+def 大盤即時():
+    """加權（t00）、櫃買（o00）盤中即時點數，所有人共用 20 秒快取。抓不到回傳 None。"""
+    try:
+        表 = engine.即時報價(["t00", "o00"], {"o00": "上櫃"})
+        return 表.dropna(subset=["close"]).set_index("code") if not 表.empty else None
+    except Exception:
+        return None
+
+
+@st.fragment(run_every=30 if engine.盤中時間() else None)
+def 盤中即時條():
+    """首頁最上方的盤中即時橫條，只在 9:00～13:35 顯示，每 30 秒更新。"""
+    if not engine.盤中時間():
+        return
+    表 = 大盤即時()
+    if 表 is None or 表.empty:
+        st.caption("⚡ 盤中即時：證交所即時行情暫時抓不到，稍後會自動重試。")
+        return
+    卡們 = []
+    for 代號, 名稱 in (("t00", "TAIEX 加權"), ("o00", "TPEx 櫃買")):
+        if 代號 not in 表.index:
+            continue
+        r = 表.loc[代號]
+        漲幅 = r["change"] / (r["close"] - r["change"]) * 100
+        格式 = ",.0f" if r["close"] >= 1000 else ",.2f"
+        高低 = f" 高 {r['high']:{格式}} 低 {r['low']:{格式}}" if pd.notna(r.get("high")) and pd.notna(r.get("low")) else ""
+        卡們.append(卡片(f"⚡ {名稱} · {r['time']}", f"{r['close']:,.2f}",
+                       f"{r['change']:+,.2f}（{漲幅:+.2f}%）{高低}", 漲跌色(r["change"])))
+    if 卡們:
+        st.markdown(f'<div class="grid2">{"".join(卡們)}</div>', unsafe_allow_html=True)
+        st.caption("盤中即時（證交所，延遲約 5～20 秒，每 30 秒自動更新）；下方市場卡片是最近一次收盤的資料。")
+
+
 @st.fragment(run_every=30 if engine.盤中時間() else None)
 def 加權圖():
     段落("TAIEX // 加權指數走勢")
@@ -1124,12 +1163,9 @@ def 加權圖():
     分時 = engine.讀取分時()
     即時點 = None
     if engine.盤中時間():
-        try:
-            即時點 = engine.即時報價(["t00"], {})
-        except Exception:
-            pass
-        if 即時點 is not None and not 即時點.empty:
-            r = 即時點.iloc[0]
+        即時點 = 大盤即時()
+        if 即時點 is not None and "t00" in 即時點.index:
+            r = 即時點.loc["t00"]
             st.markdown(卡片(f"TAIEX 盤中即時 · {r['time']}", f"{r['close']:,.2f}",
                            f"{r['change']:+,.2f}（{r['change'] / (r['close'] - r['change']) * 100:+.2f}%）",
                            漲跌色(r["change"])), unsafe_allow_html=True)
@@ -2407,6 +2443,7 @@ if 頁面 == 頁面們[0]:
     區塊函式 = {"市場": 市場卡片, "狀態": 狀態區, "價位": 關鍵價位區, "AI解讀": AI解讀區, "焦點": 焦點區, "國際": _國際, "連動": 連動區,
              "加權指數": 加權圖 if 加權 is not None and len(加權) > 1 else None, "權值": 權值區, "資金": 資金面區,
              "情緒": 情緒區, "族群": 族群熱力圖, "行事曆": 行事曆區, "排行": 排行區}
+    盤中即時條()
     要畫 = [x for x in 首頁區塊 if x in 顯示 and 區塊函式.get(x)]
     if len(要畫) > 3:  # 首頁很長，上方放一排快速跳轉
         st.markdown('<div class="jump">' + "".join(f'<a href="#h-{x}" target="_self">{x}</a>' for x in 要畫)
