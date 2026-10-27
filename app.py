@@ -2603,8 +2603,11 @@ def 券商報告總覽():
     else:
         st.caption("近 30 天沒有上修紀錄。")
     段落("LIST // 全部報告")
+    表 = engine.加潛在空間(表, dict(zip(今日["代號"].astype(str), 今日["收盤"])))
     st.dataframe(表.drop(columns=["報告收盤價"]), hide_index=True, width="stretch",
-                 column_config={"日期": st.column_config.DateColumn(format="YYYY-MM-DD")})
+                 column_config={"日期": st.column_config.DateColumn(format="YYYY-MM-DD"),
+                                "潛在空間%": st.column_config.NumberColumn(format="%+.1f%%")})
+    st.caption("潛在空間＝目標價 ÷ 今天收盤 − 1，每天跟著收盤價更新；負數代表股價已經超過目標價。")
     段落("SCORE // 券商目標價驗收")
     價們 = {c: 個股價格(c) for c in 表["代號"].unique() if str(c).isdigit()}
     命 = engine.券商命中率(報告們, {k: v for k, v in 價們.items() if v is not None})
@@ -2719,13 +2722,17 @@ def 個股券商報告(代號, 收盤):
         卡片格([卡片("目標價區間", f"{目.min():,.0f} ~ {目.max():,.0f}", f"{len(目)} 份報告，分歧 {(目.max() / 目.min() - 1) * 100:.0f}%"),
                卡片("中位數距現價", f"{(目.median() / 收盤 - 1) * 100:+.1f}%", f"中位數 {目.median():,.0f}"),
                卡片("最新修正", f"目標價{表['目標價修正'].iloc[0]}", f"EPS {表['EPS修正'].iloc[0]} · {表['券商'].iloc[0]}")])
-    st.dataframe(表.drop(columns=["代號", "名稱"]), hide_index=True, width="stretch",
-                 column_config={"日期": st.column_config.DateColumn(format="YYYY-MM-DD")})
+    表 = engine.加潛在空間(表, {str(代號): 收盤})
+    st.dataframe(表.drop(columns=["代號", "名稱", "現價"]), hide_index=True, width="stretch",
+                 column_config={"日期": st.column_config.DateColumn(format="YYYY-MM-DD"),
+                                "潛在空間%": st.column_config.NumberColumn(format="%+.1f%%")})
     營收 = engine.讀取營收歷史(代號)
     價 = 個股價格(代號)
     for x in 報告們[:5]:
         驗 = engine.驗收券商報告(x, 價) if 價 is not None else {"結果": "無資料"}
-        標 = f"{x.get('日期')} {x.get('券商')} {x.get('評等')}，目標價 {x.get('目標價') or '—'}（{驗['結果']}）"
+        目 = engine._數(x.get("目標價"))
+        空 = f"，空間 {(目 / 收盤 - 1) * 100:+.0f}%" if not np.isnan(目) and 收盤 else ""
+        標 = f"{x.get('日期')} {x.get('券商')} {x.get('評等')}，目標價 {x.get('目標價') or '—'}{空}（{驗['結果']}）"
         with st.expander(標):
             if x.get("白話"):
                 st.markdown("**白話翻譯**\n" + "\n".join(f"{i}. {t}" for i, t in enumerate(x["白話"], 1)))
