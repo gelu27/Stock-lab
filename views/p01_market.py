@@ -67,9 +67,9 @@ def 鎖死資訊(表):
 
 def 登入參數():
     k = st.query_params.get("k")
-    隱 = st.query_params.get("hide")
+    版 = st.query_params.get("layout")
     近 = st.query_params.get("r")
-    return ((f"&k={k}" if k and st.session_state.get("已解鎖") else "") + (f"&hide={urllib.parse.quote(隱)}" if 隱 else "")
+    return ((f"&k={k}" if k and st.session_state.get("已解鎖") else "") + (f"&layout={urllib.parse.quote(版)}" if 版 else "")
             + (f"&r={urllib.parse.quote(近)}" if 近 else ""))
 
 
@@ -1098,17 +1098,42 @@ def 三十秒卡():
 首頁區塊 = ["30秒", "市場", "狀態", "價位", "AI解讀", "焦點", "國際", "連動", "加權指數", "權值", "資金", "情緒", "族群", "行事曆", "排行"]
 
 
-隱藏 = [x for x in st.query_params.get("hide", "").split(",") if x in 首頁區塊]
-with st.expander("⚙️ 首頁要顯示哪些區塊"):
-    顯示 = st.pills("首頁區塊", 首頁區塊, selection_mode="multi", key="首頁區塊", label_visibility="collapsed",
-                   default=[x for x in 首頁區塊 if x not in 隱藏])
-    st.caption("點一下開關。關掉不常看的區塊，首頁會比較短、也開得比較快；設定記在網址裡，加入書籤就會保留。")
-新隱藏 = ",".join(x for x in 首頁區塊 if x not in 顯示)
-if 新隱藏 != ",".join(隱藏):
-    if 新隱藏:
-        st.query_params["hide"] = 新隱藏
+新手區塊 = ["30秒", "市場", "狀態", "AI解讀", "焦點", "排行"]
+版面們 = {"新手": "只看 6 個重點區塊", "完整": "全部區塊", "自訂": "自己挑、自己排順序"}
+
+
+def 讀版面():
+    """網址 layout=新手／完整／自訂:區塊1,區塊2…；舊的 hide= 書籤當成自訂。"""
+    值 = st.query_params.get("layout", "")
+    if 值 in ("新手", "完整"):
+        return 值, None
+    if 值.startswith("自訂:"):
+        return "自訂", [x for x in 值[3:].split(",") if x in 首頁區塊]
+    隱 = [x for x in st.query_params.get("hide", "").split(",") if x in 首頁區塊]
+    if 隱:
+        return "自訂", [x for x in 首頁區塊 if x not in 隱]
+    return "完整", None
+
+
+舊模式, 舊順序 = 讀版面()
+with st.expander(f"⚙️ 首頁版面：{舊模式}"):
+    模式 = st.segmented_control("版面", list(版面們), default=舊模式, key="首頁版面",
+                              format_func=lambda m: f"{m}（{版面們[m]}）") or 舊模式
+    if 模式 == "自訂":
+        顯示 = st.multiselect("要顯示的區塊（照點選的順序排列）", 首頁區塊, key="首頁區塊順序",
+                             default=舊順序 if 舊順序 is not None else 首頁區塊)
+        st.caption("想把某個區塊移到前面：先按 × 移除其他區塊，再照想要的順序點回來。")
     else:
-        st.query_params.pop("hide", None)
+        顯示 = 新手區塊 if 模式 == "新手" else 首頁區塊
+    st.caption("設定記在網址裡，把這個網址加入書籤或手機主畫面就會保留。")
+新值 = "自訂:" + ",".join(顯示) if 模式 == "自訂" else 模式
+舊值 = "自訂:" + ",".join(舊順序) if 舊模式 == "自訂" else 舊模式
+if 新值 != 舊值 or "hide" in st.query_params:
+    if 新值 == "完整":
+        st.query_params.pop("layout", None)
+    else:
+        st.query_params["layout"] = 新值
+    st.query_params.pop("hide", None)
 def _國際():
     try:
         國際行情()
@@ -1118,7 +1143,7 @@ def _國際():
          "加權指數": 加權圖 if 加權 is not None and len(加權) > 1 else None, "權值": 權值區, "資金": 資金面區,
          "情緒": 情緒區, "族群": 族群熱力圖, "行事曆": 行事曆區, "排行": 排行區}
 盤中即時條()
-要畫 = [x for x in 首頁區塊 if x in 顯示 and 區塊函式.get(x)]
+要畫 = [x for x in 顯示 if 區塊函式.get(x)]
 if len(要畫) > 3:  # 首頁很長，上方放一排快速跳轉
     st.markdown('<div class="jump">' + "".join(f'<a href="#h-{x}" target="_self">{x}</a>' for x in 要畫)
                 + "</div>", unsafe_allow_html=True)
