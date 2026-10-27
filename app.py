@@ -604,16 +604,53 @@ def 評分卡片(代號):
             st.markdown(f"**{面}面 {r[面]:.0f} 分**" + ("".join(f"\n- {x}" for x in 理由) or "\n- 沒有加減分（50 分＝中性）"))
 
 
+def 交易日記():
+    """{"交易": [...], "當作庫存": bool}，每個瀏覽階段從 GitHub 讀一次（有密碼時是加密存放）。"""
+    if "交易日記" not in st.session_state:
+        try:
+            st.session_state["交易日記"] = engine.讀取日記(_設定())
+        except Exception as e:
+            st.session_state["交易日記讀取錯誤"] = f"{type(e).__name__}：{e}"
+            return {"交易": [], "當作庫存": False}
+    return st.session_state["交易日記"]
+
+
+def 存交易日記(日記):
+    st.session_state["交易日記"] = 日記
+    try:
+        if engine.儲存日記(日記, _設定()):
+            st.toast("交易日記已儲存" + ("（已加密）" if _密碼() else ""))
+        else:
+            st.toast("已暫存（網站重新啟動會消失；在 Secrets 設定 GITHUB_TOKEN 就能永久保存）")
+    except Exception as e:
+        st.error(f"交易日記存檔失敗：{e}")
+
+
+def 目前持股():
+    """回傳 (持股表[代號, 股數, 總成本], 來源)。交易日記勾了「當作庫存」就用日記推算的庫存，否則用 Secrets 的 holdings。"""
+    設定 = _設定()
+    if not 可編輯():
+        return None, ""
+    日記 = 交易日記()
+    日記庫存 = engine.交易日記統計(日記["交易"])[1] if 日記["交易"] else None
+    if 日記.get("當作庫存") and 日記庫存 is not None and len(日記庫存):
+        return 日記庫存, "交易日記"
+    if "holdings" in 設定:
+        try:
+            return pd.read_csv(io.StringIO(str(設定["holdings"]).strip()), dtype={"代號": str}), "Secrets"
+        except Exception:
+            pass
+    if 日記庫存 is not None and len(日記庫存):
+        return 日記庫存, "交易日記"
+    return None, ""
+
+
 def 庫存代號():
     """有設定庫存、而且已解鎖（或沒設密碼）時，回傳庫存的代號清單。"""
-    設定 = _設定()
-    if "holdings" not in 設定 or not 可編輯():
+    持股, _ = 目前持股()
+    if 持股 is None:
         return []
-    try:
-        持股 = pd.read_csv(io.StringIO(str(設定["holdings"]).strip()), dtype={"代號": str})
-        return list(dict.fromkeys(持股["代號"].astype(str).str.strip()))
-    except Exception:
-        return []
+    return list(dict.fromkeys(持股["代號"].astype(str).str.strip()))
 
 
 def 前後期表(歷史, 欄位, 比較們, 期名, 反向=()):

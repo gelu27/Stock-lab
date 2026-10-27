@@ -4634,3 +4634,227 @@ def 價位可靠度(價位, 摘要, 區們=None):
         守們.append(守)
         比們.append(守 - 隨 if pd.notna(守) and pd.notna(隨) else np.nan)
     return pd.Series(守們, index=價位.index), pd.Series(比們, index=價位.index)
+
+
+# ========== 交易日記（加密後存 ai-reports 分支 journal.json） ==========
+日記檔 = "journal.json"
+
+
+def _日記金鑰(密碼, 鹽):
+    import hashlib
+    k = hashlib.pbkdf2_hmac("sha256", str(密碼).encode("utf-8"), 鹽, 200_000, dklen=64)
+    return k[:32], k[32:]
+
+
+def _金鑰流(金鑰, 隨機, 長度):
+    import hashlib, hmac
+    流 = bytearray()
+    i = 0
+    while len(流) < 長度:
+        流 += hmac.new(金鑰, 隨機 + i.to_bytes(8, "big"), hashlib.sha256).digest()
+        i += 1
+    return bytes(流[:長度])
+
+
+def 加密(內容物, 密碼):
+    """HMAC-SHA256 計數器模式加密＋驗證碼（公開分支上的人只看得到亂碼）。"""
+    import base64, hashlib, hmac, json, os
+    鹽, 隨機 = os.urandom(16), os.urandom(16)
+    加, 驗 = _日記金鑰(密碼, 鹽)
+    明 = json.dumps(內容物, ensure_ascii=False).encode("utf-8")
+    密 = bytes(a ^ b for a, b in zip(明, _金鑰流(加, 隨機, len(明))))
+    碼 = hmac.new(驗, 鹽 + 隨機 + 密, hashlib.sha256).digest()
+    b = lambda x: base64.b64encode(x).decode()
+    return {"加密": 1, "鹽": b(鹽), "隨機": b(隨機), "內容": b(密), "驗證": b(碼)}
+
+
+def 解密(包, 密碼):
+    import base64, hashlib, hmac, json
+    if not 包.get("加密"):
+        return 包
+    鹽, 隨機, 密, 碼 = (base64.b64decode(包[k]) for k in ("鹽", "隨機", "內容", "驗證"))
+    加, 驗 = _日記金鑰(密碼, 鹽)
+    if not hmac.compare_digest(碼, hmac.new(驗, 鹽 + 隨機 + 密, hashlib.sha256).digest()):
+        raise ValueError("密碼不對，交易日記解不開")
+    return json.loads(bytes(a ^ b for a, b in zip(密, _金鑰流(加, 隨機, len(密)))).decode("utf-8"))
+
+
+def 讀取日記(設定):
+    包 = 讀取設定檔(設定, 日記檔)
+    if not 包:
+        return {"交易": [], "當作庫存": False}
+    return 解密(包, 設定.get("password", "")) if 包.get("加密") else 包
+
+
+def 儲存日記(日記, 設定):
+    密碼 = str(設定.get("password", ""))
+    return 儲存設定檔(設定, 日記檔, 加密(日記, 密碼) if 密碼 else 日記, "更新交易日記")
+
+
+def 交易費用(代號, 買賣, 股數, 價格, 折扣=1.0):
+    """回傳 (手續費, 證交稅)；手續費最低 20 元（零股 1 元）。"""
+    金額 = 股數 * 價格
+    費 = max(round(金額 * 手續費率 * 折扣), 20 if 股數 >= 1000 else 1)
+    稅 = round(金額 * 稅率(代號)) if 買賣 == "賣" else 0
+    return 費, 稅
+
+
+def 交易日記統計(交易們, 現價=None):
+    """先進先出配對。回傳 (已實現表, 庫存表[代號,股數,總成本], 摘要 dict)。"""
+    現價 = 現價 or {}
+    批 = {}  # 代號 → [[剩餘股數, 每股成本(含手續費), 買進日]]
+    已實現 = []
+    for t in sorted(交易們, key=lambda x: (x["日期"], 0 if x["買賣"] == "買" else 1)):
+        代, 股, 價 = str(t["代號"]), float(t["股數"]), float(t["價格"])
+        費, 稅 = float(t.get("手續費") or 0), float(t.get("稅") or 0)
+        if t["買賣"] == "買":
+            批.setdefault(代, []).append([股, (股 * 價 + 費) / 股, pd.Timestamp(t["日期"])])
+            continue
+        剩, 成本, 天數 = 股, 0.0, 0.0
+        for b in 批.get(代, []):
+            if 剩 <= 0:
+                break
+            用 = min(b[0], 剩)
+            成本 += 用 * b[1]
+            天數 += 用 * (pd.Timestamp(t["日期"]) - b[2]).days
+            b[0] -= 用
+            剩 -= 用
+        批[代] = [b for b in 批.get(代, []) if b[0] > 0]
+        配到 = 股 - 剩
+        if 配到 <= 0:
+            continue
+        收入 = 配到 * 價 - (費 + 稅) * 配到 / 股
+        已實現.append({"賣出日": t["日期"], "代號": 代, "股數": 配到, "買進均價": round(成本 / 配到, 2), "賣出價": 價,
+                    "損益": round(收入 - 成本), "報酬率(%)": round((收入 / 成本 - 1) * 100, 2) if 成本 else np.nan,
+                    "持有天數": round(天數 / 配到), "理由": t.get("理由", "")})
+    庫存 = pd.DataFrame([{"代號": c, "股數": sum(b[0] for b in v), "總成本": round(sum(b[0] * b[1] for b in v))}
+                       for c, v in 批.items() if sum(b[0] for b in v) > 0], columns=["代號", "股數", "總成本"])
+    實 = pd.DataFrame(已實現, columns=["賣出日", "代號", "股數", "買進均價", "賣出價", "損益", "報酬率(%)", "持有天數", "理由"])
+    賺 = 實[實["損益"] > 0]
+    賠 = 實[實["損益"] <= 0]
+    摘要 = {
+        "已實現損益": float(實["損益"].sum()), "賣出筆數": len(實),
+        "勝率": len(賺) / len(實) * 100 if len(實) else np.nan,
+        "平均持有天數": float(實["持有天數"].mean()) if len(實) else np.nan,
+        "平均賺": float(賺["損益"].mean()) if len(賺) else np.nan,
+        "平均賠": float(賠["損益"].mean()) if len(賠) else np.nan,
+        "未實現損益": float(sum(r["股數"] * 現價[r["代號"]] - r["總成本"] for _, r in 庫存.iterrows() if r["代號"] in 現價)),
+    }
+    摘要["賺賠比"] = (摘要["平均賺"] / -摘要["平均賠"]) if 摘要["平均賠"] and 摘要["平均賠"] < 0 and pd.notna(摘要["平均賺"]) else np.nan
+    return 實, 庫存, 摘要
+
+
+def 停損目標檢查(交易們, 庫存, 現價):
+    """還持有的股票，最近一筆買進記下的停損價、目標價，跟現價比。"""
+    列們 = []
+    for 代 in 庫存["代號"]:
+        買們 = [t for t in 交易們 if str(t["代號"]) == 代 and t["買賣"] == "買"]
+        if not 買們 or 代 not in 現價:
+            continue
+        有設 = [t for t in 買們 if t.get("停損") or t.get("目標")]
+        t = max(有設 or 買們, key=lambda x: x["日期"])
+        價 = 現價[代]
+        停, 目 = t.get("停損"), t.get("目標")
+        狀態 = ("⚠️ 已跌破停損" if 停 and 價 <= 停 else "🎯 已到目標" if 目 and 價 >= 目 else "持有中")
+        列們.append({"代號": 代, "現價": 價, "停損": 停 or np.nan, "距停損%": round((價 / 停 - 1) * 100, 1) if 停 else np.nan,
+                   "目標": 目 or np.nan, "距目標%": round((目 / 價 - 1) * 100, 1) if 目 else np.nan,
+                   "狀態": 狀態, "買進理由": t.get("理由", "")})
+    return pd.DataFrame(列們)
+
+
+# ========== 庫存風險體檢 ==========
+def 庫存風險(持股, 指標, 指數收盤, 產業表=None, 天數=250, 名稱表=None):
+    """持股：代號、股數。回傳 dict：占比表、產業表、Beta、大盤跌 10% 估計、最大單日跌幅、相關最高的組合、提醒。"""
+    股數 = 持股.assign(代號=持股["代號"].astype(str).str.strip()).groupby("代號")["股數"].sum()
+    寬 = 指標[指標["代號"].isin(股數.index)].pivot_table(index="date", columns="代號", values="還原價").sort_index()
+    收 = 指標[指標["代號"].isin(股數.index)].pivot_table(index="date", columns="代號", values="收盤").sort_index()
+    if 寬.empty:
+        return None
+    最新 = 收.ffill().iloc[-1]
+    市值 = (最新 * 股數.reindex(最新.index)).dropna()
+    市值 = 市值[市值 > 0]
+    權 = 市值 / 市值.sum()
+    報 = 寬[權.index].pct_change().tail(天數)
+    大 = 指數收盤.sort_index().pct_change().reindex(報.index)
+    beta = {}
+    for c in 權.index:
+        x = pd.concat([報[c], 大], axis=1).dropna()
+        beta[c] = float(x.iloc[:, 0].cov(x.iloc[:, 1]) / x.iloc[:, 1].var()) if len(x) >= 60 and x.iloc[:, 1].var() > 0 else np.nan
+    beta = pd.Series(beta)
+    組合 = (報.fillna(0) * 權).sum(axis=1)
+    淨值 = (1 + 組合).cumprod()
+    產 = pd.Series({c: ("ETF" if c.startswith("00") else ((產業表 or {}).get(c) or "其他")) for c in 權.index})
+    產業 = 權.groupby(產).sum().sort_values(ascending=False)
+    占比 = pd.DataFrame({"市值": 市值.round(), "占比%": (權 * 100).round(1), "Beta": beta.round(2), "產業": 產})
+    占比 = 占比.sort_values("占比%", ascending=False)
+    組Beta = float((beta.fillna(1) * 權).sum())
+    相關 = 報.corr()
+    對們 = [(a, b, 相關.at[a, b]) for i, a in enumerate(相關.columns) for b in 相關.columns[i + 1:] if pd.notna(相關.at[a, b])]
+    對們 = sorted(對們, key=lambda x: -x[2])[:3]
+    提醒 = []
+    名 = lambda c: f"{c} {(名稱表 or {}).get(c, '')}".strip()
+    if len(占比) and 占比["占比%"].iloc[0] > 30:
+        提醒.append(f"單一股票 {名(占比.index[0])} 占 {占比['占比%'].iloc[0]:.0f}%，超過 3 成，這檔一跌整體就跟著大跌。")
+    if len(產業) and 產業.iloc[0] > 0.5 and 產業.index[0] != "ETF":
+        提醒.append(f"「{產業.index[0]}」占 {產業.iloc[0] * 100:.0f}%，超過一半集中在同一個產業。")
+    if 組Beta > 1.2:
+        提醒.append(f"整體 Beta {組Beta:.2f}，大盤跌 1% 你的庫存平均跌 {組Beta:.1f}%，比大盤更敏感。")
+    if 對們 and 對們[0][2] > 0.8:
+        提醒.append(f"{名(對們[0][0])} 和 {名(對們[0][1])} 走勢高度同步（相關 {對們[0][2]:.2f}），分散效果有限。")
+    return {"占比": 占比, "產業": 產業, "Beta": 組Beta, "跌10%": 市值.sum() * 組Beta * -0.10,
+            "最大單日": float(組合.min()) if len(組合) else np.nan, "最大單日日": 組合.idxmin() if len(組合) else None,
+            "最大回撤": float((淨值 / 淨值.cummax() - 1).min()) if len(淨值) else np.nan,
+            "大盤最大回撤": float(((1 + 大.fillna(0)).cumprod() / (1 + 大.fillna(0)).cumprod().cummax() - 1).min()),
+            "相關": 對們, "提醒": 提醒, "市值": float(市值.sum()), "天數": len(報)}
+
+
+# ========== 策略總排行榜：所有內建策略用同一套方法比 ==========
+def 策略排行(指標, 往後們=(5, 20), 間隔=5, 起=60):
+    """每隔 N 個交易日，看各策略當天選出的股票，之後 5、20 日的平均報酬，跟同期全部股票平均比。
+    只用股價與籌碼條件（基本面只有最新一期，會偷看未來，所以「低價成長股」不列）。"""
+    日們 = sorted(指標["date"].unique())
+    最長 = max(往後們)
+    取樣 = 日們[起:len(日們) - 最長:間隔]
+    寬 = 指標.pivot_table(index="date", columns="代號", values="還原價").sort_index()
+    位置 = {d: i for i, d in enumerate(寬.index)}
+    策略們 = {名: (設["方向"], 設["條件"]) for 名, 設 in 烏賊條件.items() if "營收創新高" not in 設["條件"]}
+    功課 = {"三&五日強勢股": "多", "三&五日弱勢股": "空", "量大股": "多", "大幅震盪股": "多", "強勢股": "多", "弱勢股": "空"}
+    列們 = []
+    for d in 取樣:
+        當日 = 指標[指標["date"] == d]
+        i = 位置[d]
+        if i + 最長 >= len(寬):
+            continue
+        今 = 寬.iloc[i]
+        後 = {n: 寬.iloc[i + n] / 今 - 1 for n in 往後們}
+        全 = {n: 後[n][~後[n].index.str.startswith("00")].clip(-0.9, 3).mean() for n in 往後們}
+        名單們 = {名: (方向, 選股(當日, dict(條件, 排除ETF=True))["代號"]) for 名, (方向, 條件) in 策略們.items()}
+        for 名, 表 in 每日功課(當日).items():
+            名單們["功課：" + 名] = (功課[名], 表["代號"])
+        for 名, (方向, 代號們) in 名單們.items():
+            代號們 = [c for c in 代號們 if c in 今.index]
+            if not 代號們:
+                continue
+            列 = {"策略": 名, "多空": 方向, "日期": d, "檔數": len(代號們)}
+            for n in 往後們:
+                r = 後[n].reindex(代號們).clip(-0.9, 3).dropna()
+                列[f"{n}日報酬"] = r.mean() * 100
+                列[f"{n}日超額"] = (r.mean() - 全[n]) * 100
+                列[f"{n}日對的比例"] = ((r > 0) if 方向 == "多" else (r < 0)).mean() * 100
+                列[f"{n}日有用"] = 列[f"{n}日超額"] if 方向 == "多" else -列[f"{n}日超額"]
+            列們.append(列)
+    明細 = pd.DataFrame(列們)
+    if 明細.empty:
+        return 明細, 明細
+    n = 最長
+    總 = 明細.groupby(["策略", "多空"]).agg(
+        出現次數=("日期", "size"), 平均檔數=("檔數", "mean"),
+        **{f"{k}日平均報酬%": (f"{k}日報酬", "mean") for k in 往後們},
+        **{f"{k}日超額%": (f"{k}日超額", "mean") for k in 往後們},
+        **{f"{n}日方向對%": (f"{n}日對的比例", "mean")},
+        **{f"{n}日贏過大盤次數%": (f"{n}日有用", lambda s: (s > 0).mean() * 100)},
+        有用程度=(f"{n}日有用", "mean")).reset_index()
+    # 空方策略：選出來的股票越弱越好，所以「有用程度」＝多方看超額、空方看超額的相反數
+    總 = 總.sort_values("有用程度", ascending=False).round(2)
+    總["平均檔數"] = 總["平均檔數"].round(1)
+    return 總, 明細

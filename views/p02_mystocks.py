@@ -13,15 +13,8 @@ def 標警示(表):
 
 # ---------- 我的庫存 ----------
 def 我的庫存():
-    """庫存放在 Streamlit 的 Secrets（不會出現在公開的 GitHub）。"""
-    try:
-        設定 = dict(st.secrets)
-    except Exception:
-        設定 = {}
-    if "holdings" not in 設定:
-        段落("PORTFOLIO // 我的庫存")
-        st.info("尚未設定庫存。到 Streamlit 的 App settings →「Secrets」貼上庫存清單即可顯示。")
-        return
+    """庫存來源：Streamlit 的 Secrets（不會出現在公開的 GitHub），或交易日記推算（加密存放）。"""
+    設定 = _設定()
     密碼 = str(設定.get("password", ""))
     if 密碼 and not st.session_state.get("已解鎖"):
         段落("PORTFOLIO // 我的庫存")
@@ -34,12 +27,23 @@ def 我的庫存():
             st.error("密碼不正確")
         return
 
-    持股 = pd.read_csv(io.StringIO(str(設定["holdings"]).strip()), dtype={"代號": str})
-    庫存區(持股)
-    try:
-        庫存歷史區(持股)
-    except Exception as e:
-        st.caption(f"庫存走勢暫時算不出來（{type(e).__name__}）")
+    持股, 來源 = 目前持股()
+    if 持股 is None:
+        段落("PORTFOLIO // 我的庫存")
+        st.info("尚未設定庫存。到 Streamlit 的 App settings →「Secrets」貼上庫存清單，或在下方「交易日記」記下買賣，就會顯示。")
+    else:
+        if 來源 == "交易日記":
+            st.caption("📒 這裡的庫存是由下方「交易日記」的買賣紀錄推算出來的。")
+        庫存區(持股)
+        try:
+            庫存歷史區(持股)
+        except Exception as e:
+            st.caption(f"庫存走勢暫時算不出來（{type(e).__name__}）")
+        try:
+            風險體檢區(持股)
+        except Exception as e:
+            st.caption(f"庫存體檢暫時算不出來（{type(e).__name__}）")
+    交易日記區()
     if 密碼:
         a, b = st.columns([4, 1])
         a.caption("已記住登入（網址裡的 k=… 就是通行證，請勿分享登入後的網址）。可把這個網址加入書籤或主畫面。")
@@ -47,6 +51,180 @@ def 我的庫存():
             st.session_state["已解鎖"] = False
             st.query_params.pop("k", None)
             st.rerun()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def 風險資料(持股, _資料版本):
+    產業 = dict(zip(今日["代號"], 今日["產業"])) if "產業" in 今日.columns else {}
+    K = 指數K線("TAIEX", _資料版本)
+    return engine.庫存風險(持股, 指標, K.set_index("date")["close"], 產業, 名稱表=市場名稱)
+
+
+def 風險體檢區(持股):
+    r = 風險資料(持股[["代號", "股數"]].assign(代號=持股["代號"].astype(str).str.strip()), _版本)
+    if not r:
+        return
+    段落("RISK // 庫存風險體檢")
+    卡片格([
+        卡片("整體 Beta", f"{r['Beta']:.2f}", "大盤漲跌 1%，庫存平均漲跌幾 %", 紅 if r["Beta"] > 1.2 else "#EDEDED"),
+        卡片("大盤跌 10% 估計", f"{r['跌10%']:+,.0f}", f"約 {r['Beta'] * -10:+.1f}%（用 Beta 推算）", 綠),
+        卡片("近一年最大單日跌", f"{r['最大單日'] * 100:+.1f}%",
+             f"{r['最大單日日']:%Y/%m/%d}" if r["最大單日日"] is not None else "", 綠),
+        卡片("近一年最大回撤", f"{r['最大回撤'] * 100:.1f}%", f"大盤同期 {r['大盤最大回撤'] * 100:.1f}%",
+             綠 if r["最大回撤"] < r["大盤最大回撤"] else "#EDEDED"),
+    ])
+    for 句 in r["提醒"]:
+        st.warning("⚠️ " + 句)
+    if not r["提醒"]:
+        st.success("沒有明顯過度集中：單一股票不到 3 成、同產業不到一半、整體 Beta 不高。")
+    左, 右 = st.columns([1, 1])
+    with 左:
+        產 = r["產業"].sort_values()
+        圖 = go.Figure(go.Bar(x=產.values * 100, y=產.index, orientation="h", marker_color=青,
+                              text=[f"{v * 100:.0f}%" for v in 產.values], textposition="outside"))
+        圖.update_layout(title="產業占比（依市值）", xaxis_title="%")
+        st.plotly_chart(圖表外觀(圖, 60 + 32 * len(產)), width="stretch")
+    with 右:
+        表 = r["占比"].reset_index(names="代號")
+        表["名稱"] = 表["代號"].map(市場名稱).fillna(表["代號"])
+        表格(表[["名稱", "占比%", "Beta", "產業", "市值", "代號"]].style.format({"占比%": "{:.1f}", "Beta": "{:.2f}", "市值": "{:,.0f}"}, na_rep="—"),
+             hide_index=True, width="stretch")
+    if r["相關"]:
+        st.caption("走勢最同步的組合（相關係數，1＝完全同漲同跌）：" + "、".join(
+            f"{市場名稱.get(a, a)}－{市場名稱.get(b, b)} {v:.2f}" for a, b, v in r["相關"]))
+    st.caption(f"用近 {r['天數']} 個交易日的每日漲跌計算。Beta＝個股跟加權指數一起動的程度（1＝跟大盤一樣，1.5＝大盤跌 1% 它平均跌 1.5%）；"
+               "「大盤跌 10%」是用 Beta 推算的平均情況，實際可能更多或更少。")
+
+
+交易欄 = ["日期", "代號", "買賣", "股數", "價格", "手續費", "稅", "停損", "目標", "理由"]
+
+
+def 交易日記區():
+    段落("JOURNAL // 交易日記")
+    if not _密碼():
+        st.caption("⚠️ 網站沒有設密碼，交易日記會以明文存到公開的 GitHub 分支；在 Secrets 設 password 就會自動加密。")
+    if 錯 := st.session_state.pop("交易日記讀取錯誤", None):
+        st.error(f"交易日記讀不到：{錯}")
+    日記 = 交易日記()
+    交易們 = 日記["交易"]
+    現價 = dict(zip(今日["代號"], 今日["收盤"]))
+    實, 庫, 摘 = engine.交易日記統計(交易們, 現價)
+    if 交易們:
+        數 = lambda v, f="{:+,.0f}": f.format(v) if pd.notna(v) else "—"
+        卡片格([
+            卡片("已實現損益", 數(摘["已實現損益"]), f"賣出 {摘['賣出筆數']} 筆", 漲跌色(摘["已實現損益"])),
+            卡片("勝率", 數(摘["勝率"], "{:.0f}%"), "賣出時賺錢的比例"),
+            卡片("賺賠比", 數(摘["賺賠比"], "{:.2f}"), f"平均賺 {數(摘['平均賺'])}／平均賠 {數(摘['平均賠'])}"),
+            卡片("平均持有", 數(摘["平均持有天數"], "{:.0f} 天"), "從買進到賣出"),
+            卡片("未實現損益", 數(摘["未實現損益"]), f"還持有 {len(庫)} 檔", 漲跌色(摘["未實現損益"])),
+        ])
+    else:
+        st.caption("把每一筆買賣記下來（含當時的理由與停損），網站會自動算已實現損益、勝率、平均持有天數，"
+                   "之後回頭對答案。有設密碼時，紀錄會加密後才存到 GitHub，別人看不到內容。")
+    分頁 = st.tabs(["➕ 記一筆", "📒 全部紀錄", "✅ 已實現損益", "🎯 停損／目標", "⚙️ 匯入匯出"])
+    with 分頁[0]:
+        with st.form("記一筆", clear_on_submit=True):
+            a, b, c = st.columns([2, 1, 1])
+            股 = a.selectbox("股票", 股票選項, index=None, placeholder="輸入代號或名稱")
+            買賣 = b.segmented_control("買賣", ["買", "賣"], default="買")
+            日 = c.date_input("日期", value=dt.date.today())
+            a, b, c = st.columns(3)
+            股數 = a.number_input("股數", min_value=1, value=1000, step=1000, help="一張 = 1000 股；零股直接填股數")
+            價格 = b.number_input("成交價", min_value=0.0, value=0.0, step=0.05, format="%.2f")
+            折扣 = c.number_input("手續費折扣", min_value=0.1, max_value=1.0, value=float(日記.get("折扣", 1.0)), step=0.05,
+                                help="例如 6 折填 0.6；手續費＝成交金額 × 0.1425% × 折扣，最低 20 元")
+            a, b = st.columns(2)
+            停損 = a.number_input("停損價（買進時填，可空白）", min_value=0.0, value=0.0, step=0.05, format="%.2f")
+            目標 = b.number_input("目標價（可空白）", min_value=0.0, value=0.0, step=0.05, format="%.2f")
+            理由 = st.text_input("理由（為什麼買／賣）", placeholder="例如：站回 5 週線、月營收創新高、跌破停損")
+            送出 = st.form_submit_button("記下來", type="primary")
+        if 送出:
+            if not 股 or 價格 <= 0 or not 買賣:
+                st.error("請選股票、填成交價。")
+            else:
+                代 = 股.split(" ")[0]
+                費, 稅 = engine.交易費用(代, 買賣, 股數, 價格, 折扣)
+                持有 = 庫.set_index("代號")["股數"].get(代, 0) if len(庫) else 0
+                if 買賣 == "賣" and 股數 > 持有:
+                    st.warning(f"日記裡 {代} 只有 {持有:,.0f} 股，賣出 {股數:,.0f} 股會有一部分配不到買進紀錄（之前的買進可以補記）。")
+                新 = {"日期": f"{日:%Y-%m-%d}", "代號": 代, "買賣": 買賣, "股數": int(股數), "價格": float(價格),
+                     "手續費": 費, "稅": 稅, "停損": float(停損) or None, "目標": float(目標) or None, "理由": 理由.strip()}
+                存交易日記({**日記, "交易": 交易們 + [新], "折扣": float(折扣)})
+                st.rerun()
+    with 分頁[1]:
+        if not 交易們:
+            st.caption("還沒有紀錄。")
+        else:
+            表 = pd.DataFrame(交易們).reindex(columns=交易欄)
+            表["名稱"] = 表["代號"].map(市場名稱).fillna("")
+            表["金額"] = (表["股數"] * 表["價格"]).round()
+            表 = 表.sort_values("日期", ascending=False)
+            表格(表[["日期", "名稱", "買賣", "股數", "價格", "金額", "手續費", "稅", "停損", "目標", "理由", "代號"]]
+                 .style.map(lambda v: f"color:{紅 if v == '買' else 綠}", subset=["買賣"])
+                 .format({"股數": "{:,.0f}", "價格": "{:,.2f}", "金額": "{:,.0f}", "手續費": "{:,.0f}", "稅": "{:,.0f}",
+                          "停損": "{:,.2f}", "目標": "{:,.2f}"}, na_rep="—"), hide_index=True, width="stretch")
+            標籤 = [f"{t['日期']} {t['買賣']} {t['代號']} {市場名稱.get(t['代號'], '')} {t['股數']:,} 股 @{t['價格']:g}" for t in 交易們]
+            刪 = st.multiselect("要刪除的紀錄", range(len(交易們)), format_func=lambda i: 標籤[i], key="刪交易")
+            if 刪 and st.button(f"🗑️ 刪除 {len(刪)} 筆", key="刪交易鈕"):
+                存交易日記({**日記, "交易": [t for i, t in enumerate(交易們) if i not in set(刪)]})
+                st.rerun()
+    with 分頁[2]:
+        if 實.empty:
+            st.caption("還沒有賣出紀錄。")
+        else:
+            顯 = 實.assign(名稱=實["代號"].map(市場名稱).fillna("")).sort_values("賣出日", ascending=False)
+            表格(顯[["賣出日", "名稱", "股數", "買進均價", "賣出價", "損益", "報酬率(%)", "持有天數", "理由", "代號"]].style
+                 .map(lambda v: f"color:{漲跌色(v)}", subset=["損益", "報酬率(%)"])
+                 .format({"股數": "{:,.0f}", "買進均價": "{:,.2f}", "賣出價": "{:,.2f}", "損益": "{:+,.0f}", "報酬率(%)": "{:+.2f}"}),
+                 hide_index=True, width="stretch")
+            st.caption("先進先出：賣出時先配最早買進的那幾筆。損益已扣買賣手續費與證交稅。")
+    with 分頁[3]:
+        檢 = engine.停損目標檢查(交易們, 庫, 現價) if len(庫) else pd.DataFrame()
+        if 檢.empty:
+            st.caption("還持有的股票沒有記停損／目標價。")
+        else:
+            檢["名稱"] = 檢["代號"].map(市場名稱).fillna("")
+            表格(檢[["名稱", "狀態", "現價", "停損", "距停損%", "目標", "距目標%", "買進理由", "代號"]].style
+                 .format({"現價": "{:,.2f}", "停損": "{:,.2f}", "目標": "{:,.2f}", "距停損%": "{:+.1f}", "距目標%": "{:+.1f}"}, na_rep="—"),
+                 hide_index=True, width="stretch")
+            st.caption("距停損%＝現價比停損價高多少（越小越危險）；距目標%＝還要漲多少才到目標。用最近一次有填的買進紀錄。")
+    with 分頁[4]:
+        設定 = _設定()
+        if "holdings" in 設定 and len(庫):
+            當 = st.toggle("用交易日記當「我的庫存」（不用再改 Secrets）", value=bool(日記.get("當作庫存")), key="日記當庫存")
+            if 當 != bool(日記.get("當作庫存")):
+                存交易日記({**日記, "當作庫存": 當})
+                st.rerun()
+            秘 = pd.read_csv(io.StringIO(str(設定["holdings"]).strip()), dtype={"代號": str})
+            秘 = 秘.assign(代號=秘["代號"].astype(str).str.strip()).groupby("代號")["股數"].sum()
+            差 = pd.concat([秘.rename("Secrets"), 庫.set_index("代號")["股數"].rename("交易日記")], axis=1).fillna(0)
+            差 = 差[差["Secrets"] != 差["交易日記"]]
+            if len(差):
+                st.caption("Secrets 庫存和交易日記不一致的股票（日記少記的買進可以補上）：" + "、".join(
+                    f"{市場名稱.get(c, c)} {r['Secrets']:,.0f}／{r['交易日記']:,.0f} 股" for c, r in 差.iterrows()))
+            else:
+                st.caption("✅ Secrets 庫存和交易日記推算的股數一致。")
+        if 交易們:
+            st.download_button("⬇️ 下載交易日記 CSV", pd.DataFrame(交易們).reindex(columns=交易欄).to_csv(index=False).encode("utf-8-sig"),
+                               file_name=f"交易日記_{dt.date.today():%Y%m%d}.csv", mime="text/csv")
+        上傳 = st.file_uploader("匯入 CSV（欄位：日期,代號,買賣,股數,價格，可加 手續費,稅,停損,目標,理由）", type=["csv"], key="匯入日記")
+        if 上傳 is not None and st.button("匯入", key="匯入日記鈕"):
+            try:
+                新表 = pd.read_csv(上傳, dtype={"代號": str})
+                新們 = []
+                for _, r in 新表.iterrows():
+                    代, 買賣 = str(r["代號"]).strip(), str(r["買賣"]).strip()[:1]
+                    股數, 價 = int(r["股數"]), float(r["價格"])
+                    費, 稅 = engine.交易費用(代, 買賣, 股數, 價, float(日記.get("折扣", 1.0)))
+                    取 = lambda k, 預設: r[k] if k in 新表.columns and pd.notna(r[k]) else 預設
+                    新們.append({"日期": str(pd.Timestamp(r["日期"]).date()), "代號": 代, "買賣": "賣" if 買賣 == "賣" else "買",
+                               "股數": 股數, "價格": 價, "手續費": float(取("手續費", 費)), "稅": float(取("稅", 稅)),
+                               "停損": float(取("停損", 0)) or None, "目標": float(取("目標", 0)) or None, "理由": str(取("理由", ""))})
+                存交易日記({**日記, "交易": 交易們 + 新們})
+                st.success(f"已匯入 {len(新們)} 筆")
+                st.rerun()
+            except Exception as e:
+                st.error(f"匯入失敗：{e}")
 
 
 def 庫存歷史區(持股):
