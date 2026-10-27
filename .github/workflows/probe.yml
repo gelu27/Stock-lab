@@ -1,0 +1,12 @@
+name: 暫時測試資料來源
+on:
+  push:
+    branches: [claude/project-thread-4vbzu0]
+    paths: ["tmp_probe/**"]
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: pip install requests
+      - run: python tmp_probe/probe.py
