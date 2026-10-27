@@ -195,6 +195,49 @@ def 策略排行區():
                "會偷看未來，所以沒列入。這是歷史統計，不代表之後也會一樣。")
 
 
+def 訂閱清單():
+    if "條件訂閱" not in st.session_state:
+        try:
+            st.session_state["條件訂閱"] = engine.讀取設定檔(_設定(), "subscriptions.json") or {}
+        except Exception:
+            return {}
+    return st.session_state["條件訂閱"]
+
+
+def 存訂閱(訂閱):
+    st.session_state["條件訂閱"] = 訂閱
+    try:
+        if engine.儲存設定檔(_設定(), "subscriptions.json", 訂閱, "更新選股訂閱"):
+            st.toast("選股訂閱已儲存")
+        else:
+            st.toast("已暫存（網站重新啟動會消失；在 Secrets 設定 GITHUB_TOKEN 就能永久保存）")
+    except Exception as e:
+        st.error(f"選股訂閱存檔失敗：{e}")
+
+
+def 條件訂閱區(條件, 範本, 結果):
+    with st.expander(f"🔔 訂閱這組條件：每天收盤後 LINE 通知「新符合」「剛剔除」的股票（目前 {len(訂閱清單())} 組）"):
+        if not 可編輯():
+            st.caption("要先到「02 / 我的股票」輸入密碼解鎖才能訂閱。")
+            return
+        訂 = 訂閱清單()
+        a, b = st.columns([3, 1])
+        名 = a.text_input("幫這組條件取個名字", value=範本 if 範本 != "自訂條件" else "", placeholder="例如：高殖利率低本益比",
+                         key="訂閱名稱", label_visibility="collapsed")
+        if b.button("🔔 訂閱", key="訂閱鈕", disabled=not 名.strip()):
+            存訂閱({**訂, 名.strip(): {"條件": 條件, "建立": f"{最新日:%Y-%m-%d}", "檔數": len(結果)}})
+            st.rerun()
+        if len(結果) > 50:
+            st.caption(f"⚠️ 這組條件今天有 {len(結果)} 檔，太多的話每天變動會很多，LINE 只會列前 15 檔。")
+        for n, v in list(訂.items()):
+            a, b = st.columns([4, 1])
+            a.markdown(f"**{n}**　{v.get('建立', '')} 建立，當時 {v.get('檔數', '—')} 檔")
+            if b.button("取消", key=f"取消訂閱_{n}"):
+                存訂閱({k: x for k, x in 訂.items() if k != n})
+                st.rerun()
+        st.caption("訂閱的條件存在 ai-reports 分支的 subscriptions.json。第一天只記錄名單、不通知；之後每天收盤摘要會附上變動。")
+
+
 # ---------- 04 選股 ----------
 選股分頁 = st.tabs(["條件選股", "烏賊每日功課", "烏賊策略總覽", "🏆 策略排行榜", "券商報告", "網紅說法"])
 with 選股分頁[3]:
@@ -273,6 +316,7 @@ with 選股分頁[0]:
   st.caption("點一下任何一列，就會跳到那檔股票的個股查詢。")
   st.download_button("下載 CSV", 結果[顯示欄].to_csv(index=False).encode("utf-8-sig"),
                      file_name=f"選股_{最新日:%Y%m%d}.csv")
+  條件訂閱區(條件, 範本, 結果)
 
   段落("CHART // 個股走勢")
   選項 = (結果["代號"] + " " + 結果["名稱"]).tolist() or (今日["代號"] + " " + 今日["名稱"]).tolist()

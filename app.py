@@ -263,16 +263,22 @@ if "精簡表格" not in st.session_state:  # 手機預設精簡
         st.session_state["精簡表格"] = "Mobile" in st.context.headers.get("User-Agent", "")
     except Exception:
         st.session_state["精簡表格"] = False
-a, c, b = st.container(key="toolbar").columns([3, 1, 1], vertical_alignment="center")
+a, c, e, d, b = st.container(key="toolbar").columns([3, 1, 1, 1, 1], vertical_alignment="center")
 a.caption(f"📅 資料日期 {最新日:%Y/%m/%d}　·　資料庫最後更新 {最後更新()}"
           '<span class="hide-m">（每個交易日約 18:00 自動更新）</span>', unsafe_allow_html=True)
 c.toggle("📱 精簡表格", key="精簡表格", help="表格只留名稱、股價、漲跌等重點欄位，手機不用左右滑")
+e.toggle("⬇️ 下載表格", key="顯示下載", help="打開後，每個表格下面會多一個「下載 Excel」按鈕")
+with d.popover("📖 名詞"):
+    找 = st.text_input("查名詞", placeholder="例如：共振區、Beta、融資維持率", key="查名詞", label_visibility="collapsed")
+    for 詞, 說明 in engine.名詞表.items():
+        if not 找 or 找.lower() in 詞.lower() or 找 in 說明:
+            st.markdown(f"**{詞}**　{說明}")
 with b.popover("🔄 更新"):
     st.markdown("**重新載入**：資料庫已經更新、但網站顯示的還是舊資料時按。")
     if st.button("🔄 重新載入網站資料", key="重新載入"):
         載入.clear()
         st.cache_data.clear()
-        for k in ("自選股", "到價提醒"):
+        for k in ("自選股", "到價提醒", "交易日記"):
             st.session_state.pop(k, None)
         engine.釋放記憶體()
         st.rerun()
@@ -505,9 +511,31 @@ def 加代號(資料, 參數):
     return 表
 
 
+_表格序 = [0]  # 每次重跑從 0 數，給下載按鈕不重複的 key
+
+
 def 表格(資料, **參數):
-    """st.dataframe，名稱前面自動加代號。"""
-    return st.dataframe(加代號(資料, 參數), **參數)
+    """st.dataframe，名稱前面自動加代號；上方開了「⬇️ 下載表格」時，下面多一個下載 Excel 按鈕。"""
+    資料 = 加代號(資料, 參數)
+    結果 = st.dataframe(資料, **參數)
+    if st.session_state.get("顯示下載"):
+        表 = 資料.data if isinstance(資料, Styler) else 資料
+        if isinstance(表, pd.DataFrame) and len(表):
+            藏 = [k for k, v in (參數.get("column_config") or {}).items() if v is None and k in 表.columns]
+            檔 = io.BytesIO()
+            try:
+                出 = 表.drop(columns=藏)
+                for 欄 in 出.columns:  # Excel 不收有時區的時間
+                    if isinstance(出[欄].dtype, pd.DatetimeTZDtype):
+                        出[欄] = 出[欄].dt.tz_localize(None)
+                出.to_excel(檔, index=not 參數.get("hide_index", False))
+            except Exception:
+                return 結果
+            _表格序[0] += 1
+            st.download_button("⬇️ 下載 Excel", 檔.getvalue(), file_name=f"台股觀測_{最新日:%Y%m%d}_{_表格序[0]}.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               key=f"下載表格_{參數.get('key') or _表格序[0]}")
+    return 結果
 
 
 def 點選表(表, 樣式, key, 動作=None, **參數):

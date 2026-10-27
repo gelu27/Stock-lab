@@ -40,6 +40,10 @@ def 我的庫存():
         except Exception as e:
             st.caption(f"庫存走勢暫時算不出來（{type(e).__name__}）")
         try:
+            股利預估區(持股)
+        except Exception as e:
+            st.caption(f"股利預估暫時算不出來（{type(e).__name__}）")
+        try:
             風險體檢區(持股)
         except Exception as e:
             st.caption(f"庫存體檢暫時算不出來（{type(e).__name__}）")
@@ -51,6 +55,29 @@ def 我的庫存():
             st.session_state["已解鎖"] = False
             st.query_params.pop("k", None)
             st.rerun()
+
+
+def 股利預估區(持股):
+    t = engine.股利預估(持股)
+    if t.empty:
+        return
+    年 = pd.Timestamp.now().year
+    段落(f"DIVIDEND // {年} 年股利收入預估")
+    已 = t[t["狀態"] == "已除息"]["金額"].sum()
+    待 = t[t["狀態"] != "已除息"]["金額"].sum()
+    保 = t["補充保費"].sum()
+    卡片格([
+        卡片("今年合計（預估）", f"{已 + 待:,.0f}", f"{t['代號'].nunique()} 檔、{len(t)} 次", 紅),
+        卡片("已入帳", f"{已:,.0f}", "已經除息"),
+        卡片("還會領", f"{待:,.0f}", "已公告＋估計"),
+        卡片("二代健保補充保費", f"{保:,.0f}", "單次 ≥ 2 萬元扣 2.11%", 綠 if 保 else "#EDEDED"),
+    ])
+    顯 = t.assign(名稱=t["代號"].map(市場名稱).fillna(t["代號"]), 日期=t["除息日"].dt.strftime("%m/%d"))
+    表格(顯[["日期", "名稱", "狀態", "每股", "股數", "金額", "補充保費", "代號"]].style
+         .map(lambda v: f"color:{灰}" if v == "已除息" else (f"color:{青}" if v == "已公告" else "color:#FFC24B"), subset=["狀態"])
+         .format({"每股": "{:.2f}", "股數": "{:,.0f}", "金額": "{:,.0f}", "補充保費": "{:,.0f}"}), hide_index=True, width="stretch")
+    st.caption("以目前股數計算。已除息、已公告用交易所資料；去年同期有配、今年還沒公告的，用最近一次的金額估計（黃色）。"
+               "權息一起發的用交易所的權息合計值估，含配股價值。現金股利約在除息後 1 個月內入帳。股利所得可選合併計稅（8.5% 抵減，上限 8 萬）或 28% 分開計稅。")
 
 
 @st.cache_data(ttl=3600, show_spinner=False)

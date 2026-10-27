@@ -63,6 +63,58 @@ def 評分驗證區():
 """)
 
 
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
+def 評分明細資料(_資料版本):
+    return engine.讀取評分回測明細()
+
+
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
+def 權重驗證資料(權重tuple, _資料版本):
+    明 = 評分明細資料(_資料版本)
+    return engine.權重驗證(明, dict(權重tuple)) if 明 is not None else None
+
+
+def 自訂權重區():
+    段落("CUSTOM // 自訂評分權重")
+    st.caption("拉一拉四個面向的權重，馬上看：①用這組權重，過去幾年分數有沒有用（跟目前權重比）②今天的高分榜會變成什麼樣。只是試算，不會改到網站的正式分數。")
+    目前 = engine.評分權重
+    cols = st.columns(4)
+    權 = {面: cols[i].slider(f"{面}面 %", 0, 100, int(round(目前[面] * 100)), 5, key=f"自訂權重_{面}")
+         for i, 面 in enumerate(目前)}
+    if sum(權.values()) == 0:
+        st.warning("至少要有一個面向大於 0。")
+        return
+    權 = {k: v / sum(權.values()) for k, v in 權.items()}
+    新 = 權重驗證資料(tuple(權.items()), _版本)
+    舊 = 權重驗證資料(tuple(目前.items()), _版本)
+    if 新 and 舊:
+        卡片格([
+            卡片("你的權重 IC", f"{新['IC']:+.3f}", f"目前權重 {舊['IC']:+.3f}", 紅 if 新["IC"] > 舊["IC"] else 綠),
+            卡片("顯著性 t", f"{新['t']:+.1f}", "超過 2 才比較不像巧合"),
+            卡片("最高分組 − 最低分組", f"{新['高減低']:+.2f}%", f"目前權重 {舊['高減低']:+.2f}%（之後 20 日超額）",
+                 紅 if 新["高減低"] > 舊["高減低"] else 綠),
+            卡片("IC 為正的月份", f"{新['IC為正'] * 100:.0f}%", f"共 {新['期數']} 個月"),
+        ])
+        圖 = go.Figure([go.Bar(x=[f"第{i}組" for i in 舊["五分組"].index], y=舊["五分組"].values, name="目前權重", marker_color=灰),
+                        go.Bar(x=[f"第{i}組" for i in 新["五分組"].index], y=新["五分組"].values, name="你的權重", marker_color=青)])
+        圖.update_layout(title="總分由低到高分五組 · 之後 20 日超額報酬（%）", barmode="group", legend=dict(orientation="h", y=1.15))
+        st.plotly_chart(圖表外觀(圖, 300), width="stretch")
+    else:
+        st.caption("歷史驗證明細還沒產生（每天資料更新後自動計算），先只顯示今天的排行。")
+    t = 分.copy()
+    t["自訂總分"] = engine.加權總分(t, 權)
+    t = t[(t["5日均量"] >= 500) & ~t.index.str.startswith("00")].dropna(subset=["自訂總分"])
+    t["原排名"] = t["總分"].rank(ascending=False, method="min")
+    t = t.sort_values(["自訂總分", "總分"], ascending=False).head(20).reset_index(names="代號")
+    t["名次變化"] = (t["原排名"] - (t.index + 1)).astype(int)
+    st.markdown("**用你的權重，今天的前 20 名**")
+    點選表(t[["名稱", "自訂總分", "總分", "名次變化", "技術", "籌碼", "基本", "市場", "收盤", "漲跌幅", "代號"]],
+           評分樣式(t[["名稱", "自訂總分", "總分", "名次變化", "技術", "籌碼", "基本", "市場", "收盤", "漲跌幅", "代號"]])
+           .format({"自訂總分": "{:.0f}", "名次變化": "{:+d}"}), "自訂權重榜", height=35 * 21 + 3)
+    st.caption("名次變化＝跟目前正式權重的排名比，往前幾名（＋）或往後幾名（−）。歷史驗證的基本面只有營收、本益比、殖利率（沒有歷史 EPS、毛利率），"
+               "所以基本面的實際效果可能比回測更好或更差。")
+
+
 # ---------- 06 每日評分 ----------
 分, d, 大 = 評分資料(_版本)
 段落(f"MARKET // 大盤評分　{大['日期']:%Y/%m/%d}")
@@ -127,4 +179,5 @@ with st.expander("📖 評分怎麼算？"):
 規則寫在 `engine.py` 的「評分規則」表，可以自己調整分數。每天收盤後的 LINE 摘要也會附上大盤與庫存的評分。
 """)
 評分驗證區()
+自訂權重區()
 st.caption("⚠️ 分數只是把公開數據套進固定規則的結果，不含新聞、產業前景與突發事件，不構成投資建議。")
