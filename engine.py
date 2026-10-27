@@ -3959,6 +3959,16 @@ def 券商報告表(報告們):
     return pd.DataFrame(列們).sort_values("日期", ascending=False).reset_index(drop=True)
 
 
+def 加潛在空間(表, 現價):
+    """現價＝{代號: 今天收盤}。加上「現價」與「潛在空間%」（目標價 ÷ 現價 − 1），每天跟著收盤更新。"""
+    if 表.empty:
+        return 表
+    表 = 表.copy()
+    表["現價"] = 表["代號"].astype(str).map(現價).astype(float)
+    表["潛在空間%"] = ((表["目標價"] / 表["現價"] - 1) * 100).round(1)
+    return 表
+
+
 def 上修名單(報告們, 天數=30):
     """近 N 天有券商上修 EPS 或目標價的台股代號。"""
     表 = 券商報告表(報告們)
