@@ -1,14 +1,21 @@
 name: AI 大盤解讀
 
 on:
+  # GitHub 排程在整點最擁擠、常延遲或漏跑，所以錯開整點，再加一個備援時間；
+  # 備援那次如果當天已經寫過就自動跳過，不會重複傳 LINE
   schedule:
-    - cron: "30 0 * * 1-5"   # 台灣時間 08:30 盤前解讀
-    - cron: "0 14 * * 1-5"   # 台灣時間 22:00 夜盤與美股解讀
+    - cron: "7 0 * * 1-5"    # 台灣時間 08:07 盤前解讀
+    - cron: "41 0 * * 1-5"   # 08:41 盤前備援
+    - cron: "13 14 * * 1-5"  # 22:13 夜盤與美股解讀
+    - cron: "47 14 * * 1-5"  # 22:47 夜盤備援
   workflow_dispatch:
     inputs:
       mode:
         description: "盤前、收盤或夜盤"
         default: "盤前"
+      auto:
+        description: "true＝當成自動排程（今天已寫過或太晚就跳過）；外部定時服務請帶 true"
+        default: "false"
 
 permissions:
   contents: write
@@ -24,8 +31,15 @@ jobs:
           python-version: "3.12"
       - run: pip install pandas requests pyarrow anthropic
       - name: 寫大盤解讀（收盤解讀在「更新資料庫」最後一步）
-        run: python notify.py brief ${{ github.event.inputs.mode || (github.event.schedule == '30 0 * * 1-5' && '盤前' || '夜盤') }}
+        run: |
+          if [ -n "$MODE" ]; then M="$MODE"
+          elif [ "$(echo "$SCHEDULE" | awk '{print $2}')" = "0" ]; then M=盤前
+          else M=夜盤; fi
+          python notify.py brief "$M"
         env:
+          MODE: ${{ github.event.inputs.mode }}
+          SCHEDULE: ${{ github.event.schedule }}
+          BRIEF_AUTO: ${{ (github.event_name == 'schedule' || github.event.inputs.auto == 'true') && '1' || '0' }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
