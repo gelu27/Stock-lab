@@ -493,7 +493,9 @@ def 價位分析(代號, _資料版本):
 @st.cache_data(ttl=3600, show_spinner="回測 5 年支撐壓力中…")
 def 價位回測(代號, _資料版本):
     K = 指數K線(代號, _資料版本)
-    return engine.回測摘要(engine.支撐壓力回測(K)) if K is not None and len(K) > 300 else pd.DataFrame()
+    if K is None or len(K) <= 300:
+        return pd.DataFrame()
+    return engine.回測摘要(engine.支撐壓力回測(K, 指數成交值(代號, _資料版本)))
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -549,7 +551,8 @@ def 關鍵價位區():
                               key="價位區間", label_visibility="collapsed") or 120
     圖分頁 = st.tabs(["支撐壓力圖", "櫃買 ÷ 加權 強弱", "缺口清單", "準不準？（回測）", "守 5 週線的強勢股"])
     with 圖分頁[0]:
-        st.plotly_chart(支撐壓力圖(K, sr, 區們, 天數), width="stretch", config={"displayModeBar": False})
+        st.plotly_chart(支撐壓力圖(K, sr, 區們, 天數, 摘要=價位回測(代號, _版本)), width="stretch",
+                        config={"displayModeBar": False})
     with 圖分頁[1]:
         強弱圖(天數)
     with 圖分頁[2]:
@@ -559,7 +562,7 @@ def 關鍵價位區():
     with 圖分頁[4]:
         守週線表()
     with st.expander("📋 完整價位表"):
-        價位明細(sr, 區們, "價位明細")
+        價位明細(sr, 區們, "價位明細", 價位回測(代號, _版本))
     st.caption("自動計算，不是人工畫線：月線／季線／半年線＝20／60／120 日均線；黃線＝最近一段漲勢（或跌勢）的費波那契回檔；"
                "橘色＝還沒回補的跳空缺口；白虛線＝波段高低點；灰虛線＝整數關卡；紫線與左側橫條＝分價量（近 120 日每個價位累積的成交金額，"
                "最長那條＝成交最密集，深紫＝7 成成交集中的區間）；青色色帶＝2 種以上方法重疊的「共振區」，通常比單一條線重要。"
@@ -608,29 +611,7 @@ def 回測區(代號):
     if t.empty:
         st.caption("資料不足，無法回測。")
         return
-    基 = t.set_index("方法")
-    自動 = 基.loc["全部自動價位", "守住率%"] if "全部自動價位" in 基.index else np.nan
-    隨機 = 基.loc["隨機對照", "守住率%"] if "隨機對照" in 基.index else np.nan
-    最好 = t[~t["方法"].isin(["全部自動價位", "隨機對照"])].nlargest(1, "支撐守住%")
-    話 = (f"全部自動價位守住率 {自動:.0f}%，任意畫的價位（隨機對照）是 {隨機:.0f}%，"
-         + ("差不多，所以<b>單一條線不要太迷信</b>，要配合量價、燈號一起看。" if abs(自動 - 隨機) < 5 else
-            ("自動價位明顯比較有用。" if 自動 > 隨機 else "自動價位反而比較差，要更謹慎。")))
-    if len(最好):
-        r = 最好.iloc[0]
-        話 += f"當支撐最可靠的是「{r['方法']}」（守住 {r['支撐守住%']:.0f}%）。"
-    st.markdown(f'<div class="verdict sub">{話}</div>', unsafe_allow_html=True)
-    樣式 = t.style
-    for c in ("守住率%", "支撐守住%", "壓力守住%"):   # 跟隨機對照比：比較好越紅、比較差越綠
-        b = 基.loc["隨機對照", c] if "隨機對照" in 基.index else 50
-        樣式 = 樣式.map(lambda v, b=b: "" if pd.isna(v) or abs(v - b) < 2 else
-                        f"background-color:rgba({'255,59,92' if v > b else '0,214,143'},{min(abs(v - b) / 15, 1) * 0.5 + 0.08:.2f})",
-                        subset=[c])
-    表格(樣式.format(
-        {"守住率%": "{:.0f}", "支撐守住%": "{:.0f}", "壓力守住%": "{:.0f}"}, na_rep="—"),
-        hide_index=True, width="stretch", height=35 * (len(t) + 1) + 3)
-    st.caption("回測方法：近 5 年每隔 5 個交易日，只用「當時」以前的資料畫價位，看之後 20 天有沒有碰到（差 0.3% 內）；"
-               "碰到後 3 天內收盤都沒有跌破（壓力是突破）1% 以上就算守住。隨機對照＝離收盤 1～4% 的任意價位，"
-               "用來比較：如果自動價位跟隨機差不多，代表那類價位沒有特別神奇。紅底＝比隨機對照好、綠底＝比隨機差。")
+    回測顯示(t)
 
 
 def 強弱圖(天數=120):

@@ -730,8 +730,10 @@ def 跌破站回條(項們):
 價位色 = {"回檔": "#FFC24B", "缺口": "#FF8A3D", "前高低": "#BDBDBD", "整數": "#555555", "分價量": "#8F7CFF"}
 
 
-def 支撐壓力圖(K, sr, 區們, 天數=120, 高=440, 均線們=((20, 青, "月線"), (60, "#FF00E5", "季線"), (120, "#FFC24B", "半年線"))):
-    """K 線＋均線＋自動畫的支撐壓力線：黃＝費波那契回檔、橘＝未回補缺口、白＝前高前低、灰＝整數關卡，青色色帶＝共振區。"""
+def 支撐壓力圖(K, sr, 區們, 天數=120, 高=440, 均線們=((20, 青, "月線"), (60, "#FF00E5", "季線"), (120, "#FFC24B", "半年線")),
+             摘要=None):
+    """K 線＋均線＋自動畫的支撐壓力線：黃＝費波那契回檔、橘＝未回補缺口、白＝前高前低、灰＝整數關卡，青色色帶＝共振區。
+    有回測摘要時，過去守住率不比隨機價位好的線畫淡一點。"""
     k = K.tail(天數 + 240).reset_index(drop=True)
     for n, _, _ in 均線們:
         k[f"MA{n}"] = k["close"].rolling(n).mean()
@@ -759,11 +761,15 @@ def 支撐壓力圖(K, sr, 區們, 天數=120, 高=440, 均線們=((20, 青, "�
         if 上 >= 下界 and 下 <= 上界:
             圖.add_shape(type="rect", x0=日, x1=k["date"].iloc[-1], y0=下, y1=上, fillcolor="#FF8A3D", opacity=0.12,
                          line_width=0, layer="below")
-    線們 = sr["價位"][(sr["價位"]["類別"] != "均線") & sr["價位"]["價位"].between(下界, 上界)].sort_values("價位")
+    _, 比隨機 = engine.價位可靠度(sr["價位"], 摘要, 區們)
+    線們 = sr["價位"].assign(比隨機=比隨機)
+    線們 = 線們[(線們["類別"] != "均線") & 線們["價位"].between(下界, 上界)].sort_values("價位")
     標籤們 = []   # 很靠近的價位合併成一個標籤，避免字疊在一起
     for _, r in 線們.iterrows():
         色 = 價位色.get(r["類別"], 灰)
-        圖.add_hline(y=r["價位"], line=dict(color=色, width=1, dash="dot" if r["類別"] in ("整數", "前高低") else "dash"))
+        弱 = pd.notna(r["比隨機"]) and r["比隨機"] < 0   # 過去守住率不比隨便畫的線好
+        圖.add_hline(y=r["價位"], opacity=0.35 if 弱 else 1,
+                     line=dict(color=色, width=1 if 弱 else 1.4, dash="dot" if r["類別"] in ("整數", "前高低") else "dash"))
         if 標籤們 and r["價位"] - 標籤們[-1]["價"] < (上界 - 下界) * 0.05:
             標籤們[-1]["名"].append(r["名稱"])
         else:
@@ -827,15 +833,49 @@ def 價位卡片(sr, 解, 昨收=None):
     卡片格(卡們)
 
 
-def 價位明細(sr, 區們, key):
+def 價位明細(sr, 區們, key, 摘要=None):
     t = sr["價位"].copy()
     共 = {n for z in 區們 for n in z["成員"]}
     t["共振"] = t["名稱"].map(lambda n: "◆" if n in 共 else "")
-    t = t[["角色", "名稱", "價位", "距離%", "共振", "說明"]]
-    表格(t.style.map(lambda v: f"color:{紅 if v == '壓力' else 綠}", subset=["角色"])
-                 .format({"價位": "{:,.2f}", "距離%": "{:+.2f}"}), hide_index=True, width="stretch",
-                 height=min(35 * (len(t) + 1) + 3, 520), key=key,
-                 column_config={"說明": st.column_config.TextColumn(width="large")})
+    t["過去守住%"], t["比隨機"] = engine.價位可靠度(t, 摘要, 區們)
+    欄 = ["角色", "名稱", "價位", "距離%", "共振"] + (["過去守住%", "比隨機"] if t["過去守住%"].notna().any() else []) + ["說明"]
+    t = t[欄]
+    樣式 = t.style.map(lambda v: f"color:{紅 if v == '壓力' else 綠}", subset=["角色"])
+    if "比隨機" in t:
+        樣式 = 樣式.map(lambda v: "" if pd.isna(v) else f"color:{紅 if v >= 3 else (綠 if v < 0 else '#BDBDBD')}", subset=["比隨機"])
+    表格(樣式.format({"價位": "{:,.2f}", "距離%": "{:+.2f}", "過去守住%": "{:.0f}", "比隨機": "{:+.0f}"}, na_rep="—"),
+         hide_index=True, width="stretch", height=min(35 * (len(t) + 1) + 3, 520), key=key,
+         column_config={"說明": st.column_config.TextColumn(width="large")})
+    if "比隨機" in t:
+        st.caption("過去守住%＝這一類價位在回測裡碰到後守住的比例（支撐看有沒有跌破、壓力看有沒有突破）；"
+                   "比隨機＝跟隨便畫的價位比，正的越多越可靠，負的代表跟亂畫差不多，圖上會畫淡一點。")
+
+
+def 回測顯示(t):
+    """支撐壓力回測摘要：一句結論＋各方法守住率表（跟隨機對照比較上色）。"""
+    基 = t.set_index("方法")
+    自動 = 基.loc["全部自動價位", "守住率%"] if "全部自動價位" in 基.index else np.nan
+    隨機 = 基.loc["隨機對照", "守住率%"] if "隨機對照" in 基.index else np.nan
+    最好 = t[~t["方法"].isin(["全部自動價位", "隨機對照"]) & (t["測試次數"] >= 20)].nlargest(1, "支撐守住%")
+    話 = (f"全部自動價位守住率 {自動:.0f}%，任意畫的價位（隨機對照）是 {隨機:.0f}%，"
+         + ("差不多，所以<b>單一條線不要太迷信</b>，要配合量價、燈號一起看。" if abs(自動 - 隨機) < 5 else
+            ("自動價位明顯比較有用。" if 自動 > 隨機 else "自動價位反而比較差，要更謹慎。")))
+    if len(最好):
+        r = 最好.iloc[0]
+        話 += f"當支撐最可靠的是「{r['方法']}」（守住 {r['支撐守住%']:.0f}%）。"
+    st.markdown(f'<div class="verdict sub">{話}</div>', unsafe_allow_html=True)
+    樣式 = t.style
+    for c in ("守住率%", "支撐守住%", "壓力守住%"):   # 跟隨機對照比：比較好越紅、比較差越綠
+        b = 基.loc["隨機對照", c] if "隨機對照" in 基.index else 50
+        樣式 = 樣式.map(lambda v, b=b: "" if pd.isna(v) or abs(v - b) < 2 else
+                        f"background-color:rgba({'255,59,92' if v > b else '0,214,143'},{min(abs(v - b) / 15, 1) * 0.5 + 0.08:.2f})",
+                        subset=[c])
+    表格(樣式.format({"守住率%": "{:.0f}", "支撐守住%": "{:.0f}", "壓力守住%": "{:.0f}"}, na_rep="—"),
+         hide_index=True, width="stretch", height=35 * (len(t) + 1) + 3)
+    st.caption("回測方法：近 5 年每隔 5 個交易日，只用「當時」以前的資料畫價位，看之後 20 天有沒有碰到（差 0.3% 內）；"
+               "碰到後 3 天內收盤都沒有跌破（壓力是突破）1% 以上就算守住。隨機對照＝離收盤 1～4% 的任意價位，"
+               "用來比較：如果自動價位跟隨機差不多，代表那類價位沒有特別神奇。紅底＝比隨機對照好、綠底＝比隨機差。"
+               "測試次數少於 20 次的方法參考價值低（分價量只有近一年多的成交資料）。")
 
 
 def 缺口表(K, key):
