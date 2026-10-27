@@ -262,6 +262,15 @@ def 個股K線(代號):
     return engine.還原K線(個股全史(代號, _版本))
 
 
+@st.cache_data(ttl=43200, show_spinner="回測這檔的支撐壓力中…", max_entries=30)
+def 個股價位回測(代號, _資料版本):
+    K = engine.還原K線(個股全史(代號, _資料版本))
+    if K is None or len(K) <= 300:
+        return pd.DataFrame()
+    歷史 = 個股全史(代號, _資料版本)
+    return engine.回測摘要(engine.支撐壓力回測(K, 歷史.set_index("date")["成交值億"]))
+
+
 def 個股價位區(代號):
     K = 個股K線(代號)
     if K is None:
@@ -295,9 +304,15 @@ def 個股價位區(代號):
         燈 = "r" if 貴["跌幅%"] <= -30 else ("y" if 貴["跌幅%"] <= -10 else "g")
         st.markdown(f'<div class="lamp {燈}" style="margin:6px 0"><div class="t"><i>💸</i>買貴檢查</div>'
                     f'<div class="s">{貴["說明"]}</div></div>', unsafe_allow_html=True)
-    st.plotly_chart(支撐壓力圖(K, sr, 區們, 120, 420), width="stretch", config={"displayModeBar": False})
+    摘要 = 個股價位回測(代號, _版本)
+    st.plotly_chart(支撐壓力圖(K, sr, 區們, 120, 420, 摘要=摘要), width="stretch", config={"displayModeBar": False})
+    with st.expander("🧪 這檔的價位準不準？（5 年回測）"):
+        if 摘要.empty:
+            st.caption("上市不到一年半，資料不足，無法回測。")
+        else:
+            回測顯示(摘要)
     with st.expander("📋 完整價位表與缺口清單"):
-        價位明細(sr, 區們, f"個股價位明細{代號}")
+        價位明細(sr, 區們, f"個股價位明細{代號}", 摘要)
         缺口表(K, f"個股缺口{代號}")
     st.caption("用還原股價計算（除權息不會被當成缺口），最新一天等於實際股價。線的意思跟首頁「關鍵價位」相同。僅供研究參考。")
 

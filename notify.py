@@ -338,22 +338,56 @@ def 評分摘要(持股, 自選們=()):
     return 行們
 
 
+def 盤中價位提醒(狀態, 今天):
+    """加權、櫃買盤中跌破或站回重要價位（月線、季線、半年線、年線、共振區、黑 K 一半）：
+    把即時價當成今天的收盤接在日 K 後面判斷，同一個價位一天只通知一次。"""
+    import engine
+    try:
+        即 = engine.即時報價(["t00", "o00"], {"o00": "上櫃"})
+    except Exception as e:
+        print("即時指數抓不到：", repr(e))
+        return []
+    訊息 = []
+    for 代, 碼, 名 in (("TAIEX", "t00", "加權"), ("TPEX", "o00", "櫃買")):
+        K = engine.讀取指數K線(代)
+        r = 即[即["code"] == 碼]
+        if K is None or r.empty or pd.isna(r["close"].iloc[0]):
+            continue
+        r = r.iloc[0]
+        if K["date"].iloc[-1].strftime("%Y-%m-%d") == 今天:   # 已經有今天的收盤（理論上盤中不會），不重複
+            continue
+        今K = pd.DataFrame([{"date": pd.Timestamp(今天), "open": r["close"], "high": r["high"], "low": r["low"],
+                            "close": r["close"]}]).fillna(r["close"])
+        for 動, 價名, 價 in engine.跌破站回(pd.concat([K, 今K], ignore_index=True)):
+            鍵 = f"盤中_{代}_{動}_{價名}"
+            if 狀態.get(鍵) != 今天:
+                狀態[鍵] = 今天
+                訊息.append(f"{'⚠️' if 動 == '跌破' else '✅'} {名}盤中{動}{價名}"
+                          + ("" if "共振區" in 價名 else f" {價:,.2f}") + f"（現在 {r['close']:,.2f}，{r['time']}）")
+    return 訊息
+
+
 def 盤中提醒():
     現在 = dt.datetime.now(台北)
     if 現在.weekday() >= 5 or not (dt.time(9, 0) <= 現在.time() <= dt.time(13, 35)):
         print("不在盤中時間，略過")
         return
+    今天 = 現在.strftime("%Y-%m-%d")
+    狀態, sha = 讀設定("alert_state.json")
+    價位訊息 = 盤中價位提醒(狀態, 今天)
     提醒, _ = 讀設定("alerts.json")
     if not 提醒:
-        print("沒有設定到價提醒")
+        if 價位訊息:
+            推播("📍 大盤盤中關鍵價位\n" + "\n".join(價位訊息))
+            寫設定("alert_state.json", 狀態, sha)
+        else:
+            print("沒有設定到價提醒，大盤也沒有跌破／站回")
         return
     _, t = 最新行情()
     市場 = dict(zip(t["code"], t.get("market", pd.Series("上市", index=t.index))))
     頻道 = "|".join(f"{'otc' if 市場.get(c) == '上櫃' else 'tse'}_{c}.tw" for c in 提醒)
     r = requests.get("https://mis.twse.com.tw/stock/api/getStockInfo.jsp?json=1&delay=0&ex_ch=" + 頻道,
                      headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
-    今天 = 現在.strftime("%Y-%m-%d")
-    狀態, sha = 讀設定("alert_state.json")
     訊息 = []
     for m in r.json().get("msgArray", []):
         c = m.get("c")
@@ -371,6 +405,8 @@ def 盤中提醒():
                 字 = "漲到" if 方向 == "上" else "跌到"
                 訊息.append(f"🔔 {m.get('n', c)} {字} {價:,.2f}（提醒價 {設[方向]:g}）{m.get('t', '')}")
                 狀態[鍵] = 今天
+    if 價位訊息:
+        訊息 = ["📍 大盤盤中關鍵價位"] + 價位訊息 + ([""] if 訊息 else []) + 訊息
     if 訊息:
         推播("\n".join(訊息))
         寫設定("alert_state.json", 狀態, sha)
