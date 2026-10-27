@@ -242,6 +242,10 @@ def 提醒事項(代號們):
         行們 += ETF共識提醒(代號們, 狀態)
     except Exception as e:
         print("ETF 共識失敗：", repr(e))
+    try:
+        行們 += 條件訂閱提醒(狀態)
+    except Exception as e:
+        print("選股訂閱失敗：", repr(e))
     if 狀態 != 舊狀態:
         try:
             寫設定("alert_state.json", 狀態, sha)
@@ -280,6 +284,39 @@ def 營收新高提醒(代號們, 狀態):
                        + ("，近 5 年新高" if 新高 else ""))
     狀態["營收公布_啟用"] = 狀態.get("營收公布_啟用", 今天)
     return (["", "💰 月營收公布（庫存＋自選）"] + 行們) if 行們 else []
+
+
+def 條件訂閱提醒(狀態, 最多=15):
+    """網站「04 選股」訂閱的條件：跟上次比，新符合、剛剔除的股票。第一次只記名單不通知。"""
+    import engine
+    訂閱, _ = 讀設定("subscriptions.json")
+    if not 訂閱:
+        return []
+    指標 = engine.計算指標(engine.讀取資料庫(最近天數=130))
+    最新 = 指標["date"].max()
+    今日 = engine.加基本面(指標[指標["date"] == 最新], engine.讀取基本面())
+    名 = dict(zip(今日["代號"], 今日["名稱"]))
+    日 = f"{最新:%Y-%m-%d}"
+    行們 = []
+    for n, v in 訂閱.items():
+        鍵 = f"訂閱_{n}"
+        if 狀態.get(鍵, {}).get("日期") == 日:
+            continue
+        條件 = {k: (tuple(x) if k in ("股價區間", "RSI區間") and isinstance(x, list) else x) for k, x in v.get("條件", {}).items()}
+        現 = engine.選股(今日, 條件)["代號"].tolist()
+        舊 = 狀態.get(鍵, {}).get("名單")
+        狀態[鍵] = {"日期": 日, "名單": 現}
+        if 舊 is None:
+            continue
+        新 = [c for c in 現 if c not in 舊]
+        出 = [c for c in 舊 if c not in 現]
+        if 新 or 出:
+            行們.append(f"【{n}】共 {len(現)} 檔")
+            if 新:
+                行們.append("　🆕 新符合：" + "、".join(f"{c} {名.get(c, '')}" for c in 新[:最多]) + (f" 等 {len(新)} 檔" if len(新) > 最多 else ""))
+            if 出:
+                行們.append("　👋 剛剔除：" + "、".join(f"{c} {名.get(c, '')}" for c in 出[:最多]) + (f" 等 {len(出)} 檔" if len(出) > 最多 else ""))
+    return (["", "🔔 選股訂閱變動"] + 行們) if 行們 else []
 
 
 def ETF共識提醒(代號們, 狀態, 門檻=3):

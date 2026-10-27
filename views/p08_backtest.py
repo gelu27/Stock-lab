@@ -75,7 +75,7 @@ def 套用回測條件():
 
 
 套用回測條件()
-回測分頁 = st.tabs(["組合回測", "個股回測"])
+回測分頁 = st.tabs(["組合回測", "個股回測", "💰 定期定額"])
 with 回測分頁[0]:
     回測條件存取()
     with st.expander("⚙️ 選股條件（跟 04 / 選股 共用）"):
@@ -188,3 +188,36 @@ with 回測分頁[1]:
             st.write("這段期間沒有產生任何交易。")
         else:
             表格(上色(交易), hide_index=True, width="stretch")
+with 回測分頁[2]:
+    st.caption("每個月固定日期買進同一檔股票或 ETF（可買零股），現金股利自動再投入，看存到現在變多少；同時跟「同一筆總金額第一天全部買進」比。")
+    全部選項 = (今日["代號"] + " " + 今日["名稱"]).tolist()
+    a, b = st.columns([2, 1])
+    標 = a.selectbox("股票／ETF", 全部選項, index=next((i for i, v in enumerate(全部選項) if v.startswith("0050 ")), 0), key="定額標的")
+    每月 = b.number_input("每月扣款（元）", 1000, 1_000_000, 10000, step=1000, key="定額金額")
+    a, b, c, d = st.columns(4)
+    開 = a.date_input("開始", max(最早, 最新日.date() - dt.timedelta(days=365 * 5)), min_value=最早, max_value=最新日.date(), key="定額開始")
+    結 = b.date_input("結束", 最新日.date(), min_value=最早, max_value=最新日.date(), key="定額結束")
+    日 = c.number_input("每月幾號扣款", 1, 28, 6, key="定額日", help="遇到假日就順延到下一個交易日")
+    折 = d.number_input("手續費折扣", 0.1, 1.0, 1.0, step=0.05, key="定額折扣", help="定期定額多半是每筆 1 元起或固定低手續費，可填較低折扣")
+    代 = 標.split()[0]
+    曲, 摘 = engine.定期定額(個股全史(代, _版本), 每月, 日, pd.Timestamp(開), pd.Timestamp(結), 折)
+    if 曲 is None or not 摘["扣款次數"]:
+        st.info("這段期間沒有資料。")
+    else:
+        卡片格([
+            卡片("總投入", f"{摘['總投入']:,.0f}", f"扣款 {摘['扣款次數']} 次"),
+            卡片("現在市值", f"{摘['市值']:,.0f}", f"報酬 {摘['報酬率%']:+.1f}%", 漲跌色(摘["報酬率%"])),
+            卡片("年化報酬（XIRR）", f"{摘['年化%']:+.1f}%", "考慮每筆錢投入的時間", 漲跌色(摘["年化%"])),
+            卡片("一次全買", f"{摘['一次投入市值']:,.0f}", f"報酬 {摘['一次投入報酬率%']:+.1f}%、年化 {摘['一次投入年化%']:+.1f}%",
+                 漲跌色(摘["一次投入報酬率%"])),
+            卡片("最大回檔", f"{摘['最大回檔%']:.1f}%", f"一次全買 {摘['一次投入最大回檔%']:.1f}%", 綠),
+        ])
+        圖 = go.Figure([go.Scatter(x=曲.index, y=曲["投入"], name="累積投入", line=dict(color=灰, width=1, shape="hv")),
+                        go.Scatter(x=曲.index, y=曲["市值"], name="定期定額市值", line=dict(color=青, width=2)),
+                        go.Scatter(x=曲.index, y=曲["一次投入"], name="第一天一次全買", line=dict(color="#FFC24B", width=1.2, dash="dot"))])
+        圖.update_layout(hovermode="x unified", legend=dict(orientation="h", y=1.12))
+        圖.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+        st.plotly_chart(圖表外觀(圖, 340), width="stretch")
+        st.caption("用還原股價計算（含息、分割與減資不會算錯），扣款當天收盤價成交，買進手續費最低 1 元，還沒賣出所以不扣證交稅。"
+                   "一次全買通常報酬較高但回檔也較大；定期定額的好處是分散進場時間、不用猜高低點。歷史結果不代表未來。")
+
