@@ -3505,7 +3505,9 @@ def 讀取小台散戶():
     if not f.exists():
         return None
     t = pd.read_csv(f, parse_dates=["date"]).sort_values("date")
-    return t if len(t) else None
+    if not len(t) or t["date"].max() < pd.Timestamp.today().normalize() - pd.Timedelta(days=10):
+        return None   # 太久沒更新（還在回補）就先不顯示，免得拿舊數字當今天
+    return t
 
 
 def 恐慌溫度計(美股=None, 匯率=None, 散戶=None):
