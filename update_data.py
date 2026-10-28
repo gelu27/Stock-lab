@@ -873,7 +873,7 @@ def 抓小台散戶(天數=400):
     起 = (pd.Timestamp(舊["date"].max()).date() + dt.timedelta(days=1)) if len(舊) else 今天 - dt.timedelta(days=天數)
     列們 = []
     while 起 <= 今天:
-        迄 = min(起 + dt.timedelta(days=30), 今天)
+        迄 = min(起 + dt.timedelta(days=27), 今天)   # 期交所一次最多查一個月（2 月只有 28 天，超過會回錯誤頁）
         區間 = {"queryStartDate": f"{起:%Y/%m/%d}", "queryEndDate": f"{迄:%Y/%m/%d}"}
         法 = _期交所下載("https://www.taifex.com.tw/cht/3/futContractsDateDown", {**區間, "commodityId": "MXF"},
                         f"小台法人 {起}～{迄}")
