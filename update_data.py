@@ -172,7 +172,12 @@ def 上市一天(日期):
                 "trust": 表["投信買賣超股數"].map(轉數字), "dealer": 表["自營商買賣超股數"].map(轉數字),
                 "total": 表["三大法人買賣超股數"].map(轉數字),
             }))
-    融資 = 證交所(f"https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN?date={字串}&selectType=ALL&response=json")
+    return 個股, 指數, 合併籌碼(籌碼, 上市融資(日期))
+
+
+def 上市融資(日期):
+    """證交所個股融資融券餘額（每天約 21:00 後才公布）。回傳 DataFrame[code, margin, short] 或 None。"""
+    融資 = 證交所(f"https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN?date={日期:%Y%m%d}&selectType=ALL&response=json")
     融資表 = None
     for _, 欄位, 資料 in 取得表格(融資 or {}):
         if 欄位[:2] == ["代號", "名稱"] and len(欄位) >= 13:
@@ -180,7 +185,7 @@ def 上市一天(日期):
             融資表 = pd.DataFrame({"code": [str(r[0]).strip() for r in 資料],
                                 "margin": [轉數字(r[6]) for r in 資料],
                                 "short": [轉數字(r[12]) for r in 資料]})
-    return 個股, 指數, 合併籌碼(籌碼, 融資表)
+    return 融資表
 
 
 def 加估值(個股, 估值, 代號欄, 對照):
@@ -246,14 +251,38 @@ def 上櫃一天(日期):
                 "foreign": [轉數字(r[10]) for r in 資料], "trust": [轉數字(r[13]) for r in 資料],
                 "dealer": [轉數字(r[22]) for r in 資料], "total": [轉數字(r[23]) for r in 資料],
             }))
-    融資 = 櫃買(f"https://www.tpex.org.tw/www/zh-tw/margin/balance?date={斜線}&id=&response=json")
+    return 個股, 合併籌碼(籌碼, 上櫃融資(日期))
+
+
+def 上櫃融資(日期):
+    融資 = 櫃買(f"https://www.tpex.org.tw/www/zh-tw/margin/balance?date={日期:%Y/%m/%d}&id=&response=json")
     融資表 = None
     for _, 欄位, 資料 in 取得表格(融資 or {}):
         if "資餘額" in 欄位 and "券餘額" in 欄位:
             表 = pd.DataFrame(資料, columns=欄位)
             融資表 = pd.DataFrame({"code": 表["代號"].str.strip(), "margin": 表["資餘額"].map(轉數字),
                                 "short": 表["券餘額"].map(轉數字)})
-    return 個股, 合併籌碼(籌碼, 融資表)
+    return 融資表
+
+
+def 補融資(天數=10):
+    """融資融券要晚上 9 點後才公布，傍晚更新時還抓不到；之後補進最近幾天缺融資的籌碼檔。"""
+    檔們 = sorted((資料夾 / "chips").glob("*/*.csv.gz"))[-天數:]
+    補了 = []
+    for 檔 in 檔們:
+        t = pd.read_csv(檔, dtype={"code": str})
+        if "margin" in t.columns and t["margin"].notna().sum() > 100:
+            continue
+        日期 = dt.datetime.strptime(檔.name[:8], "%Y%m%d").date()
+        融們 = [x for x in (上市融資(日期), 上櫃融資(日期)) if x is not None]
+        if not 融們:
+            print(f"{日期} 融資還沒公布")
+            continue
+        融 = pd.concat(融們).drop_duplicates("code")
+        t = t.drop(columns=[c for c in ("margin", "short") if c in t.columns]).merge(融, on="code", how="outer")
+        存壓縮檔(t[t["code"].str.fullmatch(代號格式)].sort_values("code"), 檔)
+        補了.append(f"{日期:%m/%d}")
+    print("補融資：" + ("、".join(補了) if 補了 else "沒有缺的"))
 
 
 # ---------- 紀錄 ----------
@@ -1465,6 +1494,11 @@ def main():
                 工作()
             except Exception as 錯誤:
                 print(f"{工作.__name__} 失敗：{錯誤}")
+
+    try:
+        補融資()
+    except Exception as 錯誤:
+        print(f"補融資 失敗：{錯誤}")
 
     # 刪掉超過保留年限的舊資料
     for 子 in ("prices", "chips"):

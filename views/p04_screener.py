@@ -319,7 +319,7 @@ with 選股分頁[1]:
       with 分頁表:
           表 = 功課[標籤]
           if "股本億" not in 表.columns:
-              表 = 表.join(engine._股本表(), on="代號")
+              表 = 表.join(讀檔("_股本表", _版本), on="代號")
           點選表(表, 上色(表[[c for c in 功課欄 if c in 表.columns]]), f"功課表{標籤}", height=420)
   with st.expander("課程重點：盤整、上升、下降趨勢怎麼操作"):
       st.markdown("""

@@ -1,19 +1,33 @@
 # 07 每日評分：由 app.py 的 執行頁面() 在同一個命名空間執行，可直接用 app.py 的共用函式與資料。
+@st.cache_data(show_spinner=False, max_entries=2)
+def 今年漲幅(版本鍵):
+    """今年以來漲跌幅（%）：還原股價跟去年最後一個交易日比，含除權息。"""
+    年初 = pd.Timestamp(year=最新日.year, month=1, day=1)
+    還原 = 指標[["date", "代號", "還原價"]]
+    基 = 還原[還原["date"] < 年初].groupby("代號")["還原價"].last()
+    今 = 還原[還原["date"] == 最新日].set_index("代號")["還原價"]
+    return ((今 / 基 - 1) * 100).round(1)
+
+
 def 評分表(代號們=None, 篩選=None):
-    """總分、各面向分數與較昨日變化，代號們給了就照那個順序。"""
+    """總分、昨日總分、各面向分數與較昨日變化、今年漲幅，代號們給了就照那個順序。"""
     分 = 評分資料(_版本)[0]
     表 = 分.reindex(list(代號們)) if 代號們 is not None else 分
     if 篩選 is not None:
         表 = 表[篩選(表)]
     表 = 表.dropna(subset=["總分"]).reset_index(names="代號")
-    return 表[["名稱", "總分", "較昨日", "看法", "技術", "籌碼", "基本", "市場", "收盤", "漲跌幅", "產業", "代號"]]
+    表["昨日總分"] = 表["總分"] - 表["較昨日"]
+    表["今年漲幅%"] = 表["代號"].map(今年漲幅(_版本))
+    return 表[["名稱", "總分", "昨日總分", "較昨日", "看法", "技術", "籌碼", "基本", "市場", "收盤", "漲跌幅", "今年漲幅%",
+              "產業", "代號"]]
 
 
 def 評分樣式(表):
-    分欄 = [c for c in ("總分", "技術", "籌碼", "基本", "市場") if c in 表.columns]
-    格式 = {c: "{:.0f}" for c in 分欄} | {"較昨日": "{:+.0f}", "收盤": "{:,.2f}", "漲跌幅": "{:+.2f}"}
+    分欄 = [c for c in ("總分", "昨日總分", "技術", "籌碼", "基本", "市場") if c in 表.columns]
+    格式 = ({c: "{:.0f}" for c in 分欄} | {"總分": "{:.1f}", "昨日總分": "{:.1f}", "較昨日": "{:+.1f}", "收盤": "{:,.2f}",
+                                        "漲跌幅": "{:+.1f}", "今年漲幅%": "{:+.1f}"})
     return (表.style.map(lambda v: f"color:{分數色(v)}", subset=分欄)
-            .map(lambda v: f"color:{漲跌色(v)}", subset=[c for c in ("較昨日", "漲跌幅") if c in 表.columns])
+            .map(lambda v: f"color:{漲跌色(v)}", subset=[c for c in ("較昨日", "漲跌幅", "今年漲幅%") if c in 表.columns])
             .format({k: v for k, v in 格式.items() if k in 表.columns}, na_rep="—"))
 
 
@@ -105,14 +119,94 @@ def 自訂權重區():
     t["自訂總分"] = engine.加權總分(t, 權)
     t = t[(t["5日均量"] >= 500) & ~t.index.str.startswith("00")].dropna(subset=["自訂總分"])
     t["原排名"] = t["總分"].rank(ascending=False, method="min")
-    t = t.sort_values(["自訂總分", "總分"], ascending=False).head(20).reset_index(names="代號")
+    t = t.sort_values(["自訂總分", "總分"], ascending=False).head(30).reset_index(names="代號")
     t["名次變化"] = (t["原排名"] - (t.index + 1)).astype(int)
-    st.markdown("**用你的權重，今天的前 20 名**")
+    st.markdown("**用你的權重，今天的前 30 名**")
     點選表(t[["名稱", "自訂總分", "總分", "名次變化", "技術", "籌碼", "基本", "市場", "收盤", "漲跌幅", "代號"]],
            評分樣式(t[["名稱", "自訂總分", "總分", "名次變化", "技術", "籌碼", "基本", "市場", "收盤", "漲跌幅", "代號"]])
-           .format({"自訂總分": "{:.0f}", "名次變化": "{:+d}"}), "自訂權重榜", height=35 * 21 + 3)
+           .format({"自訂總分": "{:.1f}", "名次變化": "{:+d}"}), "自訂權重榜", height=35 * 31 + 3)
     st.caption("名次變化＝跟目前正式權重的排名比，往前幾名（＋）或往後幾名（−）。歷史驗證的基本面只有營收、本益比、殖利率（沒有歷史 EPS、毛利率），"
                "所以基本面的實際效果可能比回測更好或更差。")
+
+
+def 評分依據區():
+    段落("RULES // 評分依據：每一條加減分規則")
+    依據 = pd.DataFrame(engine.評分規則說明, columns=["面向", "加減分", "條件"])
+    依據["面向"] = 依據["面向"] + "面（佔 " + 依據["面向"].map(lambda 面: f"{engine.評分權重[面]:.0%}") + "）"
+    表格(依據.style.map(lambda v: f"color:{紅 if str(v).startswith('+') else 綠}", subset=["加減分"]),
+         hide_index=True, width="stretch", height=35 * (len(依據) + 1) + 3,
+         column_config={"條件": st.column_config.TextColumn(width="large")})
+    st.caption("每一面從 50 分起算，把符合的條件加總後限制在 0～100 分，再依權重算總分（取到小數第一位）。"
+               "權重是用近 4 年的歷史資料驗證後調整的（見下方「評分歷史驗證」）：基本面最能預測之後的報酬，所以佔一半。"
+               "單一股票為什麼得到這個分數，在上方「單檔評分明細」的「看加分、扣分理由」。")
+
+
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
+def 高分回測資料(門檻, 前幾名, 版本鍵):
+    明 = 評分明細資料(版本鍵)
+    if 明 is None:
+        return None, None
+    return engine.高分股回測(明, engine.評分權重, 門檻, 前幾名)
+
+
+def 高分回測區():
+    段落("BACKTEST // 高分股之後賺不賺？（用過去每月底的分數回測）")
+    a, b = st.columns([1, 2])
+    方式 = a.segmented_control("選法", ["總分門檻", "每月前幾名"], default="總分門檻", key="高分選法") or "總分門檻"
+    if 方式 == "總分門檻":
+        門檻 = b.slider("總分 ≥", 60, 90, 85, 1, key="高分門檻")
+        前幾名 = None
+    else:
+        前幾名 = b.segmented_control("每月取前", [10, 20, 30], default=30, key="高分前幾名",
+                                  format_func=lambda n: f"前 {n} 名") or 30
+        門檻 = None
+    選, 每月 = 高分回測資料(門檻, 前幾名, _版本)
+    if 選 is None:
+        st.caption("歷史分數明細還沒產生（每天資料更新後會自動計算）。")
+        return
+    區間 = st.segmented_control("期間", ["近一年", "全部"], default="近一年", key="高分期間") or "近一年"
+    if 區間 == "近一年":
+        選 = 選[選["date"] >= 最新日 - pd.Timedelta(days=365)]
+    if 選.empty:
+        st.info(f"這段期間沒有總分達 {門檻} 分的股票。回測的分數沒有歷史 EPS、毛利率（基本面最多少約 15 分），"
+                "所以很難達到 85 分；建議把門檻調到 75～80，或改用「每月前幾名」。")
+        return
+    還原 = 指標[["date", "代號", "還原價"]]
+    現 = 還原[還原["date"] == 最新日].set_index("代號")["還原價"]
+    當時 = 還原.set_index(["date", "代號"])["還原價"]
+    鍵 = pd.MultiIndex.from_arrays([選["date"], 選["代號"]])
+    選 = 選.assign(至今=((選["代號"].map(現).values / 當時.reindex(鍵).values - 1) * 100))
+    有 = lambda c: 選[c].dropna() if c in 選 else pd.Series(dtype=float)
+    平 = lambda c: f"{有(c).mean():+.1f}%" if len(有(c)) else "—"
+    勝 = lambda c: f"上漲機率 {(有(c) > 0).mean() * 100:.0f}%" if len(有(c)) else ""
+    卡片格([
+        卡片("選到", f"{len(選):,} 次", f"{選['代號'].nunique()} 檔、{選['date'].nunique()} 個月底"),
+        卡片("之後 20 日平均", 平("報酬"), f"{勝('報酬')}・贏全體 {有('超額20').mean():+.1f}%" if len(有("超額20")) else "",
+             漲跌色(有("報酬").mean() if len(有("報酬")) else 0)),
+        卡片("之後 60 日平均", 平("報酬60"), f"{勝('報酬60')}・贏全體 {有('超額60').mean():+.1f}%" if len(有("超額60")) else "資料累積中",
+             漲跌色(有("報酬60").mean() if len(有("報酬60")) else 0)),
+        卡片("之後 120 日平均", 平("報酬120"), f"{勝('報酬120')}・贏全體 {有('超額120').mean():+.1f}%" if len(有("超額120")) else "資料累積中",
+             漲跌色(有("報酬120").mean() if len(有("報酬120")) else 0)),
+        卡片("買進持有至今", 平("至今"), (勝("至今") + f"・{有('至今').size} 次") if len(有("至今")) else "只算近 14 個月",
+             漲跌色(有("至今").mean() if len(有("至今")) else 0)),
+    ])
+    月 = 每月[每月.index.isin(選["date"].unique())]
+    圖 = go.Figure([go.Bar(x=月.index, y=月["平均報酬"], name="選到的股票", marker_color=青),
+                    go.Bar(x=月.index, y=月["全體報酬"], name="全部股票平均", marker_color=灰)])
+    圖.update_layout(title="每個月底選股，之後 20 個交易日的平均報酬（%）", barmode="group", legend=dict(orientation="h", y=1.15))
+    st.plotly_chart(圖表外觀(圖, 300), width="stretch")
+    顯 = 選.assign(日期=選["date"].dt.strftime("%Y/%m/%d"), 名稱=選["代號"].map(市場名稱).fillna(""))
+    欄 = ["日期", "名稱", "總分", "技術", "籌碼", "基本", "市場", "報酬", "報酬60", "報酬120", "至今", "代號"]
+    顯 = 顯[[c for c in 欄 if c in 顯]].rename(columns={"報酬": "20日%", "報酬60": "60日%", "報酬120": "120日%", "至今": "至今%"})
+    百分 = [c for c in ("20日%", "60日%", "120日%", "至今%") if c in 顯]
+    點選表(顯, 顯.style.map(lambda v: f"color:{漲跌色(v)}", subset=百分).map(lambda v: f"color:{分數色(v)}", subset=["總分"])
+           .format({**{c: "{:+.1f}" for c in 百分}, "總分": "{:.1f}", "技術": "{:.0f}", "籌碼": "{:.0f}", "基本": "{:.0f}",
+                    "市場": "{:.0f}"}, na_rep="—"), "高分回測表", height=min(35 * (len(顯) + 1) + 3, 520))
+    st.caption("做法：每個月最後一個交易日，只用當時看得到的資料打分數（五日均量 500 張以上、不含 ETF），"
+               "挑出分數夠高的股票，看之後 20／60／120 個交易日的報酬（含除權息），「贏全體」＝減掉同一天全部股票的平均。"
+               "至今＝從那天買進持有到最新收盤（網站只留近 14 個月的股價，更早的不算）。"
+               "限制：歷史沒有 EPS、毛利率資料，所以回測分數比現在網站上的分數低一些，85 分以上很少見；沒扣交易成本。"
+               "過去有效不代表未來一定有效。")
 
 
 # ---------- 06 每日評分 ----------
@@ -178,6 +272,8 @@ with st.expander("📖 評分怎麼算？"):
 
 規則寫在 `engine.py` 的「評分規則」表，可以自己調整分數。每天收盤後的 LINE 摘要也會附上大盤與庫存的評分。
 """)
+評分依據區()
 評分驗證區()
+高分回測區()
 自訂權重區()
 st.caption("⚠️ 分數只是把公開數據套進固定規則的結果，不含新聞、產業前景與突發事件，不構成投資建議。")

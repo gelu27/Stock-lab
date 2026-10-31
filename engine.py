@@ -2622,7 +2622,7 @@ def 融資維持率(指標):
     if 金額 is None or "融資餘額" not in 指標.columns:
         return None
     上市 = 指標[(指標["市場"] == "上市") & 指標["date"].isin(金額.index)]
-    市值 = (上市["融資餘額"].astype("float64") * 1000 * 上市["收盤"]).groupby(上市["date"]).sum()
+    市值 = (上市["融資餘額"].astype("float64") * 1000 * 上市["收盤"]).groupby(上市["date"]).sum(min_count=1)
     return (市值 / (金額.reindex(市值.index) * 1000) * 100).dropna().round(1)
 
 
@@ -2769,7 +2769,7 @@ def 情緒指數(指標, 加權=None):
                        "下跌": 群["漲跌"].apply(lambda s: (s < 0).sum())}).astype(float)
     項 = {}
     if "融資餘額" in 指標.columns:
-        融 = 群["融資餘額"].sum().astype(float)
+        融 = 群["融資餘額"].sum(min_count=1).astype(float)
         融 = 融.where(融 > 0)
         項["融資增減"] = _百分位(融.pct_change(20))
         維 = 融資維持率(指標)
@@ -2997,7 +2997,7 @@ def 大盤摘要(指標, 加權, 國際=None, 期貨=None):
     if "外資買超" in 今日:
         金 = lambda 欄: (今日[欄] * 1000 * 今日["收盤"]).sum() / 1e8
         行.append(f"法人買賣超：外資 {金('外資買超'):+,.0f} 億、投信 {金('投信買超'):+,.0f} 億、自營商 {金('自營買超'):+,.0f} 億")
-        融 = 指標.groupby("date")["融資餘額"].sum()
+        融 = 指標.groupby("date")["融資餘額"].sum(min_count=1).dropna()
         if len(融) > 5:
             行.append(f"融資餘額 {融.iloc[-1]:,.0f} 張，5 日 {(融.iloc[-1] / 融.iloc[-6] - 1) * 100:+.1f}%")
         外 = 今日.assign(金額=今日["外資買超"] * 1000 * 今日["收盤"] / 1e8).dropna(subset=["金額"])

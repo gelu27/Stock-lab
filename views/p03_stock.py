@@ -120,6 +120,14 @@ def 做PDF(代號, r, 建議, 內文, 時間):
             "產業": g("產業"), "市場": r["市場"], "卡片": 卡們, "基本資料": 基本, "判讀": engine.規則判讀(r),
             "歷史": 個股全史(代號, _版本), "營收": engine.讀取營收歷史(代號), "損益": engine.單季損益(代號),
             "建議": 建議, "報告": 內文, "報告時間": 時間}
+    if not 代號.startswith("0"):
+        try:
+            資料["公司"] = 公司資料(代號)
+            段 = re.search(r"#+\s*公司介紹[^\n]*\n(.*?)(?=\n#+\s|\Z)", 內文 or "", re.S)
+            if 段 and not 資料["公司"]["AI介紹"]:   # 沒有另外產生公司介紹時，用 AI 報告裡的公司介紹段落
+                資料["公司"] = {**資料["公司"], "AI介紹": "### 公司介紹\n" + 段.group(1).strip()}
+        except Exception:
+            pass
     try:
         h, 週轉, 大 = 變化資料(代號, 126)
         資料["變化"] = {"歷史": h, "週轉": 週轉, "大戶": 大, "解讀": engine.變化解讀(h, 週轉, 大)}
@@ -157,7 +165,7 @@ def 大戶歷史(代號):
 def 變化資料(代號, 天數=126):
     """FLOW 用的資料：近 N 個交易日的歷史、每日週轉率（%）、每週千張大戶。"""
     歷史 = 指標[指標["代號"] == 代號].tail(天數)
-    股 = engine._股本表()
+    股 = 讀檔("_股本表", _版本)
     股數 = 股.at[代號, "發行股數"] if 代號 in 股.index else np.nan
     週轉 = 歷史["volume"] / 股數 * 100 if pd.notna(股數) and 股數 else pd.Series(np.nan, index=歷史.index)
     大 = 大戶歷史(代號)
@@ -244,7 +252,7 @@ def 個股比較(代號):
         "產業": t["產業"].values if "產業" in t else None,
     })
     漲欄 = ["今日%", f"{期間}%", "營收年增%", "法人5日(張)"]
-    樣式 = (表.style.format({"股價": "{:,.2f}", "今日%": "{:+.2f}", f"{期間}%": "{:+.1f}", "總分": "{:.0f}",
+    樣式 = (表.style.format({"股價": "{:,.2f}", "今日%": "{:+.2f}", f"{期間}%": "{:+.1f}", "總分": "{:.1f}",
                             "本益比": "{:.1f}", "殖利率": "{:.2f}", "淨值比": "{:.2f}", "營收年增%": "{:+.1f}",
                             "法人5日(張)": "{:+,.0f}"}, na_rep="—")
           .map(lambda v: f"color:{漲跌色(v)}", subset=漲欄).map(lambda v: f"color:{分數色(v)}", subset=["總分"]))
@@ -397,7 +405,7 @@ def 財報資料(代號, 版本鍵):
 def 個股事件(代號):
     """這檔近一年的公司事件：庫藏股、可轉債、公開申購（初上市櫃、現金增資）。回傳 DataFrame（日期、事件、內容）。"""
     列們 = []
-    庫 = engine.讀取庫藏股()
+    庫 = 讀檔("讀取庫藏股", _版本)
     if 庫 is not None:
         for _, x in 庫[庫["code"] == 代號].iterrows():
             狀態 = "已執行完畢" if str(x["done"]).upper() == "Y" else "執行中"
@@ -406,13 +414,13 @@ def 個股事件(代號):
                                f"期間 {x['start']:%m/%d}～{x['end']:%m/%d}（{狀態}"
                                + (f"，已買回 {x['bought'] / 1000:,.0f} 張、均價 {x['avg_price']:g} 元" if pd.notna(x["bought"]) else "")
                                + "）"})
-    債 = engine.讀取可轉債()
+    債 = 讀檔("讀取可轉債", _版本)
     if 債 is not None:
         for _, x in 債[債["code"] == 代號].iterrows():
             列們.append({"日期": x["issue_date"], "事件": "📜 可轉債",
                         "內容": str(x["name"]) + (f"，發行 {x['amount'] / 1e8:,.1f} 億元" if pd.notna(x["amount"]) else "")
                                + (f"，轉換價 {x['conv_price']:g} 元" if pd.notna(x["conv_price"]) else "")})
-    申 = engine.讀取新股申購()
+    申 = 讀檔("讀取新股申購", _版本)
     if 申 is not None:
         for _, x in 申[申["code"] == 代號].iterrows():
             列們.append({"日期": x["draw_date"], "事件": "🎫 " + ("現金增資" if "增資" in str(x["market"]) else "公開申購"),
@@ -423,6 +431,80 @@ def 個股事件(代號):
         return None
     t = pd.DataFrame(列們).dropna(subset=["日期"]).sort_values("日期", ascending=False)
     return t[t["日期"] >= pd.Timestamp.now() - pd.Timedelta(days=400)]
+
+
+def AI設定():
+    """回傳 (引擎, 金鑰, 模型, 可執行)：有 Gemini 金鑰用 Gemini，否則用 Claude；有密碼時要先解鎖才能用。"""
+    設定 = _設定()
+    if str(設定.get("GEMINI_API_KEY", "")).strip():
+        引擎, 金鑰, 模型 = "Gemini", engine.清理金鑰(設定["GEMINI_API_KEY"]), str(設定.get("GEMINI_MODEL", "gemini-flash-latest"))
+    else:
+        引擎, 金鑰, 模型 = "Claude", engine.清理金鑰(設定.get("ANTHROPIC_API_KEY")), str(設定.get("AI_MODEL", "claude-opus-5-5"))
+    return 引擎, 金鑰, 模型, bool(金鑰) and 可編輯()
+
+
+def 公司介紹區(代號, r):
+    段落("COMPANY // 公司介紹：做什麼、靠什麼賺錢、規模多大")
+    if 代號.startswith("0"):
+        st.caption("ETF 沒有公司介紹，成分股請看「06 / 主動式 ETF」或發行投信網站。")
+        return
+    資 = 公司資料(代號)
+    簡, 規 = 資["簡介"], 資["規模資料"]
+    卡們 = [卡片("產業", r.get("產業") or "—", r["市場"])]
+    if 規:
+        卡們 += [卡片("市值", f"{規['市值億']:,.0f} 億", f"全市場第 {規['市值排名']:,} 名"),
+                卡片("同業市值排名", "—" if not 規.get("同業市值排名") else f"第 {規['同業市值排名']} / {規['同業家數']}",
+                     "🏆 產業市值龍頭" if 規.get("同業市值排名") == 1 else 規["產業"], 紅 if 規.get("同業市值排名") == 1 else "#EDEDED")]
+        if 規.get("近12月營收億"):
+            卡們.append(卡片("近 12 月營收", f"{規['近12月營收億']:,.0f} 億",
+                           f"同業第 {規['同業營收排名']} 名" if 規.get("同業營收排名") else ""))
+    if 簡.get("董事長"):
+        卡們.append(卡片("董事長 / 總經理", 簡.get("董事長", "—"), 簡.get("總經理", "")))
+    if 簡.get("成立日期") or 簡.get("上市日期"):
+        卡們.append(卡片("成立 / 上市", 簡.get("成立日期") or "—", f"上市櫃 {簡.get('上市日期') or '—'}"))
+    卡片格(卡們)
+    if 資["業務"]:
+        st.markdown(f'<div class="verdict sub"><b>主要經營業務</b>　{資["業務"]}</div>', unsafe_allow_html=True)
+    if 資["概念"]:
+        st.caption("🏷️ " + 資["概念"])
+    比 = 資["比重表"]
+    if len(比):
+        顯 = 比.head(8)
+        if len(比) > 8:
+            顯 = pd.concat([顯, pd.DataFrame([{"項目": f"其他 {len(比) - 8} 項", "比重": 比["比重"].iloc[8:].sum()}])])
+        圖 = go.Figure(go.Bar(x=顯["比重"], y=顯["項目"], orientation="h", marker_color=青,
+                              text=顯["比重"].map("{:.1f}%".format), textposition="outside", cliponaxis=False))
+        圖.update_yaxes(autorange="reversed")
+        圖.update_layout(title=f"營收比重（{資['比重年度'] or '最近'} 年）", hovermode="closest")
+        st.plotly_chart(圖表外觀(圖, 60 + 30 * len(顯)), width="stretch", config={"displayModeBar": False})
+    elif not 資["業務"]:
+        st.caption("這檔的主要業務、營收比重還沒抓到（資料每天自動補一批）。")
+    # AI 公司介紹：產品、客戶、龍頭地位、競爭對手（官方資料沒有，用 AI 整理）
+    引擎, 金鑰, 模型, 可執行 = AI設定()
+    if 資["AI介紹"]:
+        with st.expander(f"🤖 AI 公司介紹：產品、主要客戶、產業地位（{資['AI時間'][:10]}）", expanded=True):
+            st.markdown(re.sub(r"^#{1,3}\s+", "##### ", 資["AI介紹"], flags=re.M))
+            st.caption("AI 依公開資料整理，客戶與市占率可能不完整或過時，重要決定請以年報、法說會為準。")
+    a, b = st.columns(2)
+    if 可執行 and a.button("✨ AI 產生公司介紹" if not 資["AI介紹"] else "🔄 重新產生公司介紹", key=f"公司介紹{代號}"):
+        with st.spinner("AI 整理公司介紹中，約 30 秒…"):
+            try:
+                內容 = engine.AI公司介紹(代號, r["名稱"], 公司文字(資), 引擎, 金鑰, 模型,
+                                    搜尋=str(_設定().get("GEMINI_SEARCH", "")).lower() == "true")
+                if 內容:
+                    engine.儲存公司介紹(代號, {"時間": pd.Timestamp.now(tz="Asia/Taipei").strftime("%Y-%m-%d %H:%M"),
+                                             "引擎": 引擎, "內容": 內容}, _設定())
+                    st.session_state["_公司介紹版本"] = st.session_state.get("_公司介紹版本", 0) + 1
+                    st.rerun()
+            except Exception as 錯:
+                st.error(f"產生失敗：{錯}")
+    if b.button("📋 複製公司介紹指令（Gemini／Claude App）", key=f"公司指令{代號}"):
+        st.session_state["顯示公司指令"] = not st.session_state.get("顯示公司指令", False)
+    if st.session_state.get("顯示公司指令"):
+        st.code(f"{engine.公司介紹提示}\n\n請介紹台股 {代號} {r['名稱']}。\n\n官方與網站資料：\n{公司文字(資)}",
+                language=None, wrap_lines=True)
+    st.caption("主要經營業務：公開資訊觀測站；營收比重：MoneyDJ（公司年報）；市值、營收排名：網站資料庫依證交所產業分類計算。"
+               "同業市值第一名標為產業龍頭只是規模參考。")
 
 
 def 個股筆記(代號):
@@ -505,7 +587,7 @@ if 最近:
 if 新最近 != st.query_params.get("r", ""):
     st.query_params["r"] = 新最近  # 記在網址，加入書籤或重新整理都還在
 r = 今日[今日["代號"] == 代號].iloc[0]
-股 = engine._股本表()
+股 = 讀檔("_股本表", _版本)
 if "股本億" not in 今日.columns and 代號 in 股.index:
     r = pd.concat([r, 股.loc[代號]])
 數 = lambda v, f="{:,.2f}", 尾="": "—" if pd.isna(v) else f.format(v) + 尾
@@ -751,6 +833,7 @@ with 分頁[1]:
                    "當沖比率＝當沖成交股數 ÷ 成交股數（只有上市股票），超過 40% 代表短線客多、股價容易暴漲暴跌。")
 
 with 分頁[2]:
+    公司介紹區(代號, r)
     段落("FUNDAMENTAL // 基本面")
     營收 = r.get("營收年增率")
     卡片格([
@@ -1015,6 +1098,13 @@ with 分頁[4]:
             摘要 += (f"\n- 近三年股價淨值比區間：最低 {淨.min():.2f}、中位數 {淨.median():.2f}、最高 {淨.max():.2f}"
                    f"（目前 {數(r['淨值比'], '{:.2f}')}，每股淨值約 {數(r['收盤'] / r['淨值比'] if r['淨值比'] else np.nan)}）")
         摘要 += f"\n- 建議評價方法：{engine.評價方法建議(r.get('產業'), r.get('近三季EPS'))}"
+        if not 代號.startswith("0"):
+            try:
+                公司 = 公司文字(公司資料(代號))
+                if 公司:
+                    摘要 = "公司資料：\n" + 公司 + "\n\n最新數據：\n" + 摘要
+            except Exception:
+                pass
         鏈 = engine.產業鏈位置(代號, dict(zip(今日["代號"], 今日["名稱"])))
         if 鏈:
             摘要 += f"\n- 產業鏈位置：{鏈}"
@@ -1071,9 +1161,13 @@ with 分頁[4]:
             st.session_state["顯示貼上"] = not st.session_state.get("顯示貼上", False)
         if st.session_state.get("顯示指令"):
             st.caption("按右上角的複製圖示，貼到 Gemini（建議選 Pro 或「深入研究」）或 Claude App；"
-                       "已設定「台股個股分析師」Gem 或 Claude 技能的話也可以直接貼。")
-            st.code(f"請分析台股 {代號} {r['名稱']}。\n\n以下是「股市觀測網站」資料庫的最新數據（以此為準）：\n{摘要}\n\n"
-                    f"請上網搜尋近六個月的新聞、法說會與券商報告，依照以下要求寫報告：\n\n{engine.AI系統提示}",
+                       "已設定「台股個股分析師」Gem 或 Claude 技能的話也可以直接貼。回答完把整份（含最後的 json）用右邊「📥 貼上 AI 報告」存回網站。")
+            st.code(f"# 任務\n請分析台股 {代號} {r['名稱']}，今天是 {pd.Timestamp.now(tz='Asia/Taipei'):%Y-%m-%d}。\n\n"
+                    f"# 網站資料（{今天} 收盤，數字以這裡為準）\n{摘要}\n\n"
+                    "# 要做的事\n1. 上網搜尋近六個月的新聞、月營收、法說會與券商報告（注意日期，舊聞不要當新聞）\n"
+                    "2. 先寫公司介紹：主要產品與營收比重、主要客戶、產業地位（是不是龍頭）、競爭對手\n"
+                    "3. 再依下面的規則寫分析報告，最後附 json\n\n"
+                    f"# 報告規則\n{engine.AI系統提示}",
                     language=None, wrap_lines=True)
         if st.session_state.get("顯示貼上") and 可寫:
             with st.form("貼上表單", clear_on_submit=True):

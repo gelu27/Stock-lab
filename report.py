@@ -486,6 +486,29 @@ def 產生PDF(代號, 名稱, 資料):
         文段(右x, y1, 右寬, *解讀)
         pdf.set_y(max(y1 + 高 - (y1 - y0), pdf.get_y()) + 4)
 
+    # ===== 公司介紹：主要業務、營收比重、規模、AI 整理的產品客戶與產業地位 =====
+    公司 = 資料.get("公司") or {}
+    if any(公司.get(k) for k in ("業務", "營收比重", "規模", "AI介紹")):
+        pdf.add_page()
+        段標("Company", "公司介紹：做什麼、靠什麼賺錢")
+        def 小段(標, 內容):
+            if not 內容:
+                return
+            if pdf.get_y() > pdf.h - 30:
+                pdf.add_page()
+            字(11.5, True, 青)
+            pdf.cell(0, 7, 標, new_x="LMARGIN", new_y="NEXT")
+            字(10.5, 色="#D5D5D5")
+            pdf.multi_cell(寬, 6, _乾淨(內容), markdown=True, align="L", new_x="LMARGIN", new_y="NEXT")
+            pdf.ln(2)
+        小段("規模與地位", 公司.get("規模"))
+        小段("主要經營業務（公開資訊觀測站）", 公司.get("業務"))
+        小段("營收比重" + (f"（{公司['比重年度']} 年）" if 公司.get("比重年度") else ""), 公司.get("營收比重"))
+        小段("概念股與產業鏈", 公司.get("概念"))
+        if 公司.get("AI介紹"):
+            for 標, 內 in re.findall(r"#+\s*([^\n]+)\n+(.*?)(?=\n#+\s|\Z)", 公司["AI介紹"], re.S):
+                小段(標.strip() + "（AI 整理）", 內.strip())
+
     pdf.add_page()
     圖高 = 72
     左圖右文("Revenue", "月營收：生意做得怎麼樣", 營收圖(資料.get("營收"), 高=3.3), 營收解讀(資料.get("營收")), 圖高 + 14)
