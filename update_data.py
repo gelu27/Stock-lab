@@ -284,7 +284,7 @@ def 寫指數(指數):
 
 
 def 抓一天(日期):
-    with ThreadPoolExecutor(2) as 池:  # 證交所與櫃買是不同網站，可以同時抓
+    with ThreadPoolExecutor(3) as 池:  # 證交所與櫃買是不同網站，可以同時抓
         上市工作 = 池.submit(上市一天, 日期)
         上櫃工作 = 池.submit(上櫃一天, 日期)
         上市, 指數, 上市籌碼 = 上市工作.result()
@@ -1386,6 +1386,32 @@ def 抓可轉債():
     print(f"可轉債完成，共 {len(表)} 筆")
 
 
+def 抓公司簡介(每次=250):
+    """公司主要業務（公開資訊觀測站）與營收比重（MoneyDJ）→ data/company_profile.csv。
+    一檔約 2 秒，所以每天只補 每次 檔：先補還沒有的，再更新超過 60 天的，約 10 天全部跑過一輪。"""
+    import engine
+    f = 資料夾 / "company_profile.csv"
+    舊 = pd.read_csv(f, dtype=str).fillna("") if f.exists() else pd.DataFrame(columns=engine.公司簡介欄)
+    股本 = pd.read_csv(資料夾 / "fundamental" / "capital.csv", dtype={"code": str})
+    代號們 = [c for c in 股本["code"].astype(str).str.strip() if re.fullmatch(r"[1-9]\d{3}", c)]
+    更新日 = dict(zip(舊["code"], 舊["更新日"]))
+    期限 = (dt.datetime.now(台北時區) - dt.timedelta(days=60)).strftime("%Y-%m-%d")
+    待 = [c for c in 代號們 if c not in 更新日] + sorted((c for c in 代號們 if c in 更新日 and 更新日[c] < 期限), key=更新日.get)
+    待 = 待[:每次]
+    if not 待:
+        print("公司簡介：都是最新的")
+        return
+    with ThreadPoolExecutor(3) as 池:
+        新們 = [x for x in 池.map(engine.抓公司簡介, 待) if x.get("業務") or x.get("營收比重")]
+    if not 新們:
+        print("公司簡介：這次都沒抓到")
+        return
+    新 = pd.DataFrame(新們).reindex(columns=engine.公司簡介欄)
+    表 = pd.concat([舊[~舊["code"].isin(新["code"])], 新]).sort_values("code")
+    表.to_csv(f, index=False)
+    print(f"公司簡介完成：更新 {len(新)} 檔，共 {len(表)} 檔")
+
+
 # ---------- 主程式 ----------
 def main():
     參數 = argparse.ArgumentParser()
@@ -1434,7 +1460,7 @@ def main():
 
     if not 參數.skip_latest:
         for 工作 in (抓分時, 抓興櫃, 抓基本面, 抓匯率, 抓處置注意, 抓借券, 抓法說會, 抓融資金額, 抓期貨未平倉, 抓小台散戶,
-                     抓美股日線, 抓經濟行事曆, 抓美股財報, 抓指數K線, 抓選擇權, 抓新股申購, 抓外資持股, 抓當沖, 抓庫藏股, 抓可轉債):  # 這些出問題不影響主資料庫
+                     抓美股日線, 抓經濟行事曆, 抓美股財報, 抓指數K線, 抓選擇權, 抓新股申購, 抓外資持股, 抓當沖, 抓庫藏股, 抓可轉債, 抓公司簡介):  # 這些出問題不影響主資料庫
             try:
                 工作()
             except Exception as 錯誤:

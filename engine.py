@@ -1255,6 +1255,8 @@ J. 一次性項目（訴訟和解、處分利益、匯兌）要排除後再看�
 
 輸出 Markdown，依序包含以下段落（用 ### 標題）：
    ### 一句話結論（看法＋目標價＋怎麼算的＋現在貴不貴）
+   ### 公司介紹（做什麼、主要產品與營收比重、主要客戶與下游應用、產業地位／是否龍頭、主要競爭對手；
+       營收比重與主要業務以使用者提供的「公司資料」為準，客戶查不到就寫未找到）
    ### 近半年重要消息（由新到舊條列，每條註明月份）
    ### 上一季對答案與成長來源（C、D）
    ### 法人與券商觀點（目標價、評等、券商與日期、上修或下修、與共識的差異；找不到就說找不到，不要編造）
@@ -2004,6 +2006,34 @@ def _有(d, 欄):
     ("市場", 5, lambda d: d["贏大盤5日"] >= 3, lambda r: f"近 5 日贏大盤 {r['贏大盤5日']:.1f}%"),
     ("市場", -5, lambda d: d["贏大盤5日"] <= -3, lambda r: f"近 5 日輸大盤 {abs(r['贏大盤5日']):.1f}%"),
 ]
+# 網站「評分依據」表用的白話說明（改上面的規則時，這裡也要一起改）
+評分規則說明 = [
+    ("技術", "+10／−10", "收盤（還原股價）站上／跌破 20 日線"),
+    ("技術", "+10／−10", "站上／跌破 60 日線（季線）"),
+    ("技術", "+10／−10", "均線多頭排列（5 日 > 20 日 > 60 日）／空頭排列"),
+    ("技術", "+5", "近 20 日漲 10% 以上"),
+    ("技術", "+5", "離 52 週高點不到 5%"),
+    ("技術", "+10", "近 5 日急跌 10% 以上（短線超跌，歷史上之後常反彈）"),
+    ("技術", "−5", "價跌量增：今天下跌、成交量是 20 日均量 2 倍以上"),
+    ("籌碼", "+15／+7", "三大法人 5 日買超 ≥ 5 日均量的 50%／15～50%"),
+    ("籌碼", "−7／−15", "三大法人 5 日賣超 15～50%／≥ 50%（跟成交量比，大小型股才比得起來）"),
+    ("籌碼", "+10", "外資連買 3 天以上"),
+    ("籌碼", "+10", "投信連買 3 天以上"),
+    ("籌碼", "+5／−5", "外資今天買超／賣超"),
+    ("籌碼", "−10", "近 20 日股價跌、融資 5 日卻增加 10% 以上（散戶接刀）"),
+    ("籌碼", "+5", "近 5 日股價漲、融資減少 5% 以上（籌碼安定）"),
+    ("基本", "+15／+5／−15", "月營收年增 ≥ 20%／0～20%／≤ −10%"),
+    ("基本", "+5／−5", "今年累計營收年增 ≥ 10%／≤ −10%"),
+    ("基本", "+10", "月營收創歷史新高（要有 13 個月以上資料）"),
+    ("基本", "+5／−20", "近三季 EPS 合計為正／虧損"),
+    ("基本", "+5／−5", "單季毛利率比去年同季增加／減少 1 個百分點以上"),
+    ("基本", "+5／−5", "本益比 15 倍以下／40 倍以上"),
+    ("基本", "+5", "殖利率 5% 以上"),
+    ("市場", "+10／−10", "大盤分數 ≥ 60／≤ 40（指數均線、漲跌家數、外資買賣超）"),
+    ("市場", "+5／−5", "所屬產業近 20 日漲幅排在前 25%／後 25%"),
+    ("市場", "+15／−15", "近 20 日贏大盤／輸大盤 5% 以上"),
+    ("市場", "+5／−5", "近 5 日贏大盤／輸大盤 3% 以上"),
+]
 # 權重依 data/score_backtest.json 的歷史驗證調整（2026-10：基本面最有效，技術、市場面平均效果偏負）
 評分權重 = {"技術": 0.15, "籌碼": 0.25, "基本": 0.50, "市場": 0.10}
 
@@ -2077,7 +2107,7 @@ def 每日評分(今日, 加權=None, 大盤=None):
     沒基本 = _有(d, "營收年增率").isna() & _有(d, "近三季EPS").isna() & (d["本益比"].fillna(0) <= 0)
     結果.loc[沒基本, "基本"] = np.nan
     權重 = pd.DataFrame({面: 結果[面].notna() * w for 面, w in 評分權重.items()})
-    結果["總分"] = ((結果.fillna(0) * 權重).sum(axis=1) / 權重.sum(axis=1)).round()
+    結果["總分"] = ((結果.fillna(0) * 權重).sum(axis=1) / 權重.sum(axis=1)).round(1)
     結果["看法"] = 結果["總分"].map(評分看法)
     for 欄 in ("名稱", "產業", "收盤", "漲跌幅", "5日均量"):
         結果[欄] = d[欄] if 欄 in d.columns else np.nan
@@ -2270,6 +2300,7 @@ def 評分回測(持有天數=20, 最少量=500):
     月底 = 日們[np.r_[期[1:] != 期[:-1], True]]
     還原 = 指.pivot_table(index="date", columns="代號", values="還原價")
     未來 = (還原.shift(-持有天數) / 還原 - 1) * 100
+    長 = {n: (還原.shift(-n) / 還原 - 1) * 100 for n in (60, 120)}  # 網站「高分股回測」看比較久的報酬
     結果 = []
     for 日 in 月底[12:]:  # 前 12 個月要拿來算均線、52 週高點
         if pd.isna(未來.loc[日]).all():
@@ -2280,9 +2311,11 @@ def 評分回測(持有天數=20, 最少量=500):
             當["營收年增率"] = 當["代號"].map((營收.xs(月, level="m") / 營收.xs(月 - 12, level="m") - 1) * 100)
         分, _ = 每日評分(當, 加[加["date"] <= 日])
         分["報酬"] = 未來.loc[日].reindex(分.index)
+        for n, t in 長.items():
+            分[f"報酬{n}"] = t.loc[日].reindex(分.index)
         分 = 分[(分["5日均量"] >= 最少量) & ~分.index.str.startswith("00")].dropna(subset=["報酬", "總分"])
         分["date"] = 日
-        結果.append(分[["date", "總分", "看法", "技術", "籌碼", "基本", "市場", "報酬"]])
+        結果.append(分[["date", "總分", "看法", "技術", "籌碼", "基本", "市場", "報酬", "報酬60", "報酬120"]])
     return pd.concat(結果) if 結果 else None
 
 
@@ -2332,11 +2365,29 @@ def 更新評分回測(強制=False, 間隔天數=25):
     摘要 = 評分回測摘要(表)
     摘要["計算日"] = f"{pd.Timestamp.now():%Y-%m-%d}"
     # 每期每檔的四個面向分數與之後報酬，網站「自訂權重」用來即時重算驗證
-    明細 = 表[["date", "技術", "籌碼", "基本", "市場", "報酬"]].rename_axis("代號").reset_index()
-    明細[["技術", "籌碼", "基本", "市場", "報酬"]] = 明細[["技術", "籌碼", "基本", "市場", "報酬"]].round(2)
+    欄 = ["技術", "籌碼", "基本", "市場", "報酬", "報酬60", "報酬120"]
+    明細 = 表[["date"] + 欄].rename_axis("代號").reset_index()
+    明細[欄] = 明細[欄].round(2)
     明細.to_csv(明細檔, index=False, compression="gzip")
     檔.write_text(json.dumps(摘要, ensure_ascii=False, indent=1))
     print("評分回測：已更新", 摘要["相關"]["總分"])
+
+
+def 高分股回測(明細, 權重, 門檻=85, 前幾名=None):
+    """歷史每月底分數夠高（總分 ≥ 門檻，或每月前幾名）的股票，之後 20／60／120 個交易日的報酬，
+    跟同一天全部股票的平均比。回傳 (選到的表, 每月統計)。"""
+    t = 明細.assign(總分=加權總分(明細, 權重))
+    報欄 = [c for c in ("報酬", "報酬60", "報酬120") if c in t.columns]
+    平均 = t.groupby("date")[報欄].mean().add_prefix("全體")
+    if 前幾名:
+        選 = t[t.groupby("date")["總分"].rank(ascending=False, method="first") <= 前幾名]
+    else:
+        選 = t[t["總分"] >= 門檻]
+    選 = 選.join(平均, on="date")
+    for c in 報欄:
+        選[f"超額{c[2:] or '20'}"] = 選[c] - 選[f"全體{c}"]
+    每月 = 選.groupby("date").agg(檔數=("代號", "size"), 平均報酬=("報酬", "mean")).join(平均["全體報酬"])
+    return 選.sort_values(["date", "總分"], ascending=[False, False]), 每月
 
 
 def 讀取評分回測():
@@ -4884,7 +4935,7 @@ def 策略排行(指標, 往後們=(5, 20), 間隔=5, 起=60):
 def 加權總分(分, 權重):
     """分：含 技術、籌碼、基本、市場 欄；沒資料的面向不算，權重按比例重分。"""
     權 = pd.DataFrame({面: 分[面].notna() * w for 面, w in 權重.items()})
-    return ((分[list(權重)].fillna(0) * 權).sum(axis=1) / 權.sum(axis=1).replace(0, np.nan)).round()
+    return ((分[list(權重)].fillna(0) * 權).sum(axis=1) / 權.sum(axis=1).replace(0, np.nan)).round(1)
 
 
 def 讀取評分回測明細():
@@ -5256,3 +5307,127 @@ def 讀取庫藏股():
 def 讀取可轉債():
     """data/cb.csv：code、name、issue_date、maturity、amount、outstanding（元）、conv_price（發行時轉換價）。"""
     return _讀("cb.csv", dtype={"code": str}, parse_dates=["issue_date", "maturity"])
+
+
+# ========== 公司簡介：主要業務、營收比重、董事長、成立／上市日期（公開資訊觀測站＋MoneyDJ） ==========
+公司簡介欄 = ["code", "業務", "營收比重", "董事長", "總經理", "成立日期", "上市日期", "網址", "員工人數", "同業本益比", "更新日"]
+
+
+def _表頭對值(html):
+    """把 <th>名稱</th><td>值</td> 這種表格轉成 {名稱: 值}（去掉標籤與空白）。"""
+    import re
+    清 = lambda x: re.sub(r"\s+", " ", re.sub(r"<[^>]+>|&nbsp;?", " ", re.sub(r"(?i)<br\s*/?>\s*", "", x))).strip()
+    return {清(k): 清(v) for k, v in re.findall(r"(?is)<th[^>]*>(.*?)</th>\s*<td[^>]*>(.*?)</td>", html)}
+
+
+def 抓公司簡介(代號):
+    """一檔公司的簡介：公開資訊觀測站「公司基本資料」（主要經營業務等）＋ MoneyDJ 基本資料（營收比重）。
+    兩邊各約 1 秒；任一邊失敗就留空。回傳 dict（欄位見 公司簡介欄）。"""
+    import re
+    import requests
+
+    H = {"User-Agent": "Mozilla/5.0"}
+    結果 = {"code": str(代號), "更新日": f"{pd.Timestamp.now(tz='Asia/Taipei'):%Y-%m-%d}"}
+    try:
+        r = requests.post("https://mopsov.twse.com.tw/mops/web/ajax_t05st03", headers=H, timeout=20, data={
+            "encodeURIComponent": "1", "step": "1", "firstin": "1", "off": "1", "keyword4": "", "code1": "", "TYPEK2": "",
+            "checkbtn": "", "queryName": "co_id", "inpuType": "co_id", "TYPEK": "all", "co_id": str(代號)})
+        表 = _表頭對值(r.text)
+        結果.update({"業務": 表.get("主要經營業務", ""), "董事長": 表.get("董事長", ""), "總經理": 表.get("總經理", ""),
+                   "成立日期": 表.get("公司成立日期", ""), "網址": 表.get("公司網址", "") or 表.get("網址", ""),
+                   "上市日期": next((表[k] for k in ("上市日期", "上櫃日期", "興櫃日期") if 表.get(k, "").strip("& ")), "")})
+        員工 = next((v for k, v in 表.items() if "員工" in k), "")
+        結果["員工人數"] = 員工
+    except Exception:
+        pass
+    try:
+        r = requests.get(f"https://concords.moneydj.com/z/zc/zca/zca_{代號}.djhtm", headers=H, timeout=20)
+        r.encoding = "big5"
+        t = re.sub(r"<[^>]+>", "|", re.sub(r"(?is)<script.*?</script>|<style.*?</style>", "", r.text))
+        t = re.sub(r"\s*\|[\s|]*", "|", re.sub(r"&nbsp;?", " ", t))
+        找 = lambda 名: (re.search(rf"\|{名}\|([^|]+)\|", t) or [None, ""])[1].strip()
+        結果["營收比重"] = 找("營收比重")
+        結果["同業本益比"] = 找("同業平均本益比")
+        for 名, 欄 in (("董事長", "董事長"), ("總經理", "總經理"), ("網址", "網址")):
+            if not 結果.get(欄):
+                結果[欄] = 找(名)
+    except Exception:
+        pass
+    return 結果
+
+
+def 讀取公司簡介():
+    f = 資料夾 / "company_profile.csv"
+    return pd.read_csv(f, dtype=str).fillna("").set_index("code") if f.exists() else pd.DataFrame(columns=公司簡介欄[1:])
+
+
+def 營收比重解析(文字):
+    """「晶圓-5奈米30.98%、其他14.08% (2025年)」→ (DataFrame[項目, 比重], 年度)。"""
+    import re
+    if not 文字:
+        return pd.DataFrame(columns=["項目", "比重"]), ""
+    年 = (re.search(r"\((\d{4})年\)", 文字) or [None, ""])[1]
+    項們 = re.findall(r"([^、()%]+?)\s*(-?[\d.]+)%", re.sub(r"\(\d{4}年\)", "", 文字))
+    t = pd.DataFrame([(a.strip(), float(b)) for a, b in 項們], columns=["項目", "比重"])
+    return t.sort_values("比重", ascending=False, ignore_index=True), 年
+
+
+def 公司規模(今日, 代號):
+    """市值、近 12 個月營收在全市場與同產業的排名（同產業市值第一＝產業龍頭的參考）。"""
+    t = 今日[~今日["代號"].str.startswith("0") & 今日["發行股數"].notna()].copy()
+    t["市值億"] = t["收盤"] * t["發行股數"] / 1e8
+    營收 = None
+    f = 資料夾 / "fundamental" / "revenue_history.csv"
+    if f.exists():
+        h = pd.read_csv(f, dtype={"code": str}).sort_values("month")
+        近 = h[h["month"] > sorted(h["month"].unique())[-13]] if h["month"].nunique() >= 13 else h
+        營收 = 近.groupby("code")["revenue"].sum() / 1e5   # 千元 → 億元
+        t["近12月營收億"] = t["代號"].map(營收)
+    if 代號 not in set(t["代號"]):
+        return None
+    r = t.set_index("代號").loc[代號]
+    同 = t[t["產業"] == r["產業"]] if pd.notna(r.get("產業")) and r.get("產業") else t.iloc[0:0]
+    結果 = {"市值億": r["市值億"], "市值排名": int((t["市值億"] > r["市值億"]).sum()) + 1, "全部": len(t),
+          "產業": r.get("產業") or "", "同業家數": len(同),
+          "同業市值排名": int((同["市值億"] > r["市值億"]).sum()) + 1 if len(同) else None,
+          "同業市值前三": 同.nlargest(3, "市值億")[["代號", "名稱", "市值億"]].values.tolist() if len(同) else []}
+    if 營收 is not None and pd.notna(r.get("近12月營收億")):
+        結果["近12月營收億"] = r["近12月營收億"]
+        結果["同業營收排名"] = int((同["近12月營收億"] > r["近12月營收億"]).sum()) + 1 if len(同) else None
+    return 結果
+
+
+公司介紹提示 = """你是台股產業研究員。請用繁體中文（台灣用語）、白話，替一般投資人整理這家公司的介紹。
+使用者提供的官方資料（主要經營業務、營收比重、市值與營收排名）是正確的，以它為準；其他內容依你所知或上網搜尋補充，
+不確定的寫「未找到」或「待確認」，不要編造客戶名稱與數字。輸出 Markdown，依序用 ### 標題：
+### 一句話介紹（這家公司靠什麼賺錢，30 字內）
+### 主要產品與營收比重（條列，比重以使用者提供的為準，並用一句話解釋每項產品是什麼、用在哪裡）
+### 主要客戶與下游應用（知名客戶、客戶集中度；查不到就寫未找到）
+### 產業地位（是不是龍頭、全球／台灣市占率大約多少、主要競爭對手）
+### 公司規模（市值、營收規模在同業的排名、員工、海外據點或產能）
+### 投資人要注意的地方（景氣循環、客戶集中、匯率等 2～4 點）"""
+
+
+def AI公司介紹(代號, 名稱, 資料文字, 引擎, 金鑰, 模型, 搜尋=False):
+    """請 AI 寫公司介紹（產品、客戶、產業地位、規模）。回傳 Markdown。"""
+    提問 = f"請介紹台股 {代號} {名稱}。\n\n官方與網站資料：\n{資料文字}"
+    if 引擎 == "Gemini":
+        內容 = {"systemInstruction": {"parts": [{"text": 公司介紹提示}]},
+              "contents": [{"role": "user", "parts": [{"text": 提問}]}]}
+        if 搜尋:
+            內容["tools"] = [{"google_search": {}}]
+        回應, _ = Gemini呼叫(內容, 金鑰, 模型)
+        候選 = (回應.json().get("candidates") or [{}])[0]
+        return "".join(p.get("text", "") for p in (候選.get("content") or {}).get("parts", [])).strip()
+    import anthropic
+    回應 = anthropic.Anthropic(api_key=金鑰).messages.create(
+        model=模型, max_tokens=3000, system=公司介紹提示, messages=[{"role": "user", "content": 提問}])
+    return "".join(b.text for b in 回應.content if b.type == "text").strip()
+
+
+def 讀取公司介紹(代號, 設定):
+    return 讀取設定檔(設定, f"company/{代號}.json") or {}
+
+
+def 儲存公司介紹(代號, 紀錄, 設定):
+    return 儲存設定檔(設定, f"company/{代號}.json", 紀錄, f"公司介紹 {代號}")

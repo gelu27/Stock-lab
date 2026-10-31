@@ -1,14 +1,23 @@
-name: 暫時：測試資料來源
+name: 暫時：抓公司簡介
 on:
   push:
     paths: ["tmp_probe/**"]
+permissions:
+  contents: write
 jobs:
   probe:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install requests
+      - run: pip install requests pandas
       - run: python tmp_probe/probe.py
+      - run: |
+          git config user.name "stock-bot"
+          git config user.email "stock-bot@users.noreply.github.com"
+          git add data/company_profile.csv
+          git commit -m "公司簡介第一次抓齊" || exit 0
+          git push
