@@ -84,7 +84,7 @@ def 金融獲利區():
 
 
 @st.cache_data(max_entries=4, show_spinner=False)
-def _月營收資料(月份, _資料版本, 程式版本):
+def _月營收資料(月份, 版本鍵, 程式版本):
     表, 月份們 = engine.月營收總表(月份)
     return 表, 月份們, engine.近四季EPS表()
 

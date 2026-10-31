@@ -296,7 +296,7 @@ with b.popover("🔄 更新"):
 
 
 @st.cache_data(ttl=3600, show_spinner=False, max_entries=1)
-def 補充欄位(_資料版本):
+def 補充欄位(版本鍵):
     """外資持股比、當沖比率、投信 60 日買超佔股本、負債比、流動比、近四季現金流（每天更新一次）。"""
     表 = engine.籌碼補充表(指標)
     體質 = engine.財報體質表()
@@ -579,12 +579,12 @@ def 點選表(表, 樣式, key, 動作=None, **參數):
           "理由", "金額(億)", "貢獻點數", "投信(張)"}
 
 @st.cache_data(show_spinner=False)
-def 警示表(_資料版本):
+def 警示表(版本鍵):
     return engine.讀取警示()
 
 
 @st.cache_data(show_spinner=False)
-def 日程資料(代號們, _資料版本, 天數=30):
+def 日程資料(代號們, 版本鍵, 天數=30):
     return engine.重要日程(代號們, 天數)
 
 
@@ -606,7 +606,7 @@ def AI紀錄快取(代號, _權杖):
 
 # ---------- 每日評分（規則打分數，網站與 LINE 收盤摘要共用 engine 的規則） ----------
 @st.cache_resource(max_entries=1, show_spinner="計算每日評分中…")
-def 評分資料(_資料版本):
+def 評分資料(版本鍵):
     return engine.今昨評分(指標[指標["date"] >= 指標["date"].max() - pd.Timedelta(days=20)],
                          engine.讀取基本面(), 加權)
 
@@ -802,7 +802,7 @@ def 提醒文字(設):
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def 指數K線(代號, _資料版本):
+def 指數K線(代號, 版本鍵):
     return engine.讀取指數K線(代號)
 
 
@@ -1057,7 +1057,7 @@ def 執行頁面(索引):
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def 新鮮度表(_版本):
+def 新鮮度表(版本鍵):
     return engine.資料新鮮度()
 
 

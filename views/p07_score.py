@@ -64,13 +64,13 @@ def 評分驗證區():
 
 
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
-def 評分明細資料(_資料版本):
+def 評分明細資料(版本鍵):
     return engine.讀取評分回測明細()
 
 
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
-def 權重驗證資料(權重tuple, _資料版本):
-    明 = 評分明細資料(_資料版本)
+def 權重驗證資料(權重tuple, 版本鍵):
+    明 = 評分明細資料(版本鍵)
     return engine.權重驗證(明, dict(權重tuple)) if 明 is not None else None
 
 
