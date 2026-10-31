@@ -1,6 +1,6 @@
 # 03 個股查詢：由 app.py 的 執行頁面() 在同一個命名空間執行，可直接用 app.py 的共用函式與資料。
 @st.cache_data(ttl=43200, show_spinner=False, max_entries=50)
-def 借券資料(代號, _資料版本):
+def 借券資料(代號, 版本鍵):
     return engine.讀取借券(代號)
 
 
@@ -263,11 +263,11 @@ def 個股K線(代號):
 
 
 @st.cache_data(ttl=43200, show_spinner="回測這檔的支撐壓力中…", max_entries=30)
-def 個股價位回測(代號, _資料版本):
-    K = engine.還原K線(個股全史(代號, _資料版本))
+def 個股價位回測(代號, 版本鍵):
+    K = engine.還原K線(個股全史(代號, 版本鍵))
     if K is None or len(K) <= 300:
         return pd.DataFrame()
-    歷史 = 個股全史(代號, _資料版本)
+    歷史 = 個股全史(代號, 版本鍵)
     return engine.回測摘要(engine.支撐壓力回測(K, 歷史.set_index("date")["成交值億"]))
 
 
@@ -347,8 +347,8 @@ def 部位計算器(代號, sr):
 
 
 @st.cache_data(ttl=3600, show_spinner="回測中…")
-def 停損紀律回測資料(代號, _資料版本):
-    return engine.停損紀律回測(個股全史(代號, _資料版本))
+def 停損紀律回測資料(代號, 版本鍵):
+    return engine.停損紀律回測(個股全史(代號, 版本鍵))
 
 
 def 停損紀律回測表(代號):
@@ -368,19 +368,19 @@ def 停損紀律回測表(代號):
 
 
 @st.cache_data(ttl=3600, show_spinner=False, max_entries=30)
-def 外資持股歷史(代號, _資料版本):
+def 外資持股歷史(代號, 版本鍵):
     q = engine.讀取外資持股()
     return None if q is None else q[q["code"] == 代號][["date", "ratio"]].sort_values("date").reset_index(drop=True)
 
 
 @st.cache_data(ttl=3600, show_spinner=False, max_entries=30)
-def 當沖資料(代號, _資料版本):
+def 當沖資料(代號, 版本鍵):
     """這檔每天的當沖比率（當沖成交股數 ÷ 成交股數，%），只有上市股票。"""
     d = engine.讀取當沖()
     if d is None:
         return None
     d = d[d["code"] == 代號]
-    史 = 個股全史(代號, _資料版本)
+    史 = 個股全史(代號, 版本鍵)
     if not len(d) or 史 is None:
         return None
     t = d.merge(史[["date", "成交張數"]], on="date")
@@ -389,7 +389,7 @@ def 當沖資料(代號, _資料版本):
 
 
 @st.cache_data(ttl=3600, show_spinner=False, max_entries=30)
-def 財報資料(代號, _資料版本):
+def 財報資料(代號, 版本鍵):
     t = engine.讀取財報(代號)
     return None if t is None or not len(t) else t.sort_values("quarter").reset_index(drop=True)
 

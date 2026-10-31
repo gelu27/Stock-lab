@@ -302,7 +302,7 @@ def 族群排行(族群, 期間, 來源):
 
 
 @st.cache_resource(max_entries=1, show_spinner=False)
-def 市場每日(_資料版本):
+def 市場每日(版本鍵):
     """最近 70 個交易日每天的大盤數字，給前後期比較用。"""
     近 = 指標[指標["date"] >= 指標["date"].max() - pd.Timedelta(days=110)]
     群 = 近.groupby("date")
@@ -480,48 +480,48 @@ def 槓桿趨勢():
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def 指數成交值(代號, _資料版本):
+def 指數成交值(代號, 版本鍵):
     """加權＝上市、櫃買＝上櫃每天的成交金額（億），算分價量和量價關係用。"""
     t = 指標[指標["市場"] == ("上市" if 代號 == "TAIEX" else "上櫃")]
     return t.groupby("date")["成交值億"].sum()
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def 價位分析(代號, _資料版本):
-    K = 指數K線(代號, _資料版本)
+def 價位分析(代號, 版本鍵):
+    K = 指數K線(代號, 版本鍵)
     if K is None or len(K) < 60:
         return None
-    量 = 指數成交值(代號, _資料版本)
+    量 = 指數成交值(代號, 版本鍵)
     sr = engine.支撐壓力(K, 量=量)
     區們 = engine.共振區(sr["價位"])
     return K, sr, 區們, engine.位置解讀(sr, 區們), engine.黑K一半(K), engine.量價標籤(K, 量)
 
 
 @st.cache_data(ttl=3600, show_spinner="回測 5 年支撐壓力中…")
-def 價位回測(代號, _資料版本):
-    K = 指數K線(代號, _資料版本)
+def 價位回測(代號, 版本鍵):
+    K = 指數K線(代號, 版本鍵)
     if K is None or len(K) <= 300:
         return pd.DataFrame()
-    return engine.回測摘要(engine.支撐壓力回測(K, 指數成交值(代號, _資料版本)))
+    return engine.回測摘要(engine.支撐壓力回測(K, 指數成交值(代號, 版本鍵)))
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def 指數跌破站回(代號, _資料版本):
-    K = 指數K線(代號, _資料版本)
+def 指數跌破站回(代號, 版本鍵):
+    K = 指數K線(代號, 版本鍵)
     if K is None:
         return []
-    量 = 指數成交值(代號, _資料版本)
+    量 = 指數成交值(代號, 版本鍵)
     return engine.跌破站回(K, 量) + engine.技術訊號(K, 量)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def 指數技術觀察(代號, _資料版本):
-    K = 指數K線(代號, _資料版本)
-    return engine.技術觀察(K, 指數成交值(代號, _資料版本)) if K is not None else []
+def 指數技術觀察(代號, 版本鍵):
+    K = 指數K線(代號, 版本鍵)
+    return engine.技術觀察(K, 指數成交值(代號, 版本鍵)) if K is not None else []
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def 守週線強勢(_資料版本):
+def 守週線強勢(版本鍵):
     return engine.守週線強勢股(指標)
 
 
@@ -581,7 +581,7 @@ def 關鍵價位區():
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def 殺估值資料(_資料版本):
+def 殺估值資料(版本鍵):
     return engine.殺估值觀察組(指標, engine.讀取美股())
 
 
@@ -772,12 +772,12 @@ def 焦點區():
 
 
 @st.cache_resource(max_entries=1, show_spinner="計算市場情緒中…")
-def 情緒資料(_資料版本):
+def 情緒資料(版本鍵):
     return engine.情緒指數(指標, 加權)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def 經濟日程資料(_資料版本, 天數=14, 往前=0):
+def 經濟日程資料(版本鍵, 天數=14, 往前=0):
     市值 = (今日["收盤"] * 今日["發行股數"]).where(~今日["代號"].str.startswith("0"))
     大型 = tuple(今日.loc[市值.nlargest(50).index, "代號"])
     表 = engine.經濟日程(天數=天數, 往前=往前, 大型股=大型)
@@ -976,7 +976,7 @@ def 美股龍頭區():
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def 美股連動資料(_資料版本, 分類):
+def 美股連動資料(版本鍵, 分類):
     return engine.美股連動(指標, 分類)
 
 
@@ -1084,7 +1084,7 @@ def 三十秒卡():
 
 
 @st.cache_data(ttl=3600, show_spinner=False, max_entries=1)
-def 選擇權資料(_資料版本):
+def 選擇權資料(版本鍵):
     return engine.讀取選擇權()
 
 

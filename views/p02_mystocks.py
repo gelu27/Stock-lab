@@ -81,9 +81,9 @@ def 股利預估區(持股):
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def 風險資料(持股, _資料版本):
+def 風險資料(持股, 版本鍵):
     產業 = dict(zip(今日["代號"], 今日["產業"])) if "產業" in 今日.columns else {}
-    K = 指數K線("TAIEX", _資料版本)
+    K = 指數K線("TAIEX", 版本鍵)
     return engine.庫存風險(持股, 指標, K.set_index("date")["close"], 產業, 名稱表=市場名稱)
 
 

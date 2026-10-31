@@ -157,7 +157,7 @@ def 網紅說法總覽():
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner="計算各策略過去的表現（第一次約 10 秒）…")
-def 策略排行資料(_資料版本):
+def 策略排行資料(版本鍵):
     return engine.策略排行(指標)
 
 
