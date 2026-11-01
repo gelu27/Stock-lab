@@ -4,6 +4,7 @@
 #   python notify.py test    傳一則測試訊息
 #   python notify.py health  檢查各資料來源有沒有正常更新，有問題才通知（休市日不算問題）
 #   python notify.py weekly  每週六週報（大盤、庫存、自選股一週表現，主動式 ETF 一週加減碼，下週日程）
+#   python notify.py query 2330  查一檔股票（LINE 打字查詢用，由 Cloudflare Worker 觸發 query.yml）
 #   python notify.py brief 盤前|收盤|夜盤  AI 大盤解讀（要設定 GEMINI_API_KEY 或 ANTHROPIC_API_KEY），存到 ai-reports 並傳 LINE
 #
 # 需要在 GitHub 專案 Settings → Secrets and variables → Actions 設定：
@@ -857,6 +858,66 @@ def 大盤解讀(模式):
     推播(f"🧠 {模式}大盤解讀（{dt.datetime.now(台北):%m/%d %H:%M}）\n\n{文字}")
 
 
+def 個股查詢(問):
+    """LINE 打字查詢：代號或名稱 → 股價、評分、最近支撐壓力、券商共識、董監轉讓、網紅點名。"""
+    import engine
+    問 = str(問 or "").strip()
+    最新 = engine.讀取資料庫(最近天數=7)
+    最新 = 最新[最新["date"] == 最新["date"].max()]
+    列 = 最新[(最新["code"] == 問) | (最新["name"] == 問)]
+    if not len(列):
+        列 = 最新[最新["name"].astype(str).str.contains(問, regex=False)] if 問 else 列
+    if not len(列):
+        推播(f"🔍 找不到「{問}」，請輸入股票代號（例如 2330）或完整名稱。")
+        return
+    r = 列.iloc[0]
+    代, 名 = str(r["code"]), str(r["name"])
+    原始 = engine.讀取資料庫(最近天數=400, 代號=[代])
+    指標 = engine.計算指標(原始)
+    行們 = [f"🔍 {代} {名}　{r['date']:%m/%d}", f"收盤 {r['close']:,.2f}（{符號(r['change'])}{abs(r['change']):,.2f}）"
+          + (f"，本益比 {r['pe']:.1f}" if pd.notna(r.get("pe")) and r["pe"] > 0 else "")]
+    try:
+        全 = engine.計算指標(engine.讀取資料庫(最近天數=40))
+        分, _, _ = engine.今昨評分(全, engine.讀取基本面(), engine.讀取加權指數())
+        if 代 in 分.index:
+            行們.append(f"🧮 評分 {分.at[代, '總分']:.1f}　{分.at[代, '看法']}")
+    except Exception as e:
+        print("評分失敗：", repr(e))
+    K = engine.還原K線(指標)
+    if K is not None:
+        sr = engine.支撐壓力(K, 量=指標.set_index("date")["成交值億"])
+        位 = sr["價位"]
+        壓 = 位[位["角色"] == "壓力"].sort_values("價位").head(2)
+        撐 = 位[位["角色"] == "支撐"].sort_values("價位", ascending=False).head(2)
+        if len(壓):
+            行們.append("⬆️ 壓力 " + "、".join(f"{x['價位']:,.2f}（{x['名稱']}）" for _, x in 壓.iterrows()))
+        if len(撐):
+            行們.append("⬇️ 支撐 " + "、".join(f"{x['價位']:,.2f}（{x['名稱']}）" for _, x in 撐.iterrows()))
+    try:
+        報告們 = [x for x in (讀設定("broker_reports.json")[0] or {}).get("報告", []) if str(x.get("代號")) == 代]
+        字 = engine.共識文字(engine.券商共識(報告們, float(r["close"])))
+        if 字:
+            行們.append("🏦 " + 字)
+    except Exception as e:
+        print("券商共識失敗：", repr(e))
+    轉 = engine.讀取內部人轉讓()
+    if 轉 is not None:
+        近 = 轉[(轉["code"] == 代) & (轉["date"] >= 轉["date"].max() - pd.Timedelta(days=30))]
+        if len(近):
+            行們.append(f"🧾 近 30 天董監申報轉讓 {len(近)} 筆，共 {近['股數'].sum() / 1000:,.0f} 張")
+    try:
+        片 = (讀設定("influencer_notes.json")[0] or {}).get("影片", [])
+        說 = [(v["頻道"], x["看法"]) for v in 片 for x in v.get("股票", []) if str(x.get("代號")) == 代
+             and str(v.get("日期") or "") >= f"{dt.date.today() - dt.timedelta(days=30)}"]
+        if 說:
+            多 = sum(1 for _, k in 說 if k == "看多")
+            行們.append(f"🎬 近 30 天 {len({c for c, _ in 說})} 個頻道提到（看多 {多}、看空 {sum(1 for _, k in 說 if k == '看空')}）")
+    except Exception as e:
+        print("網紅失敗：", repr(e))
+    行們.append("（規則計分，僅供參考，非投資建議）")
+    推播("\n".join(行們))
+
+
 if __name__ == "__main__":
     模式 = sys.argv[1] if len(sys.argv) > 1 else "daily"
     if 模式 == "test":
@@ -867,6 +928,8 @@ if __name__ == "__main__":
         健康檢查()
     elif 模式 == "weekly":
         週報()
+    elif 模式 == "query":
+        個股查詢(" ".join(sys.argv[2:]))
     elif 模式 == "brief":
         大盤解讀(sys.argv[2] if len(sys.argv) > 2 else "收盤")
     else:
