@@ -46,14 +46,16 @@ def ROE資料(代號, r, 全):
     舊 = 全[全["date"] <= 全["date"].max() - pd.Timedelta(days=365)].tail(1)
     以前 = np.nan
     if pd.notna(去年四季) and len(舊) and 舊["淨值比"].iloc[0] > 0:
-        以前 = 去年四季 / (舊["收盤"].iloc[0] / 舊["淨值比"].iloc[0]) * 100
+        # 一年前的每股淨值是舊股數，期間有面額分割要換成現在的股數（EPS 已換過）
+        以前 = 去年四季 / (舊["收盤"].iloc[0] / 舊["淨值比"].iloc[0] / engine.分割倍數(代號, 舊["date"].iloc[0])) * 100
     return 現在, 以前, 季度, 四季
 
 
 def 變化資料(代號, r, 全, 天數=126):
     歷史 = 全.tail(天數)
     股數 = r.get("發行股數", np.nan)
-    週轉 = 歷史["volume"] / 股數 * 100 if pd.notna(股數) and 股數 else pd.Series(np.nan, index=歷史.index)
+    週轉 = (歷史["volume"] * engine.分割倍數序列(代號, 歷史["date"]) / 股數 * 100 if pd.notna(股數) and 股數
+            else pd.Series(np.nan, index=歷史.index))  # 分割前的成交股數換成現在的股數基準
     表們 = []
     for 取 in (lambda: engine.讀取集保(代號), lambda: engine.集保歷史(代號, 26)):
         try:
