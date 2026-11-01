@@ -28,7 +28,29 @@ importlib.reload(engine)
 importlib.reload(etf_data)  # 程式更新後確保用的是最新版的計算規則
 importlib.reload(etf_analysis)
 
-st.set_page_config(page_title="TW//STOCK LAB", page_icon="◢", layout="wide")
+_圖示 = Path(__file__).parent / "static" / "icon-192.png"
+st.set_page_config(page_title="TW//STOCK LAB", page_icon=str(_圖示) if _圖示.exists() else "◢", layout="wide")
+if not st.session_state.get("_主畫面圖示"):
+    st.session_state["_主畫面圖示"] = True
+    # 手機「加入主畫面」用的圖示與名稱（Streamlit 沒辦法直接改 <head>，用小段程式加到上層頁面）
+    st.iframe("""<script>
+    try {
+      const app = window.parent, top = (() => { try { return window.top.document ? window.top : app; } catch (e) { return app; } })();
+      const d = top.document, h = d.head;
+      const b = new URL("app/static/", app.location.href.split("?")[0].replace(/[^/]*$/, "")).href;
+      const link = (rel, href) => { const e = d.createElement("link"); e.rel = rel; e.href = href; h.appendChild(e); };
+      const meta = (name, content) => { const e = d.createElement("meta"); e.name = name; e.content = content; h.appendChild(e); };
+      link("apple-touch-icon", b + "icon-180.png");
+      meta("apple-mobile-web-app-title", "台股觀測");
+      meta("apple-mobile-web-app-capable", "yes");
+      meta("theme-color", "#000000");
+      const m = {name: "台股觀測站", short_name: "台股觀測", start_url: top.location.href, display: "standalone",
+                 background_color: "#000000", theme_color: "#000000",
+                 icons: [{src: b + "icon-192.png", sizes: "192x192", type: "image/png"},
+                         {src: b + "icon-512.png", sizes: "512x512", type: "image/png"}]};
+      link("manifest", URL.createObjectURL(new Blob([JSON.stringify(m)], {type: "application/manifest+json"})));
+    } catch (e) {}
+    </script>""", height=1)
 
 # ---------- 外觀：黑底前衛風格 ----------
 青 = "#00E5FF"
@@ -119,6 +141,21 @@ a.cardlink:hover .card, a.cardlink:active .card {{ border-color: {青}; backgrou
 [data-testid="stAlertContainer"] {{ border-radius: 0; background: #0A0A0A; border-left: 3px solid {青}; }}
 .rank th {{ white-space: nowrap; }}
 [data-testid="stCaptionContainer"] {{ color: #8A8A8A; }}
+/* 第五批美化：框線容器、表格、分頁在手機可左右滑、隱藏 0 高度元件的空白 */
+[data-testid="stVerticalBlockBorderWrapper"] {{ border-radius: 0 !important; border-color: #1E1E1E !important;
+    background: linear-gradient(180deg, #080808 0%, #040404 100%); transition: border-color .15s; }}
+[data-testid="stVerticalBlockBorderWrapper"]:hover {{ border-color: #2E3F42 !important; }}
+[data-testid="stDataFrame"] {{ border: 1px solid #1A1A1A; }}
+.stTabs [data-baseweb="tab-list"] {{ overflow-x: auto; scrollbar-width: none; }}
+.stTabs [data-baseweb="tab-list"]::-webkit-scrollbar {{ display: none; }}
+.stTabs [data-baseweb="tab"] {{ white-space: nowrap; }}
+[data-testid="stAlertContainer"]:has([data-testid="stAlertContentWarning"]) {{ border-left-color: #FFC24B; }}
+[data-testid="stAlertContainer"]:has([data-testid="stAlertContentError"]) {{ border-left-color: {紅}; }}
+[data-testid="stAlertContainer"]:has([data-testid="stAlertContentSuccess"]) {{ border-left-color: {綠}; }}
+[data-testid="stElementContainer"]:has(iframe[srcdoc*="apple-touch-icon"]) {{ display: none; }}
+[data-testid="stMetricValue"] {{ font-family: 'JetBrains Mono'; }}
+@media (max-width: 640px) {{ .stTabs [data-baseweb="tab"] {{ padding: 8px 12px; letter-spacing: .05em; }}
+    .sec {{ letter-spacing: .15em; margin-top: 18px; }} }}
 /* 首頁快速跳轉列與回到頂端 */
 .jump {{ display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }}
 .jump a {{ font-family: 'Noto Sans TC', sans-serif; font-size: 13px; color: #BDBDBD; text-decoration: none;

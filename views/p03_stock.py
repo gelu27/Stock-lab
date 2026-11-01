@@ -251,13 +251,27 @@ def 個股比較(代號):
         "法人5日(張)": t.get("法人5日買超", pd.Series(np.nan, index=t.index)).values,
         "產業": t["產業"].values if "產業" in t else None,
     })
+    財 = 同業財務(_版本)
+    毛, 四, 簡 = 財["毛"].reindex(代號們), 財["四"].reindex(代號們), 財["簡"].reindex(代號們)
+    淨值 = t["收盤"] / t["淨值比"].where(t["淨值比"] > 0)
+    表["毛利率%"] = 毛["毛利率"].values
+    表["ROE%"] = (四["近四季EPS"] / 淨值 * 100).round(1).values
+    表["主要營收"] = [str(x).split("、")[0][:24] if isinstance(x, str) and x else "—" for x in 簡["營收比重"]]
     漲欄 = ["今日%", f"{期間}%", "營收年增%", "法人5日(張)"]
     樣式 = (表.style.format({"股價": "{:,.2f}", "今日%": "{:+.2f}", f"{期間}%": "{:+.1f}", "總分": "{:.1f}",
                             "本益比": "{:.1f}", "殖利率": "{:.2f}", "淨值比": "{:.2f}", "營收年增%": "{:+.1f}",
-                            "法人5日(張)": "{:+,.0f}"}, na_rep="—")
+                            "法人5日(張)": "{:+,.0f}", "毛利率%": "{:.1f}", "ROE%": "{:.1f}"}, na_rep="—")
           .map(lambda v: f"color:{漲跌色(v)}", subset=漲欄).map(lambda v: f"color:{分數色(v)}", subset=["總分"]))
     表格(樣式, hide_index=True, width="stretch", height=35 * (len(表) + 1) + 3)
-    st.caption("總分是規則計分（50 為中性），僅供參考，非投資建議。")
+    st.caption("總分是規則計分（50 為中性），僅供參考，非投資建議。毛利率是最新一季單季；ROE＝近四季 EPS ÷ 每股淨值；"
+               "主要營收取公司簡介的第一大營收項目。")
+
+
+@st.cache_data(ttl=43200, max_entries=1, show_spinner=False)
+def 同業財務(版本鍵):
+    簡 = engine.讀取公司簡介()
+    return {"毛": engine.毛利率表(), "四": engine.近四季EPS表(),
+            "簡": 簡 if "營收比重" in 簡 else pd.DataFrame(columns=["營收比重"])}
 
 
 @st.cache_data(ttl=3600, show_spinner=False, max_entries=50)
@@ -630,6 +644,21 @@ def 循環股提醒(r, 概念們):
                 "或用景氣全周期的平均 EPS 估值；同時留意報價、庫存、運價等領先指標有沒有轉弱。")
 
 
+技術替代風險 = {
+    "高速傳輸連接器": "光進銅退：機櫃內的高速銅纜、連接器，之後可能被 CPO／光學互連取代一部分。要看公司有沒有光通訊、NPO 的產品或認證。",
+    "PCB載板銅箔基板": "玻璃基板：大尺寸 AI 晶片的封裝載板，之後可能從有機（ABF）材料換成玻璃核心，時間點大約 2027 年以後。要看公司有沒有參與玻璃基板送樣。",
+    "散熱": "液冷取代氣冷：AI 機櫃功耗越來越高，只做風扇、熱導管、散熱片的公司要看有沒有水冷板、CDU、快接頭的產品。",
+    "面板": "OLED、Micro LED 取代 LCD：手機、筆電、車用面板慢慢換成新技術，要看公司新技術的營收比重。",
+    "PCB製板": "CoWoP／玻璃基板：封裝直接上 PCB 或改用玻璃核心，會改變載板與主機板的分工，要看公司技術能不能跟上。",
+}
+
+
+def 技術替代卡(概念們):
+    風險 = [(k, 技術替代風險[k]) for k in 概念們 if k in 技術替代風險]
+    if 風險:
+        st.warning("🔁 **技術替代風險**：" + "　".join(f"**{k}**｜{v}" for k, v in 風險))
+
+
 # ---------- 03 個股查詢 ----------
 if st.session_state.get("個股查詢") not in 股票選項:
     st.session_state["個股查詢"] = next((v for v in 股票選項 if v.startswith("2330 ")), 股票選項[0])
@@ -659,6 +688,7 @@ if "股本億" not in 今日.columns and 代號 in 股.index:
 if 概念們:
     st.caption("🏷️ 概念股：" + "、".join(概念們))
 循環股提醒(r, 概念們)
+技術替代卡(概念們)
 鏈 = engine.產業鏈位置(代號, dict(zip(今日["代號"], 今日["名稱"])))
 if 鏈:
     st.caption("🔗 " + 鏈.replace("\n", "　｜　"))

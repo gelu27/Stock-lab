@@ -326,6 +326,10 @@ def 提醒事項(代號們):
         行們 += 網紅條件提醒(狀態)
     except Exception as e:
         print("網紅條件失敗：", repr(e))
+    try:
+        行們 += 興櫃承銷提醒(代號們, 狀態)
+    except Exception as e:
+        print("興櫃承銷失敗：", repr(e))
     if 狀態 != 舊狀態:
         try:
             寫設定("alert_state.json", 狀態, sha)
@@ -458,6 +462,29 @@ def 網紅條件提醒(狀態, 天數=30):
             行們.append(f"{r['頻道']}（{r['日期']:%m/%d}）：{r['條件'][:50]}\n  → {說}")
         狀態[鍵] = 狀
     return ["", "🎬 網紅條件成立了"] + 行們[:8] if 行們 else []
+
+
+def 興櫃承銷提醒(代號們, 狀態):
+    """庫存／自選的推薦券商變動，以及所有公司新的申請上市櫃、審議通過重大訊息（同一則只通知一次）。"""
+    import engine
+    行們 = []
+    變 = engine.讀取推薦變動()
+    if 變 is not None and len(變):
+        近 = 變[(變["date"] >= 變["date"].max() - pd.Timedelta(days=3)) & 變["code"].isin(set(代號們))]
+        for _, x in 近.iterrows():
+            鍵 = f"推薦_{x['code']}_{x['dealer']}_{x['change']}"
+            if not 狀態.get(鍵):
+                狀態[鍵] = 1
+                行們.append(f"{x['code']} {x.get('name', '')}：{x['dealer']} {x['change']}")
+    訊 = engine.讀取重大訊息()
+    if 訊 is not None and len(訊):
+        近 = 訊[(訊["date"] >= 訊["date"].max() - pd.Timedelta(days=3)) & 訊["subject"].str.contains(engine.掛牌字, na=False)]
+        for _, x in 近.tail(8).iterrows():
+            鍵 = f"重訊_{x['code']}_{x['date']:%Y%m%d}_{str(x['subject'])[:12]}"
+            if not 狀態.get(鍵):
+                狀態[鍵] = 1
+                行們.append(f"{x['code']} {x['name']}：{str(x['subject'])[:50]}")
+    return ["", "🌱 興櫃推薦券商／掛牌消息"] + 行們 if 行們 else []
 
 
 def ETF共識提醒(代號們, 狀態, 門檻=3):

@@ -486,6 +486,46 @@ def 自選股區():
         if len(群組們) > 1 and st.button(f"🗑 刪除「{群組}」群組", key="自選刪除"):
             存自選股({k: v for k, v in 自選.items() if k != 群組})
             st.rerun()
+    批次公司介紹(自選)
+
+
+def 批次公司介紹(自選, 每次=5):
+    """自選股、庫存裡還沒有 AI 公司介紹的，一次幫忙產生（每按一次最多 5 檔，每檔算 1 次 AI 用量）。"""
+    設定 = _設定()
+    金鑰 = engine.清理金鑰(設定.get("GEMINI_API_KEY")) if str(設定.get("GEMINI_API_KEY", "")).strip() else ""
+    if not 金鑰 or not 可編輯():
+        return
+    代們 = list(dict.fromkeys([c for v in 自選.values() for c in v] + [str(c) for c in (庫存代號() or [])]))
+    代們 = [c for c in 代們 if not c.startswith("0") and c in 市場名稱]
+    if 代們 and st.button(f"✨ 幫自選／庫存補 AI 公司介紹（每按一次最多 {每次} 檔）", key="批次介紹"):
+        缺 = [c for c in 代們 if not 公司資料(c)["AI介紹"]]
+        if not 缺:
+            st.success("自選和庫存都已經有 AI 公司介紹了。")
+            return
+        今天 = f"{pd.Timestamp.now(tz='Asia/Taipei'):%Y-%m-%d}"
+        用量 = AI用量()
+        上限 = int(設定.get("AI_DAILY_LIMIT", 20))
+        進度 = st.progress(0.0)
+        完成 = []
+        for i, c in enumerate(缺[:每次]):
+            if 用量.get(今天, 0) >= 上限:
+                st.warning("今天的 AI 次數已達上限，明天再繼續。")
+                break
+            try:
+                內容 = engine.AI公司介紹(c, 市場名稱[c], 公司文字(公司資料(c)), "Gemini", 金鑰,
+                                    str(設定.get("GEMINI_MODEL", "gemini-flash-latest")),
+                                    搜尋=str(設定.get("GEMINI_SEARCH", "")).lower() == "true")
+                if 內容:
+                    engine.儲存公司介紹(c, {"時間": pd.Timestamp.now(tz="Asia/Taipei").strftime("%Y-%m-%d %H:%M"),
+                                         "引擎": "Gemini", "內容": 內容}, 設定)
+                    完成.append(f"{c} {市場名稱[c]}")
+                用量[今天] = 用量.get(今天, 0) + 1
+            except Exception as 錯:
+                st.caption(f"{c} 失敗：{錯}")
+            進度.progress((i + 1) / min(len(缺), 每次))
+        if 完成:
+            st.session_state["_公司介紹版本"] = st.session_state.get("_公司介紹版本", 0) + 1
+            st.success("已產生：" + "、".join(完成) + "。到 03 個股查詢就看得到。")
 
 
 def 群組績效(自選):

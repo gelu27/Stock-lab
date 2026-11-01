@@ -5873,3 +5873,66 @@ def 網紅條件清單(影片們, 天數=30, 今天=None, 名表=None):
             列們.append({"日期": d, "頻道": v.get("頻道"), "條件": 條, "代號": 目[0] if 目 else None,
                        "標的": 目[1] if 目 else None})
     return 列們
+
+
+# ========== 第五批：興櫃觀察、推薦券商、承銷重訊 ==========
+def 讀取興櫃歷史(天數=60):
+    檔們 = sorted((資料夾 / "esb").glob("*.csv.gz"))[-天數:]
+    if not 檔們:
+        return None
+    t = pd.concat([pd.read_csv(f, dtype={"code": str}) for f in 檔們], ignore_index=True)
+    t["date"] = pd.to_datetime(t["date"])
+    return t
+
+
+def 讀取推薦券商():
+    return _讀("esb_dealers.csv", dtype={"code": str})
+
+
+def 讀取推薦變動():
+    return _讀("esb_dealer_changes.csv", dtype={"code": str}, parse_dates=["date"])
+
+
+def 讀取重大訊息():
+    return _讀("material_news.csv", dtype={"code": str}, parse_dates=["date"])
+
+
+掛牌字 = re.compile(r"申請(股票)?(上市|上櫃)|上(市|櫃)審議|轉(上市|上櫃)|掛牌")
+
+
+def 興櫃總覽(歷史, 券商=None, 變動=None, 重訊=None, 今天=None):
+    """每檔興櫃股：最新價、20 日漲幅、成交張數、推薦券商家數、近 30 天推薦變動、近 90 天掛牌相關重訊，
+    以及「估計承銷價」＝近 20 日均價 × 0.7～0.85（經驗法則：承銷價通常比興櫃均價打折）。"""
+    if 歷史 is None or not len(歷史):
+        return pd.DataFrame()
+    今天 = pd.Timestamp(今天 or 歷史["date"].max())
+    歷史 = 歷史.sort_values("date")
+    g = 歷史.groupby("code")
+    最新 = g.tail(1).set_index("code")
+    均20 = g["average"].apply(lambda s: s.tail(20).mean())
+    首 = g["close"].apply(lambda s: s.iloc[-21] if len(s) > 20 else s.iloc[0])
+    t = pd.DataFrame({"名稱": 最新["name"], "收盤": 最新["close"], "均價": 最新["average"],
+                      "漲幅%": ((最新["close"] / 首 - 1) * 100).round(1),
+                      "成交張數": (最新["volume"] / 1000).round(0), "20日均價": 均20.round(2)})
+    t["推薦家數"] = 券商.groupby("code").size().reindex(t.index).fillna(0).astype(int) if 券商 is not None and len(券商) else np.nan
+    t["推薦變動"] = ""
+    if 變動 is not None and len(變動):
+        近 = 變動[變動["date"] >= 今天 - pd.Timedelta(days=30)]
+        字 = 近.groupby("code").apply(lambda x: "、".join(f"{a}{b}" for a, b in zip(x["change"].str[:2], x["dealer"])))
+        t["推薦變動"] = 字.reindex(t.index).fillna("")
+    t["掛牌進度"] = ""
+    if 重訊 is not None and len(重訊):
+        近 = 重訊[(重訊["date"] >= 今天 - pd.Timedelta(days=90)) & 重訊["subject"].str.contains(掛牌字, na=False)]
+        t["掛牌進度"] = 近.sort_values("date").groupby("code")["subject"].last().str[:40].reindex(t.index).fillna("")
+    t["估計承銷價"] = [f"{a * 0.7:,.1f}～{a * 0.85:,.1f}" if pd.notna(a) else "—" for a in t["20日均價"]]
+    return t.reset_index().rename(columns={"code": "代號"})
+
+
+def 新股掛牌表現(申購試算表):
+    """過去公開申購（初上市櫃）掛牌後的報酬%：給興櫃估值當參考。"""
+    if 申購試算表 is None or not len(申購試算表) or "報酬%" not in 申購試算表:
+        return None
+    t = 申購試算表[申購試算表["market"].astype(str).str.contains("初上")].dropna(subset=["報酬%"])
+    if not len(t):
+        return None
+    return {"檔數": len(t), "中位數%": float(t["報酬%"].median()), "上漲比例%": float((t["報酬%"] > 0).mean() * 100)}
