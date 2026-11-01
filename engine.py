@@ -1245,7 +1245,13 @@ F. 好公司不等於好價格：判斷利多是否「已反應在股價」（�
 G. 先判斷格局再給做法（數據摘要有「格局」）：盤整看區間上下緣、上升趨勢買拉回、下降趨勢（跌破 10 日線）先不接刀。
 H. 一定要寫「看錯了怎麼辦」：停損價要用網站算好的支撐（共振區、均線、缺口）或黑 K 一半，不要憑感覺給整數。
 I. 不預測哪一天漲跌；只寫「站上／跌破哪個價位就怎樣」。
-J. 一次性項目（訴訟和解、處分利益、匯兌）要排除後再看本業。
+J. 一次性項目（訴訟和解、處分利益、匯兌、存貨回沖、賣資產、稅率變動）要排除後再看本業 EPS。
+K. 先寫「這次跟上次差在哪」：數據摘要有「上次網站 AI 報告」就列本次 vs 前次（看法、合理價、今年／明年 EPS 與變動 %），沒有就寫「首次」；沒有變化就明說「維持」。
+L. 合理價變動超過 10%，拆成 EPS／倍數／估值年度三塊；主要是倍數變的話要提醒「這是估值變化，不是獲利變好」。
+M. 引用券商用中位數與區間（數據摘要的「券商共識」），寫出上修／下修家數與最樂觀、最悲觀是哪家；網站合理價跟共識中位數差超過 20% 要解釋原因。
+N. 券商前次目標價低於報告前收盤價的上修，標「追價上修」，不當成新的看多訊號；近 3 天 3 家以上同方向改目標價要寫在結論。
+O. 循環股（記憶體、面板、航運、鋼鐵、塑化等）說明現在是景氣高峰還是谷底，低本益比要提醒「可能是獲利高峰」，改用股價淨值比或全周期平均 EPS。
+P. 「看錯條件」要用網站能自動對答案的數字（月營收年增率、收盤價位、毛利率）；資料不足就說不足，不自己推測數字；不複製券商原文。
 
 資料紀律：
 - 使用者提供的股價、基本面、籌碼、技術面、支撐壓力數據是正確的，以它為準；價位名稱（月線、季線、共振區等）只用數據摘要裡的。
@@ -1256,11 +1262,13 @@ J. 一次性項目（訴訟和解、處分利益、匯兌）要排除後再看�
 
 輸出 Markdown，依序包含以下段落（用 ### 標題）：
    ### 一句話結論（看法＋目標價＋怎麼算的＋現在貴不貴）
+   ### 本次 vs 前次（K；第一次就寫「首次」）
    ### 公司介紹（做什麼、主要產品與營收比重、主要客戶與下游應用、產業地位／是否龍頭、主要競爭對手；
        營收比重與主要業務以使用者提供的「公司資料」為準，客戶查不到就寫未找到）
    ### 近半年重要消息（由新到舊條列，每條註明月份）
    ### 上一季對答案與成長來源（C、D）
-   ### 法人與券商觀點（目標價、評等、券商與日期、上修或下修、與共識的差異；找不到就說找不到，不要編造）
+   ### 法人與券商觀點（M、N：區間、中位數、上修下修家數、最樂觀與最悲觀；找不到就說找不到，不要編造）
+   ### 一次性檢查與景氣位置（J、O）
    ### 目標價與評價
        表格列出：評價方法（P/E 或 P/B）、今年與明年預估 EPS（或每股淨值；優先用券商或法說會預估，沒有就自行估算並註明「自行估算」）、
        以目前股價換算的倍數與歷史位階、保守／合理／樂觀三檔目標價（倍數 × EPS），並說明假設。
@@ -1561,6 +1569,23 @@ def Gemini呼叫(內容, api_key, 模型="gemini-flash-latest", 每個試幾次=
                 break
             raise RuntimeError(f"Gemini 回應錯誤（{回應.status_code}）：{訊息}")
     raise RuntimeError(最後錯誤 or "Gemini 沒有回應")
+
+
+會診角色 = {"技術面": "只看 K 線、均線、支撐壓力、量價", "籌碼面": "只看三大法人、融資券、大戶與主動式 ETF",
+          "基本面": "只看營收、毛利率、EPS、評價", "唱反調": "專門找這檔的空方理由與最可能看錯的地方"}
+
+
+def AI多角色會診(代號, 名稱, 數據摘要, api_key, 模型="gemini-flash-latest"):
+    """Gemini 一次扮 4 位分析師各寫 3 句，再給總結與分歧點（只用網站數據，不上網，省用量）。"""
+    角色 = "\n".join(f"### {k}（{v}）" for k, v in 會診角色.items())
+    提示 = (f"以下是台股 {代號} {名稱} 的網站數據（以此為準，不要自己編數字）：\n{數據摘要}\n\n"
+          f"請用繁體中文，分別扮演 4 位分析師，每位只用自己負責的數據寫 3 句（每句帶一個數字），依序用這些標題：\n{角色}\n"
+          "### 總結（2 句：多數人怎麼看、整體偏多／中性／偏空）\n### 分歧點（大家意見不同的地方，以及要看哪個數字來判斷誰對）\n"
+          "最後一行寫「以上為 AI 依網站數據的多角度整理，不構成投資建議。」")
+    回應, _ = Gemini呼叫({"contents": [{"role": "user", "parts": [{"text": 提示}]}],
+                        "generationConfig": {"temperature": 0.4, "maxOutputTokens": 3000}}, api_key, 模型)
+    j = 回應.json()
+    return "".join(p.get("text", "") for p in j["candidates"][0]["content"]["parts"])
 
 
 def AI分析Gemini(代號, 名稱, 數據摘要, api_key, 模型="gemini-flash-latest", 搜尋=False):
@@ -4075,8 +4100,169 @@ def 券商報告表(報告們):
                    "EPS今年": _數(x.get("EPS今年")), "EPS明年": _數(x.get("EPS明年")),
                    "目標價修正": 方["目標價"], "EPS修正": "上修" if "上修" in (方["EPS今年"], 方["EPS明年"]) else
                    ("下修" if "下修" in (方["EPS今年"], 方["EPS明年"]) else ("持平" if "持平" in (方["EPS今年"], 方["EPS明年"]) else "—")),
-                   "評價方法": x.get("評價方法"), "報告收盤價": _數(x.get("報告收盤價"))})
+                   "評價方法": x.get("評價方法"), "標籤": 報告標籤(x), "報告收盤價": _數(x.get("報告收盤價"))})
     return pd.DataFrame(列們).sort_values("日期", ascending=False).reset_index(drop=True)
+
+
+外資券商字 = ("大和", "高盛", "摩根", "大摩", "小摩", "美林", "美銀", "花旗", "瑞銀", "麥格理", "野村", "滙豐", "匯豐", "里昂",
+           "巴克萊", "德意志", "傑富瑞", "伯恩斯坦", "瑞穗", "Morgan", "Goldman", "Citi", "UBS", "Macquarie", "Nomura",
+           "HSBC", "CLSA", "Jefferies", "BofA", "Bernstein", "Daiwa", "Mizuho", "Barclays")
+一次性字 = ("一次性", "處分", "業外", "退稅", "回沖", "賣廠", "出售", "評價利益", "稅率", "匯兌", "和解", "認列", "非經常")
+
+
+def 解析評價(文字):
+    """從「35 倍 × FY28 EPS 3.00」這種評價方法文字拆出：倍數、估值年度、用的 EPS、前次倍數、是否用淨值比。"""
+    import re
+    t = str(文字 or "")
+    數字 = lambda m: float(m.group(1)) if m else np.nan
+    倍 = 數字(re.search(r"([\d.]+)\s*倍", t))
+    前 = 數字(re.search(r"由\s*([\d.]+)\s*倍", t))
+    if not np.isnan(前):  # 「本益比由 50.5 倍降到 35 倍」：本次倍數是後面那個
+        後 = re.search(r"(?:降|升|調|上修|下修)[到至為]\s*([\d.]+)\s*倍", t)
+        倍 = 數字(後) if 後 else 倍
+    年 = re.search(r"(?:FY|20)(\d{2})", t)
+    return {"倍數": 倍, "前次倍數": 前, "估值年度": f"20{年.group(1)}" if 年 else None,
+            "EPS": 數字(re.search(r"EPS\s*([\d.]+)", t)), "淨值比": bool(re.search(r"淨值|P/?B|BVPS", t, re.I))}
+
+
+def 報告標籤(x):
+    """一次性項目、估值年度、追價上修。"""
+    標 = []
+    文 = " ".join(str(x.get(k) or "") for k in ("理由", "風險", "評價方法")) + " ".join(x.get("白話") or [])
+    if any(k in 文 for k in 一次性字):
+        標.append("一次性")
+    年 = 解析評價(x.get("評價方法"))["估值年度"]
+    if 年:
+        標.append(f"估 {年}")
+    前, 收, 目 = _數(x.get("前次目標價")), _數(x.get("報告收盤價")), _數(x.get("目標價"))
+    if not np.isnan(前) and not np.isnan(收) and not np.isnan(目) and 目 > 前 and 前 < 收:
+        標.append("追價上修")
+    return "、".join(標)
+
+
+def 目標價拆解(報告們):
+    """目標價變動拆成「倍數變動」與「EPS／年度變動」：TP＝倍數 × EPS，所以 (1+總變動)＝(1+倍數變動)×(1+EPS變動)。
+    前次倍數優先用同券商上一份報告，沒有就用評價方法文字裡的「由 X 倍」。回傳 DataFrame（新到舊）。"""
+    列們 = []
+    依序 = sorted(報告們, key=lambda x: str(x.get("日期")))
+    for i, x in enumerate(依序):
+        目, 前 = _數(x.get("目標價")), _數(x.get("前次目標價"))
+        if np.isnan(目) or np.isnan(前) or 前 <= 0 or abs(目 / 前 - 1) < 0.001:
+            continue
+        本 = 解析評價(x.get("評價方法"))
+        舊 = next((y for y in reversed(依序[:i]) if y.get("券商") == x.get("券商") and str(y.get("代號")) == str(x.get("代號"))), None)
+        舊析 = 解析評價(舊.get("評價方法")) if 舊 else {}
+        前倍 = 本["前次倍數"] if not np.isnan(本["前次倍數"]) else 舊析.get("倍數", np.nan)
+        總 = 目 / 前 - 1
+        倍變 = 本["倍數"] / 前倍 - 1 if not np.isnan(本["倍數"]) and not np.isnan(前倍) and 前倍 > 0 else np.nan
+        獲變 = (1 + 總) / (1 + 倍變) - 1 if not np.isnan(倍變) else np.nan
+        if np.isnan(倍變):  # 沒有倍數，改用同一年度 EPS 的上下修推回倍數變動
+            for 今欄, 前欄 in (("EPS明年", "前次EPS明年"), ("EPS今年", "前次EPS今年")):
+                e1, e0 = _數(x.get(今欄)), _數(x.get(前欄))
+                if not np.isnan(e1) and not np.isnan(e0) and e0 > 0:
+                    獲變 = e1 / e0 - 1
+                    倍變 = (1 + 總) / (1 + 獲變) - 1
+                    break
+        年推 = bool(舊析.get("估值年度") and 本["估值年度"] and 舊析["估值年度"] != 本["估值年度"])
+        if np.isnan(倍變):
+            判 = "倍數資料不足，看不出是獲利還是估值變"
+        elif abs(倍變) >= abs(獲變):
+            判 = "主要是券商改倍數（估值變化，不是獲利變好）" if 總 > 0 else "主要是券商降倍數（估值變保守）"
+        else:
+            判 = ("主要是獲利預估上修" if 總 > 0 else "主要是獲利預估下修") + ("，且估值年度往後推" if 年推 else "")
+        列們.append({"日期": pd.to_datetime(x.get("日期"), errors="coerce"), "代號": x.get("代號"), "名稱": x.get("名稱"),
+                   "券商": x.get("券商"), "前次目標價": 前, "目標價": 目, "總變動%": round(總 * 100, 1),
+                   "倍數變動%": round(倍變 * 100, 1) if not np.isnan(倍變) else np.nan,
+                   "EPS與年度變動%": round(獲變 * 100, 1) if not np.isnan(獲變) else np.nan,
+                   "估值年度": 本["估值年度"] or "—", "判讀": 判})
+    t = pd.DataFrame(列們)
+    return t.sort_values("日期", ascending=False).reset_index(drop=True) if len(t) else t
+
+
+def 券商共識(報告們, 現價=None, 天數=180):
+    """每家券商只取最新一份（近 天數 天），算目標價區間、中位數、上修下修家數、多中空家數、外資與本土各自中位數。"""
+    if not 報告們:
+        return None
+    表 = 券商報告表(報告們)
+    表 = 表[表["日期"] >= pd.Timestamp.now().normalize() - pd.Timedelta(days=天數)]
+    if 表.empty:
+        return None
+    最新 = 表.sort_values("日期").groupby("券商").tail(1)
+    目 = 最新["目標價"].dropna()
+    外 = 最新["券商"].astype(str).apply(lambda b: any(k in b for k in 外資券商字))
+    結果 = {"家數": len(最新), "目標價數": len(目), "最低": 目.min() if len(目) else np.nan, "中位數": 目.median() if len(目) else np.nan,
+          "最高": 目.max() if len(目) else np.nan,
+          "最樂觀": 最新.loc[目.idxmax(), "券商"] if len(目) else None, "最悲觀": 最新.loc[目.idxmin(), "券商"] if len(目) else None,
+          "上修": int((最新["目標價修正"] == "上修").sum()), "下修": int((最新["目標價修正"] == "下修").sum()),
+          "看多": int((最新["看法"] == "看多").sum()), "中性": int((最新["看法"] == "中性").sum()), "看空": int((最新["看法"] == "看空").sum()),
+          "外資中位數": 最新.loc[外, "目標價"].median() if 外.any() else np.nan, "外資家數": int(外.sum()),
+          "本土中位數": 最新.loc[~外, "目標價"].median() if (~外).any() else np.nan, "本土家數": int((~外).sum())}
+    if 現價 and len(目):
+        結果["現價位置%"] = round((現價 - 目.min()) / (目.max() - 目.min()) * 100, 0) if 目.max() > 目.min() else np.nan
+        結果["中位數空間%"] = round((目.median() / 現價 - 1) * 100, 1)
+    return 結果
+
+
+def 共識文字(c):
+    if not c:
+        return ""
+    t = (f"近半年 {c['家數']} 家券商：目標價 {c['最低']:,.0f}～{c['最高']:,.0f}，中位數 {c['中位數']:,.0f}"
+         f"（最樂觀 {c['最樂觀']}、最悲觀 {c['最悲觀']}）；看多 {c['看多']}／中性 {c['中性']}／看空 {c['看空']}；"
+         f"最新一份比前次上修 {c['上修']} 家、下修 {c['下修']} 家") if c["目標價數"] else f"近半年 {c['家數']} 家券商，沒有目標價"
+    if c["外資家數"] and c["本土家數"] and not np.isnan(c["外資中位數"]) and not np.isnan(c["本土中位數"]):
+        t += f"；外資中位數 {c['外資中位數']:,.0f} vs 本土 {c['本土中位數']:,.0f}"
+    return t
+
+
+def 集體升降評(報告們, 天數=3, 門檻=3, 今天=None):
+    """近 天數 天內，同一檔有 門檻 家以上券商同方向調整目標價（或首次給評等時同看法）。回傳 [(代號, 名稱, 方向, 家數, 券商們)]。"""
+    表 = 券商報告表(報告們)
+    if 表.empty:
+        return []
+    今天 = pd.Timestamp(今天 or pd.Timestamp.now().normalize())
+    近 = 表[表["日期"] >= 今天 - pd.Timedelta(days=天數 + 2)]  # 多抓兩天：週末與報告隔天才上傳
+    結果 = []
+    for (代, 名), g in 近.groupby(["代號", "名稱"]):
+        for 方向 in ("上修", "下修"):
+            家 = g.loc[g["目標價修正"] == 方向, "券商"].unique()
+            if len(家) >= 門檻:
+                結果.append((str(代), 名, 方向, len(家), "、".join(map(str, 家))))
+    return sorted(結果, key=lambda x: -x[3])
+
+
+def EPS共識走勢(報告們):
+    """每個報告日，用各券商「截至那天的最新一份」算今年、明年 EPS 中位數。年度以報告日期的年份為準。"""
+    列們 = []
+    依序 = sorted(報告們, key=lambda x: str(x.get("日期")))
+    for 日 in sorted({str(x.get("日期")) for x in 依序}):
+        最新 = {}
+        for x in 依序:
+            if str(x.get("日期")) <= 日:
+                最新[x.get("券商")] = x
+        for 欄, 加 in (("EPS今年", 0), ("EPS明年", 1)):
+            值們 = {}
+            for x in 最新.values():
+                v = _數(x.get(欄))
+                if not np.isnan(v):
+                    值們.setdefault(int(str(x.get("日期"))[:4]) + 加, []).append(v)
+            for 年, v in 值們.items():
+                列們.append({"日期": pd.Timestamp(日), "年度": f"{年} EPS", "中位數": float(np.median(v)), "家數": len(v)})
+    return pd.DataFrame(列們)
+
+
+def 覆蓋熱度(報告們, 天數=7):
+    表 = 券商報告表(報告們)
+    if 表.empty:
+        return 表
+    近 = 表[表["日期"] >= 表["日期"].max() - pd.Timedelta(days=天數)]
+    g = 近.groupby(["代號", "名稱"])
+    return pd.DataFrame({"報告數": g.size(), "券商數": g["券商"].nunique(), "上修": g["目標價修正"].apply(lambda s: (s == "上修").sum()),
+                         "下修": g["目標價修正"].apply(lambda s: (s == "下修").sum()),
+                         "目標價中位數": g["目標價"].median()}).reset_index().sort_values(["報告數", "券商數"], ascending=False)
+
+
+循環產業 = {"航運業", "鋼鐵工業", "塑膠工業", "水泥工業", "造紙工業", "玻璃陶瓷", "橡膠工業", "化學工業", "油電燃氣業"}
+循環概念字 = ("記憶體", "DRAM", "NAND", "面板")
 
 
 def 加潛在空間(表, 現價):
@@ -4173,7 +4359,7 @@ def 券商命中率(報告們, 價格們):
         v = 驗收券商報告(x, p)
         if v["結果"] == "無目標價":
             continue
-        列們.append({"券商": x.get("券商"), "結果": v["結果"], "報酬%": v["報酬%"]})
+        列們.append({"券商": x.get("券商"), "結果": v["結果"], "報酬%": v["報酬%"], "看法": x.get("看法")})
     if not 列們:
         return pd.DataFrame()
     t = pd.DataFrame(列們)
@@ -4181,6 +4367,9 @@ def 券商命中率(報告們, 價格們):
     表 = pd.DataFrame({"報告數": g.size(), "已達標": g["結果"].apply(lambda s: (s == "達標").sum()),
                       "到期未達標": g["結果"].apply(lambda s: (s == "到期未達標").sum()),
                       "進行中": g["結果"].apply(lambda s: (s == "進行中").sum()), "平均報酬%": g["報酬%"].mean().round(1)})
+    已結 = 表["已達標"] + 表["到期未達標"]
+    表["達標率%"] = (表["已達標"] / 已結.replace(0, np.nan) * 100).round(0)
+    表["看多後平均%"] = t[t["看法"] == "看多"].groupby("券商")["報酬%"].mean().round(1).reindex(表.index)
     return 表.sort_values("報告數", ascending=False)
 
 
