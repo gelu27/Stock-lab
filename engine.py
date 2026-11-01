@@ -301,9 +301,9 @@ def 近四季EPS(代號):
     return 四季(末), t["quarter"].iloc[-1], 四季(末 - 4)
 
 
-def 毛利率表():
-    """每檔最新一季的單季毛利率，和上一季、去年同季比較（百分點）。"""
-    t = 單季損益().dropna(subset=["毛利率"])
+def 毛利率表(單季=None):
+    """每檔最新一季的單季毛利率，和上一季、去年同季比較（百分點）。單季＝單季損益() 的結果（回測時只給當時已公布的季）。"""
+    t = (單季損益() if 單季 is None else 單季).dropna(subset=["毛利率"])
     if t.empty:
         return pd.DataFrame(columns=["毛利率", "毛利率季度", "毛利率季增", "毛利率年增", "營益率", "營益率季增", "營益率年增"])
     t["序"] = t["年"].astype(int) * 4 + t["季"]
@@ -1156,6 +1156,7 @@ def 即時報價(代號們, 市場對照):
                 現價 = _數(str(m.get("b", "")).split("_")[0])
             結果.append({"code": m.get("c"), "name": m.get("n"), "close": 現價,
                        "change": 現價 - 昨收, "high": _數(m.get("h")), "low": _數(m.get("l")), "time": m.get("t"),
+                       "volume": _數(m.get("v")),
                        "date": pd.Timestamp(m.get("d", "")) if m.get("d") else pd.NaT})
     return pd.DataFrame(結果)
 
@@ -2286,7 +2287,8 @@ def 變化摘要(歷史, 週轉, 大):
 # ========== 14. 評分回測：分數高的股票之後真的比較會漲嗎？ ==========
 def 評分回測(持有天數=20, 最少量=500):
     """每月最後一個交易日用「當時看得到的資料」打分數，比較之後 N 個交易日的報酬。
-    營收用當時已公布的月份（假設次月 10 日前公布）；EPS、毛利率沒有歷史資料，所以不算。
+    營收用當時已公布的月份（假設次月 10 日前公布）；EPS、毛利率用當時已過公布期限的季報
+    （Q1 5/15、Q2 8/14、Q3 11/14、Q4 隔年 3/31），損益表歷史約 5 年。
     很吃記憶體，在 GitHub Actions 算好存成 data/score_backtest.json，網站只讀結果。"""
     指 = 計算指標(讀取資料庫())
     加 = 讀取加權指數()
@@ -2295,6 +2297,26 @@ def 評分回測(持有天數=20, 最少量=500):
     營收["m"] = pd.PeriodIndex(營收["month"], freq="M")
     營收 = 營收.set_index(["code", "m"])["revenue"]
     有的月 = set(營收.index.get_level_values("m"))
+    單季 = 單季損益()
+    損益檔 = 資料夾 / "fundamental" / "income.csv"
+    累計EPS = pd.read_csv(損益檔, dtype={"code": str}) if 損益檔.exists() else pd.DataFrame(columns=["code", "quarter", "eps"])
+    累計EPS = 累計EPS.dropna(subset=["eps"])[["code", "quarter", "eps"]] if "eps" in 累計EPS else 累計EPS.iloc[0:0]
+
+    def 公布期限(季度):
+        年, 季 = int(季度[:4]), int(季度[-1])
+        return pd.Timestamp(f"{年 + 1}-03-31") if 季 == 4 else pd.Timestamp(f"{年}-{(5, 8, 11)[季 - 1]:02d}-{(15, 14, 14)[季 - 1]}")
+    季期限 = {q: 公布期限(q) for q in set(累計EPS["quarter"]) | set(單季.get("quarter", []))}
+
+    def 當時財報(日):
+        可 = {q for q, d in 季期限.items() if d <= 日}
+        if not 可:
+            return None
+        e = 累計EPS[累計EPS["quarter"].isin(可)].sort_values(["code", "quarter"])
+        最新 = e.drop_duplicates("code", keep="last").set_index("code").rename(columns={"quarter": "EPS季度", "eps": "EPS"})
+        最新["近三季EPS"] = _近三季EPS(e).reindex(最新.index).fillna(最新["EPS"]) if len(e) else np.nan
+        if len(單季):
+            最新 = 最新.join(毛利率表(單季[單季["quarter"].isin(可)]), how="outer")
+        return 最新
     日們 = pd.DatetimeIndex(sorted(指["date"].unique()))
     期 = 日們.to_period("M")
     月底 = 日們[np.r_[期[1:] != 期[:-1], True]]
@@ -2309,6 +2331,9 @@ def 評分回測(持有天數=20, 最少量=500):
         月 = (日 - pd.Timedelta(days=10)).to_period("M") - 1
         if 月 in 有的月 and 月 - 12 in 有的月:
             當["營收年增率"] = 當["代號"].map((營收.xs(月, level="m") / 營收.xs(月 - 12, level="m") - 1) * 100)
+        財 = 當時財報(日)
+        if 財 is not None and len(財):
+            當 = 當.drop(columns=[c for c in 財.columns if c in 當.columns]).join(財, on="代號")
         分, _ = 每日評分(當, 加[加["date"] <= 日])
         分["報酬"] = 未來.loc[日].reindex(分.index)
         for n, t in 長.items():
@@ -2356,7 +2381,7 @@ def 更新評分回測(強制=False, 間隔天數=25):
     明細檔 = 資料夾 / "score_backtest_detail.csv.gz"
     if 檔.exists() and 明細檔.exists() and not 強制:
         舊 = json.loads(檔.read_text())
-        if 舊.get("權重") == 評分權重 and (pd.Timestamp.now() - pd.Timestamp(舊.get("計算日", "2000-01-01"))).days < 間隔天數:
+        if 舊.get("權重") == 評分權重 and 舊.get("版本") == 2 and (pd.Timestamp.now() - pd.Timestamp(舊.get("計算日", "2000-01-01"))).days < 間隔天數:
             print("評分回測：還不用重算")
             return
     表 = 評分回測()
@@ -2364,6 +2389,7 @@ def 更新評分回測(強制=False, 間隔天數=25):
         return
     摘要 = 評分回測摘要(表)
     摘要["計算日"] = f"{pd.Timestamp.now():%Y-%m-%d}"
+    摘要["版本"] = 2  # 2：基本面加入當時已公布的 EPS、毛利率
     # 每期每檔的四個面向分數與之後報酬，網站「自訂權重」用來即時重算驗證
     欄 = ["技術", "籌碼", "基本", "市場", "報酬", "報酬60", "報酬120"]
     明細 = 表[["date"] + 欄].rename_axis("代號").reset_index()
