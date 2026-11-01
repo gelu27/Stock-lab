@@ -1,0 +1,29 @@
+name: LINE 打字查詢
+
+on:
+  workflow_dispatch:
+    inputs:
+      q:
+        description: "股票代號或名稱（由 Cloudflare Worker 觸發，也可以手動測試）"
+        required: true
+        default: "2330"
+
+permissions:
+  contents: read
+
+jobs:
+  query:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pandas requests
+      - run: python notify.py query "$Q"
+        env:
+          Q: ${{ github.event.inputs.q }}
+          LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
