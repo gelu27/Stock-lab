@@ -933,8 +933,8 @@ def 個股查詢(問, 完整=True):
     r = 列.iloc[0]
     代, 名 = str(r["code"]), str(r["name"])
     import line_report
-    今, 全 = line_report.準備(代)
-    指標 = 全.tail(400) if 全 is not None else engine.計算指標(engine.讀取資料庫(最近天數=400, 代號=[代]))
+    今, 個股史 = line_report.準備(代)
+    指標 = 個股史.tail(400) if 個股史 is not None else engine.計算指標(engine.讀取資料庫(最近天數=400, 代號=[代]))
     行們 = [f"🔍 {代} {名}　{r['date']:%m/%d}", f"收盤 {r['close']:,.2f}（{符號(r['change'])}{abs(r['change']):,.2f}）"
           + (f"，本益比 {r['pe']:.1f}" if pd.notna(r.get("pe")) and r["pe"] > 0 else "")]
     try:
@@ -946,7 +946,7 @@ def 個股查詢(問, 完整=True):
         print("評分失敗：", repr(e))
     if 今 is not None:
         try:
-            行們 += line_report.重點行們(代, 今, 全)
+            行們 += line_report.重點行們(代, 今, 個股史)
         except Exception as e:
             print("重點失敗：", repr(e))
     K = engine.還原K線(指標)
@@ -990,7 +990,7 @@ def 個股查詢(問, 完整=True):
     if not 要完整:
         return
     try:
-        送出(line_report.完整報告(代, 今, 全, 設定))
+        送出(line_report.完整報告(代, 今, 個股史, 設定))
     except Exception as e:
         print("完整報告失敗：", repr(e))
         送出([{"type": "text", "text": f"⚠️ {代} {名} 的 AI／PDF 報告產生失敗：{str(e)[:150]}\n可到網站個股頁查看：{line_report.網站}/?s={代}"}])
