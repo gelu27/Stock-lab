@@ -110,7 +110,7 @@ with st.expander(f"🔍 更多篩選{f'（已套用 {已套用} 項）' if 已�
     a, b, c = st.columns(3)
     公告日們 = sorted(營收["公告日"].dropna().loc[lambda s: s != ""].unique(), reverse=True)
     公告 = a.selectbox("公告日", ["全部"] + list(公告日們), key="營收公告日")
-    產業們 = sorted(x for x in engine._股本表()["產業"].dropna().unique() if x)
+    產業們 = sorted(x for x in 讀檔("_股本表", _版本)["產業"].dropna().unique() if x)
     產業 = b.selectbox("產業", ["全部"] + 產業們, key="營收產業")
     規模 = c.selectbox("規模", ["全部", "大型股", "中型股", "小型股", "微型股"], key="營收規模",
                      help="依上市櫃公司市值排名：大型股＝前 50 名（約等於台灣 50）、中型股＝51～150 名（約等於中型 100）、"
@@ -119,7 +119,7 @@ with st.expander(f"🔍 更多篩選{f'（已套用 {已套用} 項）' if 已�
                      help="上個月（或去年同期）營收不到 1,000 萬時，成長率會出現幾萬 % 的極端值，勾選後這些百分比顯示「—」並排到最後。")
 
 表 = 營收.join(EPS表, how="left")
-股本 = engine._股本表()
+股本 = 讀檔("_股本表", _版本)
 表["產業"] = 股本["產業"].reindex(表.index).fillna("")
 收盤 = 今日.set_index("代號")["收盤"]
 淨值比 = 今日.set_index("代號")["淨值比"] if "淨值比" in 今日.columns else pd.Series(dtype=float)

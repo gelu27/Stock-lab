@@ -56,6 +56,11 @@ h1, h2, h3 {{ font-family: 'Space Grotesk', 'Noto Sans TC', sans-serif !importan
 .card .k {{ font-family: 'JetBrains Mono'; font-size: 11px; color: {灰}; letter-spacing: .2em; text-transform: uppercase; }}
 .card .v {{ font-family: 'JetBrains Mono'; font-size: 28px; font-weight: 700; margin-top: 4px; }}
 .card .d {{ font-family: 'JetBrains Mono'; font-size: 12px; margin-top: 2px; }}
+.card {{ transition: border-color .15s, background .15s; }}
+a.cardlink {{ display: block; height: 100%; text-decoration: none !important; color: inherit !important; }}
+a.cardlink .card {{ cursor: pointer; }}
+a.cardlink .card .k::after {{ content: " ›"; color: {青}; letter-spacing: 0; }}
+a.cardlink:hover .card, a.cardlink:active .card {{ border-color: {青}; background: #0B1214; }}
 .sec {{ font-family: 'JetBrains Mono'; color: {青}; font-size: 12px; letter-spacing: .3em; margin: 22px 0 6px;
     border-bottom: 1px solid #1E1E1E; padding-bottom: 6px; }}
 .stTabs [data-baseweb="tab-list"] {{ gap: 0; border-bottom: 1px solid #1E1E1E; }}
@@ -94,6 +99,17 @@ h1, h2, h3 {{ font-family: 'Space Grotesk', 'Noto Sans TC', sans-serif !importan
 .ticker span {{ font-family: 'JetBrains Mono', 'Noto Sans TC', monospace; font-size: 13px; margin-right: 30px; }}
 .ticker span b {{ color: #9A9A9A; font-weight: 400; margin-right: 6px; font-family: 'Noto Sans TC', sans-serif; }}
 @keyframes tk {{ from {{ transform: translateX(0); }} to {{ transform: translateX(-50%); }} }}
+/* 美化：段落標題加菱形記號、卡片上緣漸層、排行表滑過整列變亮、捲軸變細 */
+.sec::before {{ content: ""; display: inline-block; width: 7px; height: 7px; background: {青}; transform: rotate(45deg);
+    margin: 0 10px 1px 2px; box-shadow: 0 0 6px {青}; }}
+.card {{ background: linear-gradient(180deg, #0B0B0B 0%, #060606 100%); position: relative; }}
+.card::before {{ content: ""; position: absolute; left: 0; top: 0; right: 0; height: 1px;
+    background: linear-gradient(90deg, {青}55, transparent 70%); }}
+.rank tr:hover td {{ background: #0B1416; }}
+.rank tr:nth-child(even) td {{ background-color: #050505; }}
+::-webkit-scrollbar {{ width: 6px; height: 6px; }} ::-webkit-scrollbar-thumb {{ background: #2A2A2A; }}
+[data-testid="stExpander"] summary:hover {{ color: {青}; }}
+.stTabs [aria-selected="true"] {{ color: {青} !important; }}
 /* 全站一致：直角、提示框、表頭不換行 */
 .stMain {{ scroll-behavior: smooth; }}
 [data-testid="stExpander"] details, [data-testid="stPopoverBody"], [data-baseweb="select"] > div,
@@ -160,9 +176,11 @@ h1, h2, h3 {{ font-family: 'Space Grotesk', 'Noto Sans TC', sans-serif !importan
 """, unsafe_allow_html=True)
 
 
-def 卡片(標題, 數值, 小字="", 顏色="#EDEDED"):
-    return (f'<div class="card"><div class="k">{標題}</div>'
-            f'<div class="v" style="color:{顏色}">{數值}</div><div class="d" style="color:{顏色}">{小字}</div></div>')
+def 卡片(標題, 數值, 小字="", 顏色="#EDEDED", 連結=None):
+    """連結：點卡片要去的地方，例如 #h-加權指數（首頁區塊）、?s=2330（個股）、?p=07（換頁）。"""
+    內 = (f'<div class="card"><div class="k">{標題}</div>'
+          f'<div class="v" style="color:{顏色}">{數值}</div><div class="d" style="color:{顏色}">{小字}</div></div>')
+    return f'<a class="cardlink" href="{連結}" target="_self">{內}</a>' if 連結 else 內
 
 
 def 卡片格(卡們):
@@ -303,8 +321,24 @@ def 補充欄位(版本鍵):
     return 表 if 體質 is None else 表.join(體質, how="outer")
 
 
-今日 = engine.加基本面(指標[指標["date"] == 最新日], engine.讀取基本面())
-今日 = 今日.join(補充欄位(_版本), on="代號")
+@st.cache_data(max_entries=2, show_spinner=False)
+def 基本面資料(版本鍵):
+    return engine.讀取基本面()
+
+
+@st.cache_data(max_entries=2, show_spinner=False)
+def 今日資料(版本鍵):
+    """最新一天的行情＋基本面＋籌碼補充欄位。以前每點一下都重算（約 1.4 秒），現在每天只算一次。"""
+    return engine.加基本面(指標[指標["date"] == 最新日], 基本面資料(版本鍵)).join(補充欄位(版本鍵), on="代號")
+
+
+@st.cache_data(ttl=3600, max_entries=64, show_spinner=False)
+def 讀檔(函式名, 版本鍵, *參數):
+    """engine 的「讀取○○」函式加快取：每天的資料檔一天只讀一次，不用每點一下就重讀。"""
+    return getattr(engine, 函式名)(*參數)
+
+
+今日 = 今日資料(_版本)
 市場名稱 = dict(zip(今日["代號"], 今日["名稱"]))
 有籌碼 = "法人買超" in 指標.columns
 
@@ -440,6 +474,23 @@ def 前往(代號):
         st.session_state["要跳轉"] = True
 
 
+def 登入參數():
+    """站內連結要帶著的網址參數（登入通行證、首頁版面、最近看過），點了才不會被登出或重設。"""
+    k = st.query_params.get("k")
+    版 = st.query_params.get("layout")
+    近 = st.query_params.get("r")
+    return ((f"&k={k}" if k and st.session_state.get("已解鎖") else "") + (f"&layout={urllib.parse.quote(版)}" if 版 else "")
+            + (f"&r={urllib.parse.quote(近)}" if 近 else ""))
+
+
+def 股連結(代號):
+    return f"?s={代號}{登入參數()}"
+
+
+def 頁連結(頁碼):
+    return f"?p={頁碼}{登入參數()}"
+
+
 def _密碼():
     try:
         return str(st.secrets.get("password", ""))
@@ -491,6 +542,9 @@ if "已計來訪" not in st.session_state:  # 每個瀏覽階段記一次來客�
 if "s" in st.query_params:  # 排行榜的連結：?s=2330
     前往(st.query_params["s"])
     del st.query_params["s"]
+if "p" in st.query_params:  # 卡片換頁的連結：?p=07
+    st.session_state["頁面"] = next((x for x in 頁面們 if x.startswith(str(st.query_params["p"]))), 頁面們[0])
+    del st.query_params["p"]
 st.session_state.pop("要跳轉", None)
 if st.session_state.get("頁面") not in 頁面們:
     st.session_state["頁面"] = 頁面們[0]
@@ -608,7 +662,7 @@ def AI紀錄快取(代號, _權杖):
 @st.cache_resource(max_entries=1, show_spinner="計算每日評分中…")
 def 評分資料(版本鍵):
     return engine.今昨評分(指標[指標["date"] >= 指標["date"].max() - pd.Timedelta(days=20)],
-                         engine.讀取基本面(), 加權)
+                         基本面資料(版本鍵), 加權)
 
 
 def ETF版本():
@@ -637,7 +691,7 @@ def 評分卡片(代號):
         return
     r = 分.loc[代號]
     變 = r["較昨日"]
-    卡們 = [卡片("總分", f"{r['總分']:.0f}", f"{r['看法']}" + ("" if pd.isna(變) else f" · 較昨日 {變:+.0f}"), 分數色(r["總分"]))]
+    卡們 = [卡片("總分", f"{r['總分']:.1f}", f"{r['看法']}" + ("" if pd.isna(變) else f" · 較昨日 {變:+.1f}"), 分數色(r["總分"]))]
     for 面 in engine.評分權重:
         卡們.append(卡片(f"{面}面 · 佔 {engine.評分權重[面]:.0%}", "—" if pd.isna(r[面]) else f"{r[面]:.0f}",
                        "", 分數色(r[面])))
@@ -677,7 +731,8 @@ def 存交易日記(日記):
 
 
 def 目前持股():
-    """回傳 (持股表[代號, 股數, 總成本], 來源)。交易日記勾了「當作庫存」就用日記推算的庫存，否則用 Secrets 的 holdings。"""
+    """回傳 (持股表[代號, 股數, 總成本], 來源)。順序：交易日記勾了「當作庫存」→ 在網站上新增／移除過的庫存清單
+    → Secrets 的 holdings → 交易日記推算。"""
     設定 = _設定()
     if not 可編輯():
         return None, ""
@@ -685,6 +740,9 @@ def 目前持股():
     日記庫存 = engine.交易日記統計(日記["交易"])[1] if 日記["交易"] else None
     if 日記.get("當作庫存") and 日記庫存 is not None and len(日記庫存):
         return 日記庫存, "交易日記"
+    if 日記.get("庫存清單") is not None:
+        清單 = pd.DataFrame(日記["庫存清單"], columns=["代號", "股數", "總成本"])
+        return 清單.astype({"代號": str}), "網站"
     if "holdings" in 設定:
         try:
             return pd.read_csv(io.StringIO(str(設定["holdings"]).strip()), dtype={"代號": str}), "Secrets"
@@ -703,16 +761,30 @@ def 庫存代號():
     return list(dict.fromkeys(持股["代號"].astype(str).str.strip()))
 
 
-def 前後期表(歷史, 欄位, 比較們, 期名, 反向=()):
+def 前後期表(歷史, 欄位, 比較們, 期名, 反向=(), 即時=None):
     """本期跟前幾期的數字並排，附上增減。歷史：以日期/月份為索引；欄位：{欄: (中文名, 格式)}；
-    比較們：[(名稱, 往前幾期)]；反向：數字變大代表籌碼變分散的欄位（散戶、股東人數），顏色反過來。"""
+    比較們：[(名稱, 往前幾期)]；反向：數字變大代表籌碼變分散的欄位（散戶、股東人數），顏色反過來。
+    即時：(欄名, {欄: 盤中數字})，盤中多一欄即時數字和較本期的漲跌（沒有即時數字的項目顯示 —）。"""
     本 = 歷史.iloc[-1]
     列們 = []
     for 欄, (名, 式) in 欄位.items():
-        列 = {"項目": 名, f"本期 {期名(歷史.index[-1])}": 式.format(本[欄])}
+        列 = {"項目": 名}
+        if 即時:
+            值 = 即時[1].get(欄)
+            差 = None if 值 is None or pd.isna(本[欄]) else 值 - 本[欄]
+            列[即時[0]] = "—" if 值 is None else 式.format(值)
+            列["較本期"] = "—" if 差 is None else f"{'🔴' if 差 > 0 else ('🟢' if 差 < 0 else '⚪')} {('+' if 差 > 0 else '')}{式.format(差)}"
+        if pd.isna(本[欄]):  # 這一項今天還沒公布（例如融資在晚上 9 點後才有），先不比較
+            列[f"本期 {期名(歷史.index[-1])}"] = "尚未公布"
+            列們.append(列)
+            continue
+        列[f"本期 {期名(歷史.index[-1])}"] = 式.format(本[欄])
         for 比名, n in 比較們:
             if len(歷史) > n:
                 舊 = 歷史.iloc[-1 - n]
+                if pd.isna(舊[欄]):
+                    列[f"{比名} {期名(歷史.index[-1 - n])}"], 列[f"較{比名}"] = "—", "—"
+                    continue
                 差 = 本[欄] - 舊[欄]
                 色 = "🔴" if (差 > 0) != (欄 in 反向) and 差 != 0 else ("🟢" if 差 != 0 else "⚪")
                 列[f"{比名} {期名(歷史.index[-1 - n])}"] = 式.format(舊[欄])
@@ -979,7 +1051,7 @@ def 缺口表(K, key):
 
 
 @st.cache_data(ttl=600, show_spinner=False)
-def 券商報告清單(_快取鍵):
+def 券商報告清單(快取鍵):
     return engine.讀取券商報告(_設定())
 
 
@@ -1029,6 +1101,69 @@ def 筆記輸入(key, 代號=None):
             代 = 代號 or (股.split(" ")[0] if 股 else "")
             存研究筆記(研究筆記() + [{"日期": f"{dt.date.today():%Y-%m-%d}", "代號": 代, "看法": 看 or "中立", "內容": 內容.strip()}])
             st.rerun()
+
+
+@st.cache_data(ttl=7 * 86400, show_spinner="查詢公司基本資料…", max_entries=200)
+def 線上公司簡介(代號):
+    return engine.抓公司簡介(代號)
+
+
+@st.cache_data(ttl=600, show_spinner=False, max_entries=100)
+def 公司介紹紀錄(代號, 快取鍵):
+    try:
+        return engine.讀取公司介紹(代號, _設定())
+    except Exception:
+        return {}
+
+
+def 公司資料(代號):
+    """個股頁、AI 指令、PDF 共用的公司資料：主要業務、營收比重、董事長、規模排名、概念股、產業鏈、AI 公司介紹。
+    資料庫還沒有這檔（每天補 250 檔）時，直接上網查一次（快取 7 天）。"""
+    檔 = 讀檔("讀取公司簡介", _版本)
+    簡 = 檔.loc[代號].to_dict() if 代號 in 檔.index else {}
+    if not (簡.get("業務") or 簡.get("營收比重")) and not str(代號).startswith("0"):
+        try:
+            簡 = 線上公司簡介(代號)
+        except Exception:
+            簡 = {}
+    規 = engine.公司規模(今日, 代號)
+    比重, 年 = engine.營收比重解析(簡.get("營收比重", ""))
+    規模字 = ""
+    if 規:
+        規模字 = f"市值約 {規['市值億']:,.0f} 億元，全市場第 {規['市值排名']:,} 名（共 {規['全部']:,} 檔）"
+        if 規.get("同業市值排名"):
+            規模字 += (f"；在「{規['產業']}」{規['同業家數']} 家公司中市值排第 {規['同業市值排名']}"
+                     + ("（產業市值龍頭）" if 規["同業市值排名"] == 1 else "")
+                     + "，同業市值前三：" + "、".join(f"{c} {n}（{v:,.0f} 億）" for c, n, v in 規["同業市值前三"]))
+        if 規.get("近12月營收億"):
+            規模字 += f"；近 12 個月營收約 {規['近12月營收億']:,.0f} 億元" + (
+                f"，同業第 {規['同業營收排名']} 名" if 規.get("同業營收排名") else "")
+        規模字 += "。"
+    概 = engine.個股概念(代號)
+    鏈 = engine.產業鏈位置(代號, 市場名稱)
+    AI = 公司介紹紀錄(代號, st.session_state.get("_公司介紹版本", 0))
+    return {"簡介": 簡, "規模資料": 規, "規模": 規模字, "比重表": 比重, "比重年度": 年,
+            "業務": 簡.get("業務", ""), "營收比重": "、".join(f"{r['項目']} {r['比重']:.1f}%" for _, r in 比重.iterrows()),
+            "概念": "；".join(x for x in (("概念股：" + "、".join(概)) if 概 else "", 鏈.replace("\n", "；") if 鏈 else "") if x),
+            "AI介紹": AI.get("內容", ""), "AI時間": AI.get("時間", "")}
+
+
+def 公司文字(資料):
+    """給 AI 的公司資料（條列文字）。"""
+    簡 = 資料["簡介"]
+    行 = []
+    if 資料["業務"]:
+        行.append(f"- 主要經營業務（公開資訊觀測站）：{資料['業務']}")
+    if 資料["營收比重"]:
+        行.append(f"- 營收比重（{資料['比重年度'] or '最近'} 年，MoneyDJ）：{資料['營收比重']}")
+    if 資料["規模"]:
+        行.append(f"- 規模：{資料['規模']}")
+    if 資料["概念"]:
+        行.append(f"- {資料['概念']}")
+    基 = "、".join(f"{k} {簡[k]}" for k in ("董事長", "總經理", "成立日期", "上市日期", "員工人數", "同業本益比") if 簡.get(k))
+    if 基:
+        行.append(f"- 基本資料：{基}")
+    return "\n".join(行)
 
 
 def 網紅說法清單(_快取鍵):

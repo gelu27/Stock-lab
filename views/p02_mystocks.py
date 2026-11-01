@@ -30,11 +30,13 @@ def 我的庫存():
     持股, 來源 = 目前持股()
     if 持股 is None:
         段落("PORTFOLIO // 我的庫存")
-        st.info("尚未設定庫存。到 Streamlit 的 App settings →「Secrets」貼上庫存清單，或在下方「交易日記」記下買賣，就會顯示。")
+        st.info("尚未設定庫存。用下面的「✏️ 新增／移除庫存」直接輸入，或在「交易日記」記下買賣，就會顯示。")
+        庫存管理(None, "")
     else:
         if 來源 == "交易日記":
             st.caption("📒 這裡的庫存是由下方「交易日記」的買賣紀錄推算出來的。")
         庫存區(持股)
+        庫存管理(持股, 來源)
         try:
             庫存歷史區(持股)
         except Exception as e:
@@ -55,6 +57,73 @@ def 我的庫存():
             st.session_state["已解鎖"] = False
             st.query_params.pop("k", None)
             st.rerun()
+
+
+def 庫存管理(持股, 來源):
+    """在網站上直接新增、加碼、減碼、移除庫存（存在交易日記同一個加密檔裡，不用再改 Secrets）。"""
+    日記 = 交易日記()
+    說 = {"網站": "網站上的庫存清單", "Secrets": "Streamlit Secrets 的 holdings", "交易日記": "交易日記的買賣紀錄"}.get(來源, "還沒有")
+    with st.expander("✏️ 新增／移除庫存"):
+        st.markdown(f"目前庫存來源：**{說}**。在這裡改過之後，就會改用「網站上的庫存清單」"
+                    + ("（第一次修改會先把現在的庫存複製過來）。" if 來源 != "網站" else "。"))
+        if 來源 == "交易日記" and 日記.get("當作庫存"):
+            st.caption("你目前勾選「用交易日記當我的庫存」，請在交易日記記一筆買進／賣出，或到「⚙️ 匯入匯出」取消勾選再用這裡。")
+            return
+        現有 = (持股[["代號", "股數", "總成本"]].assign(代號=持股["代號"].astype(str).str.strip())
+              .groupby("代號", as_index=False)[["股數", "總成本"]].sum() if 持股 is not None else
+              pd.DataFrame(columns=["代號", "股數", "總成本"]))
+
+        def 存(新表, 訊息):
+            新表 = 新表[新表["股數"] > 0]
+            存交易日記({**日記, "當作庫存": False,
+                       "庫存清單": [{"代號": str(r["代號"]), "股數": float(r["股數"]), "總成本": float(r["總成本"])}
+                                for _, r in 新表.iterrows()]})
+            st.toast(訊息)
+            st.rerun()
+
+        加, 減 = st.tabs(["➕ 新增／加碼", "➖ 減碼／移除"])
+        with 加:
+            with st.form("新增庫存", clear_on_submit=True):
+                股 = st.selectbox("股票", 股票選項, index=None, placeholder="輸入代號或名稱")
+                a, b = st.columns(2)
+                股數 = a.number_input("股數", min_value=1, value=1000, step=1000, help="一張 = 1000 股；零股直接填股數")
+                成本 = b.number_input("買進總成本（元，含手續費）", min_value=0.0, value=0.0, step=1000.0,
+                                    help="不知道總成本可以填「均價 × 股數」")
+                if st.form_submit_button("加入庫存", type="primary"):
+                    if not 股 or 成本 <= 0:
+                        st.error("請選股票、填總成本。")
+                    else:
+                        代 = 股.split(" ")[0]
+                        新 = 現有.copy()
+                        if 代 in set(新["代號"]):
+                            列 = 新["代號"] == 代
+                            新.loc[列, "股數"] = 新.loc[列, "股數"].astype(float) + 股數
+                            新.loc[列, "總成本"] = 新.loc[列, "總成本"].astype(float) + 成本
+                        else:
+                            新 = pd.concat([新, pd.DataFrame([{"代號": 代, "股數": 股數, "總成本": 成本}])], ignore_index=True)
+                        存(新, f"已加入 {股} {股數:,.0f} 股")
+            st.caption("已經有的股票會自動加碼（股數、成本相加）。")
+        with 減:
+            if 現有.empty:
+                st.caption("目前沒有庫存。")
+            else:
+                標 = {c: f"{c} {市場名稱.get(c, '')}（{n:,.0f} 股）" for c, n in zip(現有["代號"], 現有["股數"])}
+                代 = st.selectbox("股票", list(標), format_func=標.get, key="減碼股")
+                全 = float(現有.set_index("代號").at[代, "股數"])
+                減數 = st.number_input("賣出股數（全部賣掉就是移除）", min_value=1.0, max_value=全, value=全, step=1000.0,
+                                     key=f"減碼數{代}")
+                if st.button("✔ 確認減碼" if 減數 < 全 else "🗑 從庫存移除", key="減碼鈕"):
+                    新 = 現有.copy()
+                    列 = 新["代號"] == 代
+                    新.loc[列, "總成本"] *= (全 - 減數) / 全   # 成本依剩下的股數等比例減少
+                    新.loc[列, "股數"] = 全 - 減數
+                    存(新, f"{標[代]} 已{'減碼' if 減數 < 全 else '移除'}")
+                st.caption("減碼後成本依剩下股數等比例計算（均價不變）。想記錄賣出損益，請同時在下方「交易日記」記一筆賣出。")
+        if 來源 == "網站" and st.button("↩️ 改回使用 Secrets 的庫存", key="改回Secrets"):
+            存交易日記({k: v for k, v in 日記.items() if k != "庫存清單"})
+            st.rerun()
+        st.caption("庫存清單和交易日記存在同一個檔案（有設密碼時會加密）。每天的 LINE 收盤摘要還是用 GitHub 的 HOLDINGS 設定，"
+                   "要一起改請到 GitHub → Settings → Secrets 更新 HOLDINGS。")
 
 
 def 股利預估區(持股):
@@ -264,7 +333,7 @@ def 庫存歷史區(持股):
         return
     價 = 價[有].bfill()
     市值 = (價 * 股數[有]).sum(axis=1)
-    除 = engine.讀取全部除權息()
+    除 = 讀檔("讀取全部除權息", _版本)
     除 = 除[除["code"].isin(有) & (除["date"] > 價.index.min()) & (除["date"] <= 價.index.max())]
     除 = 除.assign(金額=除["value"] * 除["code"].map(股數))
     累積股利 = 除.groupby("date")["金額"].sum().reindex(市值.index, fill_value=0).cumsum()
@@ -286,7 +355,7 @@ def 庫存歷史區(持股):
     圖.update_layout(hovermode="x unified", legend=dict(orientation="h", y=1.12))
     圖.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
     st.plotly_chart(圖表外觀(圖, 300), width="stretch")
-    預 = engine.讀取全部除權息(預告=True)
+    預 = 讀檔("讀取全部除權息", _版本, True)
     預 = 預[預["code"].isin(股數.index) & (預["date"] >= pd.Timestamp.now().normalize())]
     if len(預):
         st.markdown("**📅 即將除權息**　" + "；".join(
@@ -307,7 +376,7 @@ def 庫存區(持股):
             即時 = engine.即時報價(持股["代號"].astype(str).str.strip().tolist(), 市場對照)
         except Exception:
             st.caption("即時報價暫時抓不到，先顯示最近收盤價。")
-    明細, 合計 = engine.計算庫存(持股, 今日, engine.讀取上櫃最新(), engine.讀取興櫃最新(), 即時)
+    明細, 合計 = engine.計算庫存(持股, 今日, 讀檔("讀取上櫃最新", _版本), 讀檔("讀取興櫃最新", _版本), 即時)
     日期 = 合計["日期"].strftime("%Y/%m/%d") if pd.notna(合計["日期"]) else "—"
     if 即時 is not None and not 即時.empty:
         日期 += f" {即時['time'].dropna().max()} 即時"

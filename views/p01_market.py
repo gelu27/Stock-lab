@@ -65,14 +65,6 @@ def 鎖死資訊(表):
     return _鎖死查詢(清單, 最新日.strftime("%Y-%m-%d")) if 清單 else {}
 
 
-def 登入參數():
-    k = st.query_params.get("k")
-    版 = st.query_params.get("layout")
-    近 = st.query_params.get("r")
-    return ((f"&k={k}" if k and st.session_state.get("已解鎖") else "") + (f"&layout={urllib.parse.quote(版)}" if 版 else "")
-            + (f"&r={urllib.parse.quote(近)}" if 近 else ""))
-
-
 @st.cache_data(ttl=20, show_spinner=False)
 def 大盤即時():
     """加權（t00）、櫃買（o00）盤中即時點數，所有人共用 20 秒快取。抓不到回傳 None。"""
@@ -101,10 +93,12 @@ def 盤中即時條():
         格式 = ",.0f" if r["close"] >= 1000 else ",.2f"
         高低 = f" 高 {r['high']:{格式}} 低 {r['low']:{格式}}" if pd.notna(r.get("high")) and pd.notna(r.get("low")) else ""
         卡們.append(卡片(f"⚡ {名稱} · {r['time']}", f"{r['close']:,.2f}",
-                       f"{r['change']:+,.2f}（{漲幅:+.2f}%）{高低}", 漲跌色(r["change"])))
+                       f"{r['change']:+,.2f}（{漲幅:+.2f}%）{高低}", 漲跌色(r["change"]),
+                       錨("加權指數") if 代號 == "t00" else 錨("價位")))
     if 卡們:
         st.markdown(f'<div class="grid2">{"".join(卡們)}</div>', unsafe_allow_html=True)
-        st.caption("盤中即時（證交所，延遲約 5～20 秒，每 30 秒自動更新）；下方市場卡片是最近一次收盤的資料。")
+        st.caption("盤中即時（證交所，延遲約 5～20 秒，每 30 秒自動更新）；點加權卡片可看當日即時走勢。"
+                   "成交金額、漲跌家數、排行與法人是收盤後的資料。")
 
 
 @st.fragment(run_every=30 if engine.盤中時間() else None)
@@ -112,7 +106,7 @@ def 加權圖():
     段落("TAIEX // 加權指數走勢")
     區間 = st.segmented_control("區間", ["當日", "5日", "1月", "1季", "半年", "1年", "3年", "5年"],
                               default="當日", key="加權區間", label_visibility="collapsed") or "當日"
-    分時 = engine.讀取分時()
+    分時 = 讀檔("讀取分時", _版本)
     即時點 = None
     if engine.盤中時間():
         即時點 = 大盤即時()
@@ -312,11 +306,11 @@ def 市場每日(版本鍵):
         金額 = lambda 欄: (近[欄] * 1000 * 近["收盤"]).groupby(近["date"]).sum() / 1e8
         表["外資"] = 金額("外資買超")
         表["法人"] = 金額("法人買超")
-        表["融資"] = 近.groupby("date")["融資餘額"].sum()
+        表["融資"] = 近.groupby("date")["融資餘額"].sum(min_count=1)
         維持 = engine.融資維持率(近)
         if 維持 is not None:
             表["維持率"] = 維持.reindex(表.index)
-    期 = engine.讀取期貨未平倉()
+    期 = 讀檔("讀取期貨未平倉", _版本)
     if 期 is not None and "foreign_oi" in 期:
         表["外資期貨"] = 期["foreign_oi"].reindex(表.index)
         for 英, 中 in (("trust_oi", "投信期貨"), ("dealer_oi", "自營期貨")):
@@ -324,35 +318,43 @@ def 市場每日(版本鍵):
                 表[中] = 期[英].reindex(表.index)
     if 加權 is not None and not 加權.empty:
         表["加權"] = 加權.set_index("date")["close"].reindex(表.index)
-    匯率 = engine.讀取匯率()
+    匯率 = 讀檔("讀取匯率", _版本)
     if 匯率 is not None and len(匯率):
         表["匯率"] = 匯率.set_index("date")["usdtwd"].reindex(表.index).ffill()
     return 表
 
 
+@st.fragment(run_every=60 if engine.盤中時間() else None)
 def 市場卡片():
     段落("MARKET // 市場")
     上漲 = (今日["漲跌"] > 0).sum()
     下跌 = (今日["漲跌"] < 0).sum()
     卡們 = []
-    if 加權 is not None and not 加權.empty:
+    即 = 大盤即時() if engine.盤中時間() else None
+    即時加權 = 即.loc["t00"] if 即 is not None and "t00" in 即.index else None
+    if 即時加權 is not None:
+        r = 即時加權
+        卡們.append(卡片(f"⚡ TAIEX 加權 · 盤中 {r['time']}", f"{r['close']:,.0f}",
+                       f"{r['change']:+,.2f}（{r['change'] / (r['close'] - r['change']) * 100:+.2f}%）",
+                       漲跌色(r["change"]), 錨("加權指數")))
+    elif 加權 is not None and not 加權.empty:
         最後 = 加權.iloc[-1]
         漲幅 = 最後["change"] / (最後["close"] - 最後["change"]) * 100
         卡們.append(卡片(f"TAIEX 加權指數 · {最後['date']:%m/%d}", f"{最後['close']:,.0f}",
-                       f"{最後['change']:+,.2f}  ({漲幅:+.2f}%)", 漲跌色(最後["change"])))
+                       f"{最後['change']:+,.2f}  ({漲幅:+.2f}%)", 漲跌色(最後["change"]), 錨("加權指數")))
     卡們 += [
-        卡片("資料日期", 最新日.strftime("%m/%d"), 最新日.strftime("%Y")),
-        卡片("成交金額", f"{今日['成交值億'].sum():,.0f}", "億元"),
-        卡片("上漲家數", f"{上漲}", "▲", 紅),
-        卡片("下跌家數", f"{下跌}", "▼", 綠),
+        卡片("資料日期", 最新日.strftime("%m/%d"), 最新日.strftime("%Y") + ("・收盤資料" if 即時加權 is not None else "")),
+        卡片("成交金額", f"{今日['成交值億'].sum():,.0f}", "億元", 連結=錨("資金")),
+        卡片("上漲家數", f"{上漲}", "▲", 紅, 錨("排行")),
+        卡片("下跌家數", f"{下跌}", "▼", 綠, 錨("排行")),
     ]
-    匯率 = engine.讀取匯率()
+    匯率 = 讀檔("讀取匯率", _版本)
     if 匯率 is not None and len(匯率) >= 2:
         今, 昨 = 匯率["usdtwd"].iloc[-1], 匯率["usdtwd"].iloc[-2]
         差 = 今 - 昨
         # 美元兌台幣數字變小 = 台幣升值（紅），變大 = 台幣貶值（綠）
         狀態, 色 = ("台幣升值 ▲", 紅) if 差 < 0 else (("台幣貶值 ▼", 綠) if 差 > 0 else ("持平", "#EDEDED"))
-        卡們.append(卡片(f"美元/台幣 · {匯率['date'].iloc[-1]:%m/%d}", f"{今:.3f}", f"{差:+.3f} {狀態}", 色))
+        卡們.append(卡片(f"美元/台幣 · {匯率['date'].iloc[-1]:%m/%d}", f"{今:.3f}", f"{差:+.3f} {狀態}", 色, 錨("國際")))
     else:
         卡們.append(卡片("美元/台幣", "—", "下次更新後提供"))
     卡片格(卡們)
@@ -363,12 +365,16 @@ def 市場卡片():
               "外資": ("外資買賣超（億）", "{:,.1f}"), "法人": ("三大法人買賣超（億）", "{:,.1f}"),
               "融資": ("融資餘額（張）", "{:,.0f}"), "維持率": ("上市融資維持率（%）", "{:.1f}"),
               "外資期貨": ("外資台指期淨未平倉（口）", "{:+,.0f}"), "匯率": ("美元/台幣", "{:.3f}")}
-        欄位 = {k: v for k, v in 欄位.items() if k in 每日.columns and 每日[k].notna().iloc[-1]}
+        欄位 = {k: v for k, v in 欄位.items() if k in 每日.columns and 每日[k].tail(5).notna().any()}
         with st.expander("📊 前後期比較（昨日、5 日前、20 日前、60 日前）", expanded=True):
+            即時欄 = None
+            if 即時加權 is not None and "加權" in 欄位:
+                即時欄 = (f"⚡盤中 {即時加權['time'][:5]}", {"加權": float(即時加權["close"])})
             前後期表(每日, 欄位, [("昨日", 1), ("5 日前", 5), ("20 日前", 20), ("60 日前", 60)],
-                     lambda d: f"{d:%m/%d}", 反向={"下跌", "融資", "匯率"})
+                     lambda d: f"{d:%m/%d}", 反向={"下跌", "融資", "匯率"}, 即時=即時欄)
             st.caption("🔴 偏多：指數、成交、上漲家數、法人買超變多，融資減少、台幣升值；🟢 反之。"
-                       "外資／法人金額用買賣超張數 × 收盤價估算。")
+                       "外資／法人金額用買賣超張數 × 收盤價估算。本期＝最近一次收盤（每天約 18:00 更新）"
+                       + ("；盤中另外列出加權指數的即時點數與較本期漲跌。" if 即時欄 else "。"))
 
 
 def 維持率等級(值):
@@ -398,7 +404,7 @@ def 資金面區():
         差 = 期.iloc[-1] - 期.iloc[-2] if len(期) >= 2 else np.nan
         卡們.append(卡片(f"外資台指期淨未平倉 · {期.index[-1]:%m/%d}", f"{期.iloc[-1]:+,.0f} 口",
                        "" if pd.isna(差) else f"較前一日 {差:+,.0f} 口", 漲跌色(期.iloc[-1])))
-    當沖 = engine.讀取當沖大盤()
+    當沖 = 讀檔("讀取當沖大盤", _版本)
     if 當沖 is not None and "上市" in 當沖 and 當沖["上市"].notna().any():
         沖 = 當沖["上市"].dropna()
         卡們.append(卡片(f"上市當沖比重 · {沖.index[-1]:%m/%d}", f"{沖.iloc[-1]:.1f}%",
@@ -540,7 +546,7 @@ def 關鍵價位區():
     st.markdown(f'<div class="verdict">{解["文字"]}</div>', unsafe_allow_html=True)
     量價條(量價)
     try:
-        項們, 總結 = engine.三條件燈號(指數K線("TAIEX", _版本), 指數K線("TPEX", _版本), engine.讀取美股())
+        項們, 總結 = engine.三條件燈號(指數K線("TAIEX", _版本), 指數K線("TPEX", _版本), 讀檔("讀取美股", _版本))
     except Exception:
         項們, 總結 = [], ""
     if 項們:
@@ -554,7 +560,8 @@ def 關鍵價位區():
         st.markdown(燈號卡(技術), unsafe_allow_html=True)
     if 代號 == "TAIEX":
         殺估值區()
-    天數 = st.segmented_control("圖表區間", [60, 120, 250], default=120, format_func=lambda d: {60: "3 個月", 120: "半年", 250: "1 年"}[d],
+    天數 = st.segmented_control("圖表區間", [20, 60, 120, 250], default=120,
+                              format_func=lambda d: {20: "1 個月", 60: "3 個月", 120: "半年", 250: "1 年"}[d],
                               key="價位區間", label_visibility="collapsed") or 120
     圖分頁 = st.tabs(["支撐壓力圖", "櫃買 ÷ 加權 強弱", "缺口清單", "準不準？（回測）", "守 5 週線的強勢股"])
     with 圖分頁[0]:
@@ -582,7 +589,7 @@ def 關鍵價位區():
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def 殺估值資料(版本鍵):
-    return engine.殺估值觀察組(指標, engine.讀取美股())
+    return engine.殺估值觀察組(指標, 讀檔("讀取美股", _版本))
 
 
 def 殺估值區():
@@ -681,11 +688,48 @@ def 法人排行(排行):
                "新聞常用張數排，所以兩種排法的前幾名常常不一樣。")
 
 
+@st.cache_data(ttl=30, show_spinner=False)
+def 盤中權值報價(代號們):
+    try:
+        t = engine.即時報價(list(代號們), {})
+        return t.dropna(subset=["close"]).set_index("code") if not t.empty else None
+    except Exception:
+        return None
+
+
+def 盤中權值來源():
+    """盤中：市值前 80 大上市股用即時報價、其他當作平盤，加權指數接上即時點數。抓不到回傳 None。"""
+    上市 = 今日[(今日["市場"] == "上市") & ~今日["代號"].str.startswith("0") & 今日["發行股數"].notna()]
+    大 = 上市.assign(市值=上市["收盤"] * 上市["發行股數"]).nlargest(80, "市值")["代號"]
+    即 = 盤中權值報價(tuple(大))
+    指 = 大盤即時()
+    if 即 is None or 指 is None or "t00" not in 指.index or 加權 is None:
+        return None
+    來源 = 今日.copy()
+    來源["漲跌幅"] = 0.0
+    有 = 來源["代號"].isin(即.index)
+    現 = 來源.loc[有, "代號"].map(即["close"])
+    漲 = 來源.loc[有, "代號"].map(即["change"])
+    來源.loc[有, "收盤"] = 現
+    來源.loc[有, "漲跌幅"] = (漲 / (現 - 漲) * 100).astype(float)
+    r = 指.loc["t00"]
+    今天 = pd.Timestamp.now(tz="Asia/Taipei").normalize().tz_localize(None)
+    加 = pd.concat([加權[加權["date"] < 今天], pd.DataFrame({"date": [今天], "close": [r["close"]], "change": [r["change"]]})],
+                  ignore_index=True)
+    return 來源, 加, r["time"]
+
+
+@st.fragment(run_every=60 if engine.盤中時間() else None)
 def 權值區():
     段落("WEIGHT // 權值股：今天誰撐盤、誰拖盤")
     期間 = st.segmented_control("貢獻期間", list(engine.族群期間), default="今日", key="權值期間",
                               label_visibility="collapsed") or "今日"
-    表, 摘要 = engine.權值貢獻(今日, 加權, 期間)
+    盤中 = 盤中權值來源() if engine.盤中時間() and 期間 == "今日" else None
+    if 盤中:
+        st.caption(f"⚡ 盤中即時 {盤中[2]}（市值前 80 大上市股，約佔加權 8 成，每分鐘更新；其他股票先當平盤）")
+        表, 摘要 = engine.權值貢獻(盤中[0], 盤中[1], 期間)
+    else:
+        表, 摘要 = engine.權值貢獻(今日, 加權, 期間)
     if 表["貢獻點數"].isna().all():
         st.caption("加權指數資料不足，暫時無法計算。")
         return
@@ -695,10 +739,11 @@ def 權值區():
            卡片("前 10 大權值股貢獻", f"{前十['貢獻點數'].sum():+,.0f} 點", f"合計權重 {前十['權重'].sum():.1f}%",
                 漲跌色(前十["貢獻點數"].sum())),
            卡片("台積電貢獻", f"{表.loc[表['代號'] == '2330', '貢獻點數'].sum():+,.0f} 點",
-                f"權重 {表.loc[表['代號'] == '2330', '權重'].sum():.1f}%", 漲跌色(表.loc[表['代號'] == '2330', '貢獻點數'].sum()))])
-    撐 = 表[表["貢獻點數"] > 0].nlargest(10, "貢獻點數")
-    拖 = 表[表["貢獻點數"] < 0].nsmallest(10, "貢獻點數")
-    # 像一棵樹：中間一條線，撐盤紅條往左長、拖盤綠條往右長，「代號 名稱」在最外側；各 10 檔，由上往下影響越來越小
+                f"權重 {表.loc[表['代號'] == '2330', '權重'].sum():.1f}%", 漲跌色(表.loc[表['代號'] == '2330', '貢獻點數'].sum()),
+                股連結("2330"))])
+    撐 = 表[表["貢獻點數"] > 0].nlargest(20, "貢獻點數")
+    拖 = 表[表["貢獻點數"] < 0].nsmallest(20, "貢獻點數")
+    # 像一棵樹：中間一條線，撐盤紅條往左長、拖盤綠條往右長，「代號 名稱」在最外側；各 20 檔，由上往下影響越來越小
     # 兩邊用同一個刻度才比得出大小
     圖 = make_subplots(rows=1, cols=2, horizontal_spacing=0,
                       subplot_titles=(f"撐盤 前 {len(撐)} 檔", f"拖盤 前 {len(拖)} 檔"))
@@ -718,7 +763,7 @@ def 權值區():
     圖.update_yaxes(side="right", row=1, col=2)
     圖.add_vline(x=0, line=dict(color="#555", width=1), row=1, col=1)
     圖.update_annotations(font=dict(size=12, color="#BDBDBD"))
-    圖表外觀(圖, 30 * max(len(撐), len(拖), 1) + 60).update_layout(hovermode="closest", showlegend=False,
+    圖表外觀(圖, 26 * max(len(撐), len(拖), 1) + 60).update_layout(hovermode="closest", showlegend=False,
                                                             margin=dict(l=4, r=4, t=28, b=6))
     st.plotly_chart(圖, width="stretch", config={"displayModeBar": False})
     族 = 表[表["產業"].fillna("") != ""].groupby("產業")["貢獻點數"].sum().sort_values()
@@ -761,7 +806,7 @@ def 焦點區():
             if 表.empty:
                 st.caption("今天沒有符合的股票。")
             else:
-                點選表(表, 上色(表).format({"收盤": "{:,.2f}", "漲跌幅": "{:+.2f}", "總分": "{:.0f}"}, na_rep="—"), 鍵,
+                點選表(表, 上色(表).format({"收盤": "{:,.2f}", "漲跌幅": "{:+.2f}", "總分": "{:.1f}"}, na_rep="—"), 鍵,
                        height=min(35 * (len(表) + 1) + 3, 460), column_config={"代號": None,
                                                                         "理由": st.column_config.TextColumn(width="large")})
     st.caption("RESEARCH ONLY 僅供研究：依規則挑出來的名單，不是買賣建議。"
@@ -795,7 +840,7 @@ def 狀態區():
     判 = engine.市場狀態(加權, 今日, 市場每日(_版本), 情緒, 經濟日程資料(_版本, 7))
     色 = 紅 if "多" in 判["狀態"] else (綠 if "空" in 判["狀態"] else "#EDEDED")
     卡片格([卡片("目前判讀", 判["狀態"], f"支持 {len(判['支持'])} 項・反向 {len(判['反向'])} 項", 色),
-           卡片("大盤評分", f"{判['大盤']['分數']}", 判["大盤"]["看法"], 分數色(判["大盤"]["分數"])),
+           卡片("大盤評分", f"{判['大盤']['分數']}", 判["大盤"]["看法"], 分數色(判["大盤"]["分數"]), 頁連結("07")),
            卡片("資料日期", f"{最新日:%m/%d}", "收盤後規則判讀")])
     a, b, c = st.columns(3)
     for 欄, 名, 項, 符 in ((a, "🔴 支持因素", 判["支持"], "▲"), (b, "🟢 反向因素", 判["反向"], "▼"),
@@ -808,7 +853,7 @@ def 狀態區():
 
 def 恐慌溫度計區():
     try:
-        項們, 溫, 級, 話 = engine.恐慌溫度計(engine.讀取美股(), engine.讀取匯率(), engine.讀取小台散戶())
+        項們, 溫, 級, 話 = engine.恐慌溫度計(讀檔("讀取美股", _版本), 讀檔("讀取匯率", _版本), 讀檔("讀取小台散戶", _版本))
     except Exception:
         return
     if not 項們:
@@ -952,7 +997,7 @@ def 連動區():
 
 
 def 美股龍頭區():
-    t = engine.美股超賣(engine.讀取美股())
+    t = engine.美股超賣(讀檔("讀取美股", _版本))
     if t.empty:
         return
     超 = t[t["狀態"].isin(["超賣", "接近超賣"])]
@@ -981,7 +1026,7 @@ def 美股連動資料(版本鍵, 分類):
 
 
 @st.cache_data(ttl=600, show_spinner=False)
-def 大盤解讀紀錄(_快取鍵):
+def 大盤解讀紀錄(快取鍵):
     return engine.讀取大盤解讀(_設定())
 
 
@@ -1060,7 +1105,7 @@ def 三十秒卡():
         return
     K, sr, 區們, 解, 黑, 量價 = 結果
     try:
-        項們, 總結 = engine.三條件燈號(指數K線("TAIEX", _版本), 指數K線("TPEX", _版本), engine.讀取美股())
+        項們, 總結 = engine.三條件燈號(指數K線("TAIEX", _版本), 指數K線("TPEX", _版本), 讀檔("讀取美股", _版本))
     except Exception:
         項們, 總結 = [], ""
     燈們 = [燈 for _, 燈, _ in 項們]
@@ -1069,10 +1114,11 @@ def 三十秒卡():
     支, 壓 = 解["最近支撐"], 解["最近壓力"]
     f = lambda r: "—" if r is None else f"{r['價位']:,.0f}"
     段落("30 SEC // 三十秒看盤")
-    卡片格([卡片("觀察燈號", f"{燈} {''.join(燈們)}", 總結 or "資料不足", {"🟢": 紅, "🔴": 綠}.get(燈, "#FFC24B")),
-           卡片("加權格局", 格["格局"], f"收盤 {sr['收盤']:,.0f}", {"上升": 紅, "下降": 綠}.get(格["格局"], "#EDEDED")),
+    卡片格([卡片("觀察燈號", f"{燈} {''.join(燈們)}", 總結 or "資料不足", {"🟢": 紅, "🔴": 綠}.get(燈, "#FFC24B"), 錨("價位")),
+           卡片("加權格局", 格["格局"], f"收盤 {sr['收盤']:,.0f}", {"上升": 紅, "下降": 綠}.get(格["格局"], "#EDEDED"),
+                錨("加權指數")),
            卡片("今天看的價位", f"{f(支)} / {f(壓)}",
-                f"支撐{'' if 支 is None else 支['名稱']} · 壓力{'' if 壓 is None else 壓['名稱']}")])
+                f"支撐{'' if 支 is None else 支['名稱']} · 壓力{'' if 壓 is None else 壓['名稱']}", 連結=錨("價位"))])
     紀錄 = 大盤解讀紀錄(st.session_state.get("_解讀版本", 0))
     if 紀錄:
         最新 = 紀錄[sorted(紀錄)[-1]]
@@ -1144,7 +1190,7 @@ def 事件區():
     分頁們 = st.tabs(["🎫 新股申購抽籤", "🛒 庫藏股", "📜 可轉債"])
     現價 = 今日.set_index("代號")["收盤"]
     with 分頁們[0]:
-        申 = engine.讀取新股申購()
+        申 = 讀檔("讀取新股申購", _版本)
         if 申 is None:
             st.caption("公開申購資料還沒下載。")
         else:
@@ -1162,7 +1208,7 @@ def 事件區():
             st.caption("每簽獲利＝（現價 − 承銷價）× 1,000 股，沒扣申購手續費 20 元與中籤通知郵資 50 元；"
                        "初上市櫃的股票還沒有現價。抽籤前一天價差可能變很多，申購前再確認一次。資料：證交所公開申購公告。")
     with 分頁們[1]:
-        庫 = engine.讀取庫藏股()
+        庫 = 讀檔("讀取庫藏股", _版本)
         if 庫 is None:
             st.caption("庫藏股資料還沒下載。")
         else:
@@ -1177,7 +1223,7 @@ def 事件區():
             st.caption("近 45 天董事會決議、或還在買回期間的庫藏股。現價接近或低於價格下限時，公司較可能進場買。"
                        "資料：公開資訊觀測站。")
     with 分頁們[2]:
-        債 = engine.讀取可轉債()
+        債 = 讀檔("讀取可轉債", _版本)
         if 債 is None:
             st.caption("可轉債資料還沒下載。")
         else:
@@ -1238,11 +1284,31 @@ def _國際():
 區塊函式 = {"30秒": 三十秒卡, "市場": 市場卡片, "狀態": 狀態區, "價位": 關鍵價位區, "AI解讀": AI解讀區, "焦點": 焦點區, "國際": _國際, "連動": 連動區,
          "加權指數": 加權圖 if 加權 is not None and len(加權) > 1 else None, "權值": 權值區, "資金": 資金面區, "選擇權": 選擇權區, "事件": 事件區,
          "情緒": 情緒區, "族群": 族群熱力圖, "行事曆": 行事曆區, "排行": 排行區}
-盤中即時條()
 要畫 = [x for x in 顯示 if 區塊函式.get(x)]
 if len(要畫) > 3:  # 首頁很長，上方放一排快速跳轉
     st.markdown('<div class="jump">' + "".join(f'<a href="#h-{x}" target="_self">{x}</a>' for x in 要畫)
                 + "</div>", unsafe_allow_html=True)
+
+
+def 錨(區塊):
+    """首頁有顯示這個區塊才回傳跳轉連結（卡片點了會捲到那裡）。"""
+    return f"#h-{區塊}" if 區塊 in 要畫 else None
+
+
+@st.fragment
+def 區塊片段(名):
+    """每個區塊各自獨立：在區塊裡切換選項只重畫這一塊（以前整頁重跑約 3 秒），某一塊出錯也不影響其他區塊。"""
+    try:
+        區塊函式[名]()
+    except Exception as e:
+        import traceback
+        st.caption(f"「{名}」區塊暫時無法顯示（{type(e).__name__}），已記錄，其他區塊不受影響。")
+        threading.Thread(target=engine.記錄錯誤, args=(_設定(), f"01 首頁 {名}", e, traceback.format_exc()), daemon=True).start()
+    if st.session_state.get("要跳轉"):  # 點了表格裡的股票，要整頁重跑才會切到個股查詢
+        st.rerun(scope="app")
+
+
+盤中即時條()
 for x in 要畫:
     st.markdown(f'<div class="anchor" id="h-{x}"></div>', unsafe_allow_html=True)
-    區塊函式[x]()
+    區塊片段(x)

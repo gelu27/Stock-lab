@@ -172,7 +172,12 @@ def 上市一天(日期):
                 "trust": 表["投信買賣超股數"].map(轉數字), "dealer": 表["自營商買賣超股數"].map(轉數字),
                 "total": 表["三大法人買賣超股數"].map(轉數字),
             }))
-    融資 = 證交所(f"https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN?date={字串}&selectType=ALL&response=json")
+    return 個股, 指數, 合併籌碼(籌碼, 上市融資(日期))
+
+
+def 上市融資(日期):
+    """證交所個股融資融券餘額（每天約 21:00 後才公布）。回傳 DataFrame[code, margin, short] 或 None。"""
+    融資 = 證交所(f"https://www.twse.com.tw/rwd/zh/marginTrading/MI_MARGN?date={日期:%Y%m%d}&selectType=ALL&response=json")
     融資表 = None
     for _, 欄位, 資料 in 取得表格(融資 or {}):
         if 欄位[:2] == ["代號", "名稱"] and len(欄位) >= 13:
@@ -180,7 +185,7 @@ def 上市一天(日期):
             融資表 = pd.DataFrame({"code": [str(r[0]).strip() for r in 資料],
                                 "margin": [轉數字(r[6]) for r in 資料],
                                 "short": [轉數字(r[12]) for r in 資料]})
-    return 個股, 指數, 合併籌碼(籌碼, 融資表)
+    return 融資表
 
 
 def 加估值(個股, 估值, 代號欄, 對照):
@@ -246,14 +251,38 @@ def 上櫃一天(日期):
                 "foreign": [轉數字(r[10]) for r in 資料], "trust": [轉數字(r[13]) for r in 資料],
                 "dealer": [轉數字(r[22]) for r in 資料], "total": [轉數字(r[23]) for r in 資料],
             }))
-    融資 = 櫃買(f"https://www.tpex.org.tw/www/zh-tw/margin/balance?date={斜線}&id=&response=json")
+    return 個股, 合併籌碼(籌碼, 上櫃融資(日期))
+
+
+def 上櫃融資(日期):
+    融資 = 櫃買(f"https://www.tpex.org.tw/www/zh-tw/margin/balance?date={日期:%Y/%m/%d}&id=&response=json")
     融資表 = None
     for _, 欄位, 資料 in 取得表格(融資 or {}):
         if "資餘額" in 欄位 and "券餘額" in 欄位:
             表 = pd.DataFrame(資料, columns=欄位)
             融資表 = pd.DataFrame({"code": 表["代號"].str.strip(), "margin": 表["資餘額"].map(轉數字),
                                 "short": 表["券餘額"].map(轉數字)})
-    return 個股, 合併籌碼(籌碼, 融資表)
+    return 融資表
+
+
+def 補融資(天數=10):
+    """融資融券要晚上 9 點後才公布，傍晚更新時還抓不到；之後補進最近幾天缺融資的籌碼檔。"""
+    檔們 = sorted((資料夾 / "chips").glob("*/*.csv.gz"))[-天數:]
+    補了 = []
+    for 檔 in 檔們:
+        t = pd.read_csv(檔, dtype={"code": str})
+        if "margin" in t.columns and t["margin"].notna().sum() > 100:
+            continue
+        日期 = dt.datetime.strptime(檔.name[:8], "%Y%m%d").date()
+        融們 = [x for x in (上市融資(日期), 上櫃融資(日期)) if x is not None]
+        if not 融們:
+            print(f"{日期} 融資還沒公布")
+            continue
+        融 = pd.concat(融們).drop_duplicates("code")
+        t = t.drop(columns=[c for c in ("margin", "short") if c in t.columns]).merge(融, on="code", how="outer")
+        存壓縮檔(t[t["code"].str.fullmatch(代號格式)].sort_values("code"), 檔)
+        補了.append(f"{日期:%m/%d}")
+    print("補融資：" + ("、".join(補了) if 補了 else "沒有缺的"))
 
 
 # ---------- 紀錄 ----------
@@ -284,7 +313,7 @@ def 寫指數(指數):
 
 
 def 抓一天(日期):
-    with ThreadPoolExecutor(2) as 池:  # 證交所與櫃買是不同網站，可以同時抓
+    with ThreadPoolExecutor(3) as 池:  # 證交所與櫃買是不同網站，可以同時抓
         上市工作 = 池.submit(上市一天, 日期)
         上櫃工作 = 池.submit(上櫃一天, 日期)
         上市, 指數, 上市籌碼 = 上市工作.result()
@@ -1386,6 +1415,32 @@ def 抓可轉債():
     print(f"可轉債完成，共 {len(表)} 筆")
 
 
+def 抓公司簡介(每次=250):
+    """公司主要業務（公開資訊觀測站）與營收比重（MoneyDJ）→ data/company_profile.csv。
+    一檔約 2 秒，所以每天只補 每次 檔：先補還沒有的，再更新超過 60 天的，約 10 天全部跑過一輪。"""
+    import engine
+    f = 資料夾 / "company_profile.csv"
+    舊 = pd.read_csv(f, dtype=str).fillna("") if f.exists() else pd.DataFrame(columns=engine.公司簡介欄)
+    股本 = pd.read_csv(資料夾 / "fundamental" / "capital.csv", dtype={"code": str})
+    代號們 = [c for c in 股本["code"].astype(str).str.strip() if re.fullmatch(r"[1-9]\d{3}", c)]
+    更新日 = dict(zip(舊["code"], 舊["更新日"]))
+    期限 = (dt.datetime.now(台北時區) - dt.timedelta(days=60)).strftime("%Y-%m-%d")
+    待 = [c for c in 代號們 if c not in 更新日] + sorted((c for c in 代號們 if c in 更新日 and 更新日[c] < 期限), key=更新日.get)
+    待 = 待[:每次]
+    if not 待:
+        print("公司簡介：都是最新的")
+        return
+    with ThreadPoolExecutor(3) as 池:
+        新們 = [x for x in 池.map(engine.抓公司簡介, 待) if x.get("業務") or x.get("營收比重")]
+    if not 新們:
+        print("公司簡介：這次都沒抓到")
+        return
+    新 = pd.DataFrame(新們).reindex(columns=engine.公司簡介欄)
+    表 = pd.concat([舊[~舊["code"].isin(新["code"])], 新]).sort_values("code")
+    表.to_csv(f, index=False)
+    print(f"公司簡介完成：更新 {len(新)} 檔，共 {len(表)} 檔")
+
+
 # ---------- 主程式 ----------
 def main():
     參數 = argparse.ArgumentParser()
@@ -1434,11 +1489,16 @@ def main():
 
     if not 參數.skip_latest:
         for 工作 in (抓分時, 抓興櫃, 抓基本面, 抓匯率, 抓處置注意, 抓借券, 抓法說會, 抓融資金額, 抓期貨未平倉, 抓小台散戶,
-                     抓美股日線, 抓經濟行事曆, 抓美股財報, 抓指數K線, 抓選擇權, 抓新股申購, 抓外資持股, 抓當沖, 抓庫藏股, 抓可轉債):  # 這些出問題不影響主資料庫
+                     抓美股日線, 抓經濟行事曆, 抓美股財報, 抓指數K線, 抓選擇權, 抓新股申購, 抓外資持股, 抓當沖, 抓庫藏股, 抓可轉債, 抓公司簡介):  # 這些出問題不影響主資料庫
             try:
                 工作()
             except Exception as 錯誤:
                 print(f"{工作.__name__} 失敗：{錯誤}")
+
+    try:
+        補融資()
+    except Exception as 錯誤:
+        print(f"補融資 失敗：{錯誤}")
 
     # 刪掉超過保留年限的舊資料
     for 子 in ("prices", "chips"):

@@ -1,0 +1,38 @@
+name: 補融資融券
+
+# 個股融資融券餘額每天約 21:00 後才公布，傍晚 18:17 的「更新資料庫」還抓不到，
+# 所以晚上再跑一次，把最近幾天缺的融資補進去（網站的融資、維持率、評分的融資規則才會是最新的）
+on:
+  schedule:
+    - cron: "23 14 * * 1-5"  # 週一到週五 台灣時間 22:23
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency: data-update
+
+jobs:
+  margin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pandas requests pyarrow
+      - run: python -c "import update_data; update_data.補融資()"
+      - name: 整併月檔、更新時間（網站看到更新時間變了才會重新讀資料）
+        run: |
+          python -c "import engine; engine.整併月檔()"
+          if ! git diff --quiet data/chips; then TZ=Asia/Taipei date '+%Y/%m/%d %H:%M' > data/updated.txt; fi
+      - name: 存回 GitHub
+        run: |
+          git config user.name "stock-bot"
+          git config user.email "stock-bot@users.noreply.github.com"
+          git add -A data
+          git diff --cached --quiet && exit 0
+          git commit -m "補融資融券 $(date +%F)"
+          git pull --rebase origin main
+          git push

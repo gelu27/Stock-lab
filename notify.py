@@ -362,15 +362,15 @@ def 評分摘要(持股, 自選們=()):
         庫 = 分.reindex(h["代號"].str.strip().unique()).dropna(subset=["總分"]).sort_values("總分", ascending=False)
         if len(庫):
             行們.append("💼 庫存：")
-            行們 += [f"{r['名稱']} {r['總分']:.0f} {r['看法']} {變(r['較昨日'])}".rstrip() for _, r in 庫.iterrows()]
+            行們 += [f"{r['名稱']} {r['總分']:.1f} {r['看法']} {變(r['較昨日'])}".rstrip() for _, r in 庫.iterrows()]
     庫存們 = pd.read_csv(io.StringIO(持股), dtype={"代號": str})["代號"].str.strip().tolist() if 持股 else []
     大變 = 分.reindex(list(dict.fromkeys(庫存們 + list(自選們)))).dropna(subset=["總分", "較昨日"])
     大變 = 大變[大變["較昨日"].abs() >= 10].sort_values("較昨日")
     if len(大變):
         行們.append("📈 評分大變動（一天 ±10 分以上）：" + "、".join(
-            f"{r['名稱']} {r['總分'] - r['較昨日']:.0f}→{r['總分']:.0f}" for _, r in 大變.iterrows()))
+            f"{r['名稱']} {r['總分'] - r['較昨日']:.1f}→{r['總分']:.1f}" for _, r in 大變.iterrows()))
     高 = 分[(分["5日均量"] >= 500) & ~分.index.str.startswith("00")].sort_values("總分", ascending=False).head(5)
-    行們.append("🔝 高分股：" + "、".join(f"{r['名稱']} {r['總分']:.0f}" for _, r in 高.iterrows()))
+    行們.append("🔝 高分股：" + "、".join(f"{r['名稱']} {r['總分']:.1f}" for _, r in 高.iterrows()))
     行們.append("（規則計分，僅供參考，非投資建議）")
     return 行們
 
