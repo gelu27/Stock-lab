@@ -172,7 +172,11 @@ def AI報告(代號, r, 全, 設定):
     今天 = dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).strftime("%Y-%m-%d")
     資料日 = f"{全['date'].max():%Y-%m-%d}"
     上次 = 紀錄們[0] if 紀錄們 else None
-    if 上次 and (str(上次.get("時間", ""))[:10] == 今天 or 上次.get("資料日期") == 資料日):
+    # 2026-11-01 第一版 LINE 查詢把全市場資料誤當成個股歷史，那幾份 AI 報告的數據不對，重寫並取代
+    取代 = bool(上次) and 上次.get("引擎") == "Gemini（LINE 查詢）" and str(上次.get("時間", "")) < "2026-11-01 23:30"
+    if 取代:
+        上次 = 紀錄們[1] if len(紀錄們) > 1 else None
+    if 上次 and not 取代 and (str(上次.get("時間", ""))[:10] == 今天 or 上次.get("資料日期") == 資料日):
         內文, 建議 = engine.拆解AI建議(上次["內容"])
         return 內文, 上次.get("建議") or 建議 or {}, 上次["時間"], False
     金鑰 = 設定.get("GEMINI_API_KEY")
@@ -193,7 +197,7 @@ def AI報告(代號, r, 全, 設定):
     新 = {"時間": 時間, "資料日期": 資料日, "收盤": float(r["收盤"]), "引擎": "Gemini（LINE 查詢）", "模型": 模型,
          "內容": 文字, "來源": 來源}
     try:
-        engine.儲存AI紀錄(代號, 新, 設定)
+        engine.儲存AI紀錄(代號, 新, 設定, 取代=取代)
     except Exception as e:
         print("AI 報告存檔失敗：", repr(e))
     內文, 建議 = engine.拆解AI建議(文字)
