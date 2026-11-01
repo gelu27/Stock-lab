@@ -1602,23 +1602,24 @@ def 抓興櫃推薦券商():
         print("興櫃推薦券商：沒有資料")
         return
     今 = pd.DataFrame(資料)
-    代欄 = next((c for c in 今.columns if "Code" in c or "代號" in c), None)
-    商欄 = next((c for c in 今.columns if ("Dealer" in c or "推薦" in c or "Broker" in c) and c != 代欄), None)
-    if not 代欄 or not 商欄:
+    if not {"SecuritiesCompanyCode", "DealerName"} <= set(今.columns):
         print("興櫃推薦券商：欄位看不懂", list(今.columns))
         return
-    今 = 今.assign(code=今[代欄].astype(str).str.strip(), dealer=今[商欄].astype(str).str.strip())
-    今 = 今.assign(dealer=今["dealer"].str.split(r"[、,，]")).explode("dealer")
-    今["dealer"] = 今["dealer"].str.strip()
-    今 = 今[今["dealer"] != ""][["code", "dealer"]].drop_duplicates()
+    今 = pd.DataFrame({"code": 今["SecuritiesCompanyCode"].astype(str).str.strip(),
+                      "name": 今.get("CompanyName", "").astype(str).str.strip(),
+                      "dealer": 今["DealerName"].astype(str).str.strip().str.replace(r"(自營|自)$", "", regex=True),
+                      "since": 今.get("AddDate", "").astype(str).map(lambda x: 民國轉西元(x) if x.strip().isdigit() else "")})
+    今 = 今[今["dealer"] != ""].drop_duplicates(["code", "dealer"])
     快照 = 資料夾 / "esb_dealers.csv"
     if 快照.exists():
         舊 = pd.read_csv(快照, dtype={"code": str})
         鍵 = lambda t: set(zip(t["code"], t["dealer"]))
         新增, 退出 = 鍵(今) - 鍵(舊), 鍵(舊) - 鍵(今)
         舊代, 今代 = set(舊["code"]), set(今["code"])
-        變 = [{"date": dt.date.today().isoformat(), "code": c, "dealer": d, "change": "新增推薦"} for c, d in 新增 if c in 舊代]
-        變 += [{"date": dt.date.today().isoformat(), "code": c, "dealer": d, "change": "終止推薦" if c in 今代 else "下櫃或轉上市櫃"}
+        名 = dict(zip(今["code"], 今["name"])) | dict(zip(舊["code"], 舊.get("name", 舊["code"])))
+        變 = [{"date": dt.date.today().isoformat(), "code": c, "name": 名.get(c, ""), "dealer": d, "change": "新增推薦"}
+              for c, d in 新增 if c in 舊代]
+        變 += [{"date": dt.date.today().isoformat(), "code": c, "name": 名.get(c, ""), "dealer": d, "change": "終止推薦" if c in 今代 else "下櫃或轉上市櫃"}
               for c, d in 退出]
         if 變:
             f = 資料夾 / "esb_dealer_changes.csv"
