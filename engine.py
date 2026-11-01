@@ -4120,8 +4120,9 @@ def 解析評價(文字):
     if not np.isnan(前):  # 「本益比由 50.5 倍降到 35 倍」：本次倍數是後面那個
         後 = re.search(r"(?:降|升|調|上修|下修)[到至為]\s*([\d.]+)\s*倍", t)
         倍 = 數字(後) if 後 else 倍
-    年 = re.search(r"(?:FY|20)(\d{2})", t)
-    return {"倍數": 倍, "前次倍數": 前, "估值年度": f"20{年.group(1)}" if 年 else None,
+    年 = re.search(r"(?<!\d)20(\d{2})(?!\d)|FY\s*(\d{2})(?!\d)", t)  # 2027、FY2027、FY27 都要認得
+    年 = (年.group(1) or 年.group(2)) if 年 else None
+    return {"倍數": 倍, "前次倍數": 前, "估值年度": f"20{年}" if 年 else None,
             "EPS": 數字(re.search(r"EPS\s*([\d.]+)", t)), "淨值比": bool(re.search(r"淨值|P/?B|BVPS", t, re.I))}
 
 
