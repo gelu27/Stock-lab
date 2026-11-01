@@ -1650,7 +1650,7 @@ def main():
     if not 參數.skip_latest:
         for 工作 in (抓分時, 抓興櫃, 抓基本面, 抓匯率, 抓處置注意, 抓借券, 抓法說會, 抓融資金額, 抓期貨未平倉, 抓小台散戶,
                      抓美股日線, 抓經濟行事曆, 抓美股財報, 抓指數K線, 抓選擇權, 抓新股申購, 抓外資持股, 抓當沖, 抓庫藏股, 抓可轉債, 抓公司簡介,
-                     抓內部人轉讓, 抓興櫃推薦券商, 抓重大訊息, 抓美國數據, 抓美股資本支出, 抓費半長線, 抓夜盤法人, 抓台指期價差, 抓期貨保證金):  # 這些出問題不影響主資料庫
+                     抓內部人轉讓, 抓興櫃推薦券商, 抓重大訊息, 抓美國數據, 抓美股資本支出, 抓費半長線, 抓夜盤法人, 抓台指期價差, 抓期貨保證金, 抓0050成分):  # 這些出問題不影響主資料庫
             try:
                 工作()
             except Exception as 錯誤:
@@ -1666,6 +1666,59 @@ def main():
         for 檔案 in (資料夾 / 子).glob("*/*.csv.gz"):
             if 檔案.name[:8] < 第一天.strftime("%Y%m%d") and not 參數.start:
                 檔案.unlink()
+
+
+# ---------- 0050 成分股（網站「0050 跌深榜」用；抓不到就用上市市值前 50 大近似） ----------
+def _找代號列(物):
+    """在任意 JSON 裡找「有 4 碼股票代號欄」的 list[dict]，回傳 [(代號, 名稱, 權重)]。"""
+    if isinstance(物, dict):
+        for v in 物.values():
+            r = _找代號列(v)
+            if r:
+                return r
+    elif isinstance(物, list) and 物 and isinstance(物[0], dict):
+        列們 = []
+        for x in 物:
+            代 = next((str(v).strip() for k, v in x.items() if re.fullmatch(r"\d{4}", str(v).strip())
+                      and re.search(r"code|stk|id|代", str(k), re.I)), None)
+            if 代:
+                名 = next((str(v) for k, v in x.items() if re.search(r"name|名", str(k), re.I)), "")
+                權 = next((轉數字(v) for k, v in x.items() if re.search(r"weight|ratio|權|比", str(k), re.I)), None)
+                列們.append((代, 名, 權))
+        if len(列們) >= 40:
+            return 列們
+        for x in 物:
+            r = _找代號列(x)
+            if r:
+                return r
+    return None
+
+
+def 抓0050成分():
+    來源們 = [
+        ("元大", "https://www.yuantaetfs.com/api/StkWeights?date=&fundid=1066"),
+        ("MoneyDJ", "https://www.moneydj.com/ETF/X/Basic/Basic0007B.xdjhtm?etfid=0050.TW"),
+    ]
+    for 名, 網址 in 來源們:
+        try:
+            r = requests.get(網址, headers=標頭, timeout=30)
+            r.encoding = r.apparent_encoding or "utf-8"
+            列們 = None
+            try:
+                列們 = _找代號列(r.json())
+            except ValueError:
+                pass
+            if not 列們:   # HTML：找「名稱(2330.TW)」
+                找到 = re.findall(r"([^\s<>()（）\"']{1,12})\((\d{4})\.TW\)", r.text)
+                列們 = list({c: (c, n, None) for n, c in 找到 if c != "0050"}.values())
+            if 列們 and 40 <= len(列們) <= 60:
+                pd.DataFrame(列們, columns=["code", "name", "weight"]).assign(
+                    date=dt.date.today().isoformat(), source=名).to_csv(資料夾 / "etf0050.csv", index=False)
+                print(f"0050 成分股完成（{名}），{len(列們)} 檔")
+                return
+            print(f"0050 成分股 {名}：解析到 {len(列們 or [])} 檔，不採用（HTTP {r.status_code}）")
+        except Exception as 錯誤:
+            print(f"0050 成分股 {名} 失敗：{錯誤}")
 
 
 # ---------- 美國經濟數據（BLS 官方 API，免金鑰每天 25 次，這裡一次查 4 個數列） ----------
