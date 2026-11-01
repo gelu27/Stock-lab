@@ -55,12 +55,24 @@ def _存圖(plt, 圖):
     return 緩衝
 
 
+def _還原(歷史):
+    """開高低收換成還原價（最新一天等於實際股價），除權息、減資、面額分割才不會變成斷崖或跳空。"""
+    h = 歷史.copy().reset_index(drop=True)
+    if "還原價" not in h.columns:
+        return h
+    比 = (h["還原價"] / h["收盤"]).where(h["收盤"] > 0).ffill().fillna(1)
+    比 = 比 / 比.iloc[-1]
+    for 欄 in ("open", "high", "low", "收盤"):
+        h[欄] = h[欄] * 比
+    return h
+
+
 def K線圖(歷史, 天數=120, 寬=9.2, 高=5.0):
-    """日 K 線＋5／20／60 日線＋成交量。"""
+    """日 K 線（還原價）＋5／20／60 日線＋成交量。"""
     from matplotlib.patches import Rectangle
 
     plt = _畫布()
-    h = 歷史.copy()
+    h = _還原(歷史)
     for n in (5, 20, 60):
         h[f"均{n}"] = h["收盤"].rolling(n).mean()
     h = h.tail(天數).reset_index(drop=True)
@@ -192,7 +204,7 @@ def _數(v, f="{:,.2f}"):
 
 
 def K線解讀(歷史):
-    h = 歷史.copy()
+    h = _還原(歷史)
     c = h["收盤"]
     最後 = c.iloc[-1]
     均 = {n: c.rolling(n).mean().iloc[-1] for n in (5, 20, 60)}
