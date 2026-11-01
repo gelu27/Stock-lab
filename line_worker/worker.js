@@ -29,7 +29,11 @@ export default {
       return new Response("bad signature", { status: 401 });
     }
     for (const e of JSON.parse(body).events || []) {
-      if (e.type !== "message" || e.message.type !== "text" || e.source.userId !== env.LINE_USER_ID) continue;
+      if (e.type !== "message" || e.message.type !== "text") continue;
+      if (e.source.userId !== env.LINE_USER_ID) {  // 設定錯時顯示自己的 ID，方便對照
+        await 回覆(env.LINE_TOKEN, e.replyToken, `這個帳號沒有查詢權限。你的 User ID：${e.source.userId}`);
+        continue;
+      }
       const q = e.message.text.trim().slice(0, 12);
       if (!/^[0-9A-Za-z一-鿿*-]{2,12}$/.test(q)) {
         await 回覆(env.LINE_TOKEN, e.replyToken, "請輸入股票代號（例如 2330）或名稱（例如 台積電）。");
