@@ -476,6 +476,10 @@ def 選股條件區():
             if st.checkbox("站上均線", key="條_站上均線"):
                 條件["站上均線"] = st.selectbox("收盤價站上", [5, 20, 60], index=1, format_func=lambda n: f"{n} 日均線", key="條_收盤價站上")
             條件["均線多頭排列"] = st.checkbox("均線多頭排列（5 > 20 > 60 日）", key="條_均線多頭排列（5 > 20 > 60 日）")
+            條件["MACD翻紅多頭"] = st.checkbox("MACD 今天翻紅＋多頭排列（5 > 10 > 20 > 60）", key="條_MACD翻紅多頭",
+                                             help="基礎撐壓講義的規則，用 2022～2026 資料實測：之後 20 日平均比大盤多 1.03%（單獨 MACD 翻紅沒有優勢）")
+            條件["排除均線糾結"] = st.checkbox("排除均線糾結（四條均線差距 < 2%）", key="條_排除均線糾結",
+                                           help="實測均線糾結的股票之後 20 日平均比大盤少 0.79%，糾結後突破也沒有比較好")
             if st.checkbox("20 日漲幅下限", key="條_20 日漲幅下限"):
                 條件["20日漲幅下限"] = st.number_input("20 日漲幅(%) ≥", value=5.0, step=1.0, key="條_20 日漲幅(%) ≥")
             if st.checkbox("RSI 區間", key="條_RSI 區間"):
@@ -1014,6 +1018,33 @@ def 燈號卡(項們):
     return '<div class="lamps">' + "".join(
         f'<div class="lamp {類.get(燈, "y")}"><div class="t"><i>{燈}</i>{名}</div><div class="s">{說}</div></div>'
         for 名, 燈, 說 in 項們) + "</div>"
+
+
+def K棒解讀區(K, 量=None, 標題="今天的 K 棒怎麼看", 是大盤=False):
+    """基礎撐壓講義的 K 棒四價＋均線三態白話解讀，附上歷史實測。K：date、open、high、low、close（原始價）；量：同列數的成交量或 None。"""
+    if K is None or len(K) < 61 or K["high"].iloc[-1] == K["low"].iloc[-1] == K["close"].iloc[-1]:
+        return
+    K = K.reset_index(drop=True)
+    c = K["close"]
+    均 = [c.rolling(n).mean().iloc[-1] for n in (5, 10, 20, 60)]
+    狀, 燈, 說 = engine.均線狀態(*均)
+    量比 = None
+    if 量 is not None:
+        量 = pd.Series(量).reset_index(drop=True)
+        前 = 量.iloc[-21:-1].mean()
+        量比 = float(量.iloc[-1] / 前) if 前 and pd.notna(前) else None
+    句, 鍵 = engine.K棒解讀(K.iloc[-1], K.iloc[-2], K["high"].iloc[-21:-1].max(), K["low"].iloc[-21:-1].min(), 量比)
+    if 狀 in ("多頭排列", "空頭排列", "均線糾結"):
+        鍵 = [狀] + 鍵
+    實 = engine.規則實測句(讀檔("讀取規則實測", _版本), 鍵)
+    with st.container(border=True):
+        st.markdown(f"**🕯️ {標題}**（{pd.Timestamp(K['date'].iloc[-1]):%m/%d}）")
+        st.markdown(燈號卡([(f"均線：{狀 or '資料不足'}", 燈, 說)]), unsafe_allow_html=True)
+        st.markdown("\n".join(f"- {x}" for x in 句))
+        if 實:
+            st.caption("📊 講義規則的歷史實測" + ("（樣本是 2022 年起上市櫃個股，不是大盤本身）" if 是大盤 else "（2022 年起上市櫃個股，不只這一檔）")
+                       + "：\n" + "\n".join(f"- {x}" for x in 實))
+        st.caption("單根 K 棒的預測力很弱：實測「創高長上影線」之後並沒有比較差、「突破沒帶量」反而比帶量還好（完整結果在 08 回測頁最下方）。看 K 棒當作描述今天發生什麼，不要當成買賣訊號。")
 
 
 def 價位卡片(sr, 解, 昨收=None):

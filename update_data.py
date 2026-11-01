@@ -932,6 +932,70 @@ def 抓小台散戶(天數=400):
     print(f"小台散戶多空比完成，共 {len(表)} 天（最新 {表['date'].max()}，{表['ratio'].iloc[-1]:+.1f}%）")
 
 
+def 抓台指期價差(天數=400):
+    """台指期（大台 TX）近月收盤、全市場未平倉 → data/futures_basis.csv（date, month, fut_close, total_oi）。
+    價差＝期貨收盤 − 加權收盤，網站讀取時再跟 index_ohlc.csv 對；未平倉＝所有月份（不含週契約、價差單）一般盤加總。"""
+    檔 = 資料夾 / "futures_basis.csv"
+    舊 = pd.read_csv(檔, dtype={"month": str}) if 檔.exists() else pd.DataFrame()
+    有資料 = [d for d, 狀態 in 讀狀態().items() if 狀態 == "ok"]
+    if not 有資料:
+        return
+    今天 = pd.Timestamp(max(有資料)).date()
+    起 = (pd.Timestamp(舊["date"].max()).date() + dt.timedelta(days=1)) if len(舊) else 今天 - dt.timedelta(days=天數)
+    列們 = []
+    while 起 <= 今天:
+        迄 = min(起 + dt.timedelta(days=27), 今天)
+        量 = _期交所下載("https://www.taifex.com.tw/cht/3/futDataDown",
+                        {"queryStartDate": f"{起:%Y/%m/%d}", "queryEndDate": f"{迄:%Y/%m/%d}", "down_type": "1",
+                         "commodity_id": "TX"}, f"台指期行情 {起}～{迄}")
+        if 量 is None:
+            break  # 下次從缺的那天接著補
+        量 = 量[量["交易時段"].astype(str).str.strip() == "一般"]
+        量 = 量.assign(month=量["到期月份(週別)"].astype(str).str.strip())
+        量 = 量[量["month"].str.fullmatch(r"\d{6}")]   # 去掉週契約、價差單
+        量 = 量.assign(date=pd.to_datetime(量["交易日期"]).dt.strftime("%Y-%m-%d"),
+                       close=pd.to_numeric(量["收盤價"], errors="coerce"),
+                       oi=pd.to_numeric(量["未沖銷契約數"], errors="coerce"))
+        for 日, g in 量.groupby("date"):
+            有價 = g.dropna(subset=["close"]).sort_values("month")
+            if 有價.empty:
+                continue
+            近 = 有價.iloc[0]
+            列們.append({"date": 日, "month": 近["month"], "fut_close": float(近["close"]),
+                        "total_oi": int(g["oi"].sum())})
+        起 = 迄 + dt.timedelta(days=1)
+    if not 列們:
+        print("台指期價差沒有新資料")
+        return
+    表 = pd.concat([舊, pd.DataFrame(列們)]).drop_duplicates("date", keep="last").sort_values("date")
+    表.to_csv(檔, index=False)
+    print(f"台指期價差完成，共 {len(表)} 天（最新 {表['date'].max()}）")
+
+
+def 抓期貨保證金():
+    """期交所「股價指數類保證金一覽表」的大台、小台、微台原始／維持保證金 → data/futures_margin.csv。
+    不用 lxml：找到商品名稱後面的三個數字，最大＝原始、中間＝維持（最小是結算保證金）。"""
+    import re
+    try:
+        r = requests.get("https://www.taifex.com.tw/cht/5/indexMarging", headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+        文 = re.sub(r"<[^>]+>", " ", r.text)
+    except Exception as 錯誤:
+        print(f"期貨保證金失敗：{錯誤}")
+        return
+    列們 = []
+    for 名, 產品 in (("臺股期貨", "大台（TX）"), ("小型臺指", "小台（MTX）"), ("微型臺指", "微台（TMF）")):
+        m = re.search(名 + r"[^0-9]{0,40}((?:[0-9][0-9,]{3,}\s+){2}[0-9][0-9,]{3,})", 文)
+        if not m:
+            continue
+        數 = sorted(int(x.replace(",", "")) for x in m.group(1).split())
+        列們.append({"product": 產品, "initial": 數[2], "maintenance": 數[1], "date": f"{dt.date.today():%Y-%m-%d}"})
+    if len(列們) < 3:
+        print(f"期貨保證金只解析到 {len(列們)} 項，略過（網站沿用內建數字）")
+        return
+    pd.DataFrame(列們).to_csv(資料夾 / "futures_margin.csv", index=False)
+    print("期貨保證金完成：" + "、".join(f"{x['product']} {x['initial']:,}" for x in 列們))
+
+
 美股代號 = {"^SOX": "費城半導體", "^IXIC": "那斯達克", "^GSPC": "S&P 500", "^DJI": "道瓊", "^VIX": "VIX",
           "TSM": "台積電 ADR", "NVDA": "輝達", "AAPL": "蘋果", "AMD": "超微", "AVGO": "博通", "MU": "美光",
           "TSLA": "特斯拉", "^N225": "日經 225", "^KS11": "韓國綜合", "LITE": "Lumentum",
@@ -1586,7 +1650,7 @@ def main():
     if not 參數.skip_latest:
         for 工作 in (抓分時, 抓興櫃, 抓基本面, 抓匯率, 抓處置注意, 抓借券, 抓法說會, 抓融資金額, 抓期貨未平倉, 抓小台散戶,
                      抓美股日線, 抓經濟行事曆, 抓美股財報, 抓指數K線, 抓選擇權, 抓新股申購, 抓外資持股, 抓當沖, 抓庫藏股, 抓可轉債, 抓公司簡介,
-                     抓內部人轉讓, 抓興櫃推薦券商, 抓重大訊息, 抓美國數據, 抓美股資本支出, 抓費半長線, 抓夜盤法人):  # 這些出問題不影響主資料庫
+                     抓內部人轉讓, 抓興櫃推薦券商, 抓重大訊息, 抓美國數據, 抓美股資本支出, 抓費半長線, 抓夜盤法人, 抓台指期價差, 抓期貨保證金):  # 這些出問題不影響主資料庫
             try:
                 工作()
             except Exception as 錯誤:

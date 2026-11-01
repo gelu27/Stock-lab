@@ -1047,6 +1047,12 @@ with 分頁[3]:
     段落("LEVELS // 支撐壓力（自動計算）")
     個股價位區(代號)
 
+    _全 = 個股全史(代號, _版本)
+    if _全 is not None and len(_全) > 61:
+        _尾 = _全.tail(130)
+        K棒解讀區(pd.DataFrame({"date": _尾["date"], "open": _尾["open"], "high": _尾["high"], "low": _尾["low"],
+                               "close": _尾["收盤"]}), _尾["volume"])
+
     段落("CHART // 走勢與指標")
     週期 = st.segmented_control("週期", ["當日", "5分", "日", "週", "月", "季"], default="日", key="個股週期",
                               label_visibility="collapsed") or "日"
@@ -1055,6 +1061,9 @@ with 分頁[3]:
         可選 = ["成交量", "RSI", "MACD"]
     指標們 = st.multiselect("下方指標", 可選, default=[x for x in ["成交量", "三大法人", "MACD"] if x in 可選],
                            key=f"個股指標{週期 in ('當日', '5分')}")
+    疊加 = [] if 週期 in ("當日", "5分") else st.multiselect(
+        "K 線圖疊加", ["布林通道", "成交均價線"], default=[], key="個股疊加",
+        help="布林通道＝20 日均線 ± 2 個標準差；成交均價線＝近 20／60 日成交金額 ÷ 成交股數，比均線更接近這段期間買進者的平均成本")
 
     def 走勢圖():
         if 週期 in ("當日", "5分"):
@@ -1075,6 +1084,10 @@ with 分頁[3]:
             歷史 = 歷史.tail({"日": 180, "週": 156, "月": 72, "季": 40}[週期])
             K = pd.DataFrame({"x": 歷史["date"], "open": 歷史["open"], "high": 歷史["high"], "low": 歷史["low"],
                               "close": 歷史["收盤"], "量": 歷史["成交張數"]})
+            if 週期 == "日" and "成交均價線" in 疊加:
+                全 = 個股全史(代號, _版本)
+                for n in (20, 60):
+                    K[f"均價{n}"] = engine.成交均價線(全["value"], 全["volume"], n).reindex(歷史.index).values
             for 欄, 名 in (("法人買超", "三大法人"), ("外資買超", "外資"), ("投信買超", "投信"), ("自營買超", "自營商"),
                           ("融資餘額", "融資")):
                 if 欄 in 歷史.columns:
@@ -1096,6 +1109,15 @@ with 分頁[3]:
             for n, c in ((5, "#FFFFFF"), (10, "#FFC24B"), (20, 青), (60, "#FF00E5")):
                 圖.add_trace(go.Scatter(x=K["x"], y=K["close"].rolling(n).mean(), name=f"MA{n}",
                                         line=dict(color=c, width=1)), row=1, col=1)
+            if "布林通道" in 疊加:
+                _, 上, 下 = engine.布林通道(K["close"])
+                for 線, 名 in ((上, "布林上軌"), (下, "布林下軌")):
+                    圖.add_trace(go.Scatter(x=K["x"], y=線, name=名, line=dict(color="#8F7CFF", width=1, dash="dot")),
+                                 row=1, col=1)
+            for n, c in ((20, "#FF8A3D"), (60, "#BDBDBD")):
+                if f"均價{n}" in K:
+                    圖.add_trace(go.Scatter(x=K["x"], y=K[f"均價{n}"], name=f"{n} 日成交均價",
+                                            line=dict(color=c, width=1.4, dash="dash")), row=1, col=1)
         漲跌色列 = lambda v: [紅 if x >= 0 else 綠 for x in pd.Series(v).fillna(0)]
         for i, 名 in enumerate(指標們, start=2):
             if 名 == "成交量":
