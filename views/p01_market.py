@@ -1386,6 +1386,51 @@ def 興櫃區():
                "估計承銷價＝近 20 日均價 × 0.7～0.85，是經驗法則，實際以公告為準。"
                + (f"參考：過去 {表現['檔數']} 檔初上市櫃，現價比承銷價的中位數 {表現['中位數%']:+.0f}%，"
                   f"{表現['上漲比例%']:.0f}% 高於承銷價。" if 表現 else "") + "興櫃沒有漲跌幅限制、成交量小，風險比上市櫃高很多。")
+    興櫃估值試算(總)
+
+
+def 興櫃估值試算(總):
+    with st.expander("🧮 掛牌前估值試算：同業本益比 × 自己估的 EPS"):
+        選項 = [f"{c} {n}" for c, n in zip(總["代號"], 總["名稱"])]
+        預設 = next((i for i, v in enumerate(選項) if v.startswith("3595 ")), 0)
+        選 = st.selectbox("興櫃股", 選項, index=預設, key="興櫃估值股")
+        代號 = 選.split()[0]
+        列 = 總[總["代號"] == 代號].iloc[0]
+        概念們 = engine.個股概念(代號)
+        概 = engine.讀取概念()
+        同概念 = 概[概["concept"].isin(概念們) & (概["code"] != 代號)]["code"].unique().tolist()
+        有價 = set(今日["代號"])
+        同業字 = st.text_input("同業代號（上市櫃，用逗號分開）", ", ".join(c for c in 同概念 if c in 有價),
+                             key=f"興櫃估值同業_{代號}", placeholder="例如 7734")
+        同業 = [c.strip() for c in re.split(r"[,，、\s]+", 同業字) if c.strip()]
+        欄 = st.columns(2)
+        今年 = 欄[0].number_input("今年 EPS（自己估）", min_value=0.0, value=0.0, step=0.5, key=f"興櫃估值今年_{代號}")
+        明年 = 欄[1].number_input("明年 EPS（自己估，可空白）", min_value=0.0, value=0.0, step=0.5, key=f"興櫃估值明年_{代號}")
+        同業表 = 今日[今日["代號"].isin(同業)][["代號", "名稱", "收盤", "本益比"]]
+        if len(同業表):
+            表格(同業表.style.format({"收盤": "{:,.2f}", "本益比": "{:.1f}"}, na_rep="—"), hide_index=True, width="stretch")
+        elif 同業:
+            st.caption("找不到這些同業的上市櫃行情，請確認代號。")
+        結果 = engine.掛牌估值試算(列["收盤"], {"今年": 今年, "明年": 明年}, 同業表["本益比"].tolist())
+        if len(結果):
+            表格(結果, hide_index=True, width="stretch")
+        else:
+            st.caption("輸入同業代號和至少一個 EPS 就會算出參考價。興櫃公司的 EPS 可以看公開資訊觀測站的半年報、月營收自己推。")
+        風險 = [(k, engine.技術替代風險[k]) for k in 概念們 if k in engine.技術替代風險]
+        if 風險:
+            st.warning("🔁 **技術替代風險**：" + "　".join(f"**{k}**｜{v}" for k, v in 風險))
+        try:
+            影片們 = 網紅說法清單(st.session_state.get("_網紅版本", 0))
+            價 = engine.網紅價位(影片們, {代號: float(列["收盤"])}, 天數=90)
+            價 = 價[價["代號"] == 代號] if len(價) else 價
+        except Exception:
+            價 = pd.DataFrame()
+        if len(價):
+            st.markdown("**評論者的價位計畫**：" + "；".join(
+                f"{r['頻道']} {r['類型']} {r['價位']:,.0f}" + (f"（距今 {r['距離%']:+.1f}%）" if pd.notna(r["距離%"]) else "")
+                for _, r in 價.head(6).iterrows()))
+        st.caption("同業本益比用網站的近四季本益比，取低四分位、中位數、高四分位。掛牌時承銷商常拿同業本益比定價，"
+                   "所以現價換算的倍數比同業高很多時，要小心掛牌後往同業靠攏。EPS 是你自己的假設，不是公司財測。")
 
 
 def 董監轉讓區(現價):
