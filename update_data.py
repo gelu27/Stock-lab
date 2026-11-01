@@ -934,7 +934,13 @@ def 抓小台散戶(天數=400):
 
 美股代號 = {"^SOX": "費城半導體", "^IXIC": "那斯達克", "^GSPC": "S&P 500", "^DJI": "道瓊", "^VIX": "VIX",
           "TSM": "台積電 ADR", "NVDA": "輝達", "AAPL": "蘋果", "AMD": "超微", "AVGO": "博通", "MU": "美光",
-          "TSLA": "特斯拉", "^N225": "日經 225", "^KS11": "韓國綜合", "LITE": "Lumentum"}
+          "TSLA": "特斯拉", "^N225": "日經 225", "^KS11": "韓國綜合", "LITE": "Lumentum",
+          # 全球風險燈（總經區塊）
+          "DX-Y.NYB": "美元指數", "CL=F": "原油", "HYG": "高收益債 HYG", "^TNX": "美債10年殖利率",
+          # 財報關注的其他龍頭（美股財報 → 台股隔日反應用）
+          "MSFT": "微軟", "GOOGL": "Alphabet", "AMZN": "亞馬遜", "META": "Meta", "ORCL": "甲骨文", "QCOM": "高通",
+          "INTC": "英特爾", "AMAT": "應用材料", "LRCX": "科林研發", "ASML": "艾司摩爾", "SMCI": "美超微", "DELL": "戴爾",
+          "ARM": "安謀", "MRVL": "邁威爾", "ANET": "Arista"}
 財報關注 = {"NVDA": "輝達", "AAPL": "蘋果", "MSFT": "微軟", "GOOGL": "Alphabet", "AMZN": "亞馬遜", "META": "Meta",
           "TSLA": "特斯拉", "AMD": "超微", "AVGO": "博通", "MU": "美光", "QCOM": "高通", "INTC": "英特爾",
           "AMAT": "應用材料", "LRCX": "科林研發", "KLAC": "科磊", "ASML": "艾司摩爾", "TSM": "台積電 ADR",
@@ -1489,7 +1495,8 @@ def main():
 
     if not 參數.skip_latest:
         for 工作 in (抓分時, 抓興櫃, 抓基本面, 抓匯率, 抓處置注意, 抓借券, 抓法說會, 抓融資金額, 抓期貨未平倉, 抓小台散戶,
-                     抓美股日線, 抓經濟行事曆, 抓美股財報, 抓指數K線, 抓選擇權, 抓新股申購, 抓外資持股, 抓當沖, 抓庫藏股, 抓可轉債, 抓公司簡介):  # 這些出問題不影響主資料庫
+                     抓美股日線, 抓經濟行事曆, 抓美股財報, 抓指數K線, 抓選擇權, 抓新股申購, 抓外資持股, 抓當沖, 抓庫藏股, 抓可轉債, 抓公司簡介,
+                     抓內部人轉讓, 抓興櫃推薦券商, 抓重大訊息, 抓美國數據, 抓美股資本支出):  # 這些出問題不影響主資料庫
             try:
                 工作()
             except Exception as 錯誤:
@@ -1505,6 +1512,149 @@ def main():
         for 檔案 in (資料夾 / 子).glob("*/*.csv.gz"):
             if 檔案.name[:8] < 第一天.strftime("%Y%m%d") and not 參數.start:
                 檔案.unlink()
+
+
+# ---------- 美國經濟數據（BLS 官方 API，免金鑰每天 25 次，這裡一次查 4 個數列） ----------
+def 抓美國數據():
+    數列 = ["CUSR0000SA0", "CUSR0000SA0L1E", "CES0000000001", "LNS14000000"]
+    今年 = dt.date.today().year
+    r = requests.post("https://api.bls.gov/publicAPI/v2/timeseries/data/", headers=標頭, timeout=60,
+                      json={"seriesid": 數列, "startyear": str(今年 - 3), "endyear": str(今年)})
+    j = r.json()
+    if j.get("status") != "REQUEST_SUCCEEDED":
+        print("BLS 失敗：", j.get("message"))
+        return
+    列們 = [{"series": s["seriesID"], "date": f"{d['year']}-{d['period'][1:]}-01", "value": 轉數字(d["value"])}
+           for s in j["Results"]["series"] for d in s["data"] if d["period"].startswith("M") and d["period"] != "M13"]
+    if 列們:
+        pd.DataFrame(列們).sort_values(["series", "date"]).to_csv(資料夾 / "us_macro.csv", index=False)
+        print(f"美國經濟數據完成，{len(列們)} 筆")
+
+
+# ---------- AI 巨頭資本支出與營業現金流（Yahoo 財報時間序列，約最近 5 季） ----------
+資本支出公司 = {"MSFT": "微軟", "GOOGL": "Alphabet", "AMZN": "亞馬遜", "META": "Meta", "ORCL": "甲骨文"}
+
+
+def 抓美股資本支出():
+    迄 = int(time.time())
+    起 = 迄 - 3 * 365 * 86400
+    列們 = []
+    for 代, 名 in 資本支出公司.items():
+        try:
+            r = requests.get(f"https://query2.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/{代}"
+                             f"?type=quarterlyCapitalExpenditure,quarterlyOperatingCashFlow&period1={起}&period2={迄}",
+                             headers=標頭, timeout=60)
+            值 = {}
+            for 段 in r.json()["timeseries"]["result"]:
+                種 = 段["meta"]["type"][0]
+                for x in 段.get(種) or []:
+                    if x and x.get("reportedValue"):
+                        值.setdefault(x["asOfDate"], {})[種] = x["reportedValue"]["raw"]
+            for 日, v in 值.items():
+                季 = pd.Timestamp(日)
+                列們.append({"symbol": 代, "name": 名, "quarter": f"{季.year}Q{(季.month - 1) // 3 + 1}", "end": 日,
+                           "capex": abs(v.get("quarterlyCapitalExpenditure", float("nan"))), "ocf": v.get("quarterlyOperatingCashFlow", float("nan"))})
+        except Exception as e:
+            print(f"資本支出 {代} 失敗：{e}")
+        time.sleep(1)
+    if not 列們:
+        return
+    檔 = 資料夾 / "us_capex.csv"
+    表 = pd.DataFrame(列們)
+    if 檔.exists():  # Yahoo 只給最近幾季，舊的留著才看得到長期趨勢
+        表 = pd.concat([pd.read_csv(檔), 表])
+    表.drop_duplicates(["symbol", "quarter"], keep="last").sort_values(["symbol", "quarter"]).to_csv(檔, index=False)
+    print(f"AI 巨頭資本支出完成，{len(列們)} 筆")
+
+
+# ---------- 內部人持股轉讓事前申報（每天公布，只給當天，所以逐日累積） ----------
+def 抓內部人轉讓():
+    列們 = []
+    for 網址, 市場 in (("https://openapi.twse.com.tw/v1/opendata/t187ap12_L", "上市"),
+                     ("https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap12_O", "上櫃")):
+        for r in (證交所 if 市場 == "上市" else 櫃買)(網址) or []:
+            代 = str(r.get("公司代號", r.get("SecuritiesCompanyCode", ""))).strip()
+            日 = r.get("出表日期", r.get("Date"))
+            if not 代 or not 日:
+                continue
+            列們.append({"date": 民國轉西元(日), "code": 代, "market": 市場, "身分": str(r.get("申報人身分", r.get("申請人身分", ""))).strip(),
+                       "姓名": str(r.get("姓名", "")).strip(), "方式": str(r.get("預定轉讓方式及股數-轉讓方式", "")).strip(),
+                       "股數": 轉數字(r.get("預定轉讓總股數-自有持股")) or 轉數字(r.get("預定轉讓方式及股數-轉讓股數")),
+                       "持股": 轉數字(r.get("目前持有股數-自有持股")), "轉讓後": 轉數字(r.get("預定轉讓後持股-自有持股")),
+                       "受讓人": str(r.get("受讓人", "")).strip(), "期間": str(r.get("有效轉讓期間", "")).strip()})
+    檔 = 資料夾 / "insider_transfer.csv"
+    表 = pd.DataFrame(列們)
+    if 檔.exists():
+        表 = pd.concat([pd.read_csv(檔, dtype={"code": str}), 表])
+    if 表.empty:
+        print("內部人轉讓申報：今天沒有")
+        return
+    表 = 表.drop_duplicates(["date", "code", "姓名", "股數"], keep="last").sort_values(["date", "code"])
+    表 = 表[表["date"] >= (dt.date.today() - dt.timedelta(days=800)).isoformat()]
+    表.to_csv(檔, index=False)
+    print(f"內部人轉讓申報完成，共 {len(表)} 筆（今天 {len(列們)} 筆）")
+
+
+# ---------- 興櫃推薦證券商（每天快照，跟上次比出新增／退出） ----------
+def 抓興櫃推薦券商():
+    資料 = 櫃買("https://www.tpex.org.tw/openapi/v1/tpex_esb_recommended_dealer") or []
+    if not 資料:
+        print("興櫃推薦券商：沒有資料")
+        return
+    今 = pd.DataFrame(資料)
+    if not {"SecuritiesCompanyCode", "DealerName"} <= set(今.columns):
+        print("興櫃推薦券商：欄位看不懂", list(今.columns))
+        return
+    今 = pd.DataFrame({"code": 今["SecuritiesCompanyCode"].astype(str).str.strip(),
+                      "name": 今.get("CompanyName", "").astype(str).str.strip(),
+                      "dealer": 今["DealerName"].astype(str).str.strip().str.replace(r"(自營|自)$", "", regex=True),
+                      "since": 今.get("AddDate", "").astype(str).map(lambda x: 民國轉西元(x) if x.strip().isdigit() else "")})
+    今 = 今[今["dealer"] != ""].drop_duplicates(["code", "dealer"])
+    快照 = 資料夾 / "esb_dealers.csv"
+    if 快照.exists():
+        舊 = pd.read_csv(快照, dtype={"code": str})
+        鍵 = lambda t: set(zip(t["code"], t["dealer"]))
+        新增, 退出 = 鍵(今) - 鍵(舊), 鍵(舊) - 鍵(今)
+        舊代, 今代 = set(舊["code"]), set(今["code"])
+        名 = dict(zip(今["code"], 今["name"])) | dict(zip(舊["code"], 舊.get("name", 舊["code"])))
+        變 = [{"date": dt.date.today().isoformat(), "code": c, "name": 名.get(c, ""), "dealer": d, "change": "新增推薦"}
+              for c, d in 新增 if c in 舊代]
+        變 += [{"date": dt.date.today().isoformat(), "code": c, "name": 名.get(c, ""), "dealer": d, "change": "終止推薦" if c in 今代 else "下櫃或轉上市櫃"}
+              for c, d in 退出]
+        if 變:
+            f = 資料夾 / "esb_dealer_changes.csv"
+            t = pd.DataFrame(變)
+            if f.exists():
+                t = pd.concat([pd.read_csv(f, dtype={"code": str}), t])
+            t.drop_duplicates().to_csv(f, index=False)
+            print(f"興櫃推薦券商變動 {len(變)} 筆")
+    今.sort_values(["code", "dealer"]).to_csv(快照, index=False)
+    print(f"興櫃推薦券商：{今['code'].nunique()} 家")
+
+
+# ---------- 重大訊息（今天的，挑出承銷、推薦券商、掛牌相關） ----------
+重訊關鍵字 = ("推薦證券商", "推薦券商", "承銷", "辭任", "掛牌", "申請上櫃", "申請上市", "上櫃審議", "上市審議", "現金增資", "終止")
+
+
+def 抓重大訊息():
+    r = requests.post("https://mopsov.twse.com.tw/mops/web/ajax_t05sr01_1", headers=標頭, timeout=60,
+                      data={"encodeURIComponent": 1, "step": 0, "TYPEK": "all"})
+    r.encoding = "utf-8"
+    列們 = []
+    for 列 in re.findall(r"<tr class='(?:even|odd)'>(.*?)</tr>", r.text, re.S):
+        格 = [re.sub(r"<[^>]+>", "", x).strip() for x in re.findall(r"<td[^>]*>(.*?)</td>", 列, re.S)]
+        if len(格) >= 5 and any(k in 格[4] for k in 重訊關鍵字):
+            列們.append({"date": 民國轉西元(格[2].replace("/", "")), "time": 格[3], "code": 格[0], "name": 格[1],
+                       "subject": re.sub(r"\s+", "", 格[4])[:200]})
+    檔 = 資料夾 / "material_news.csv"
+    表 = pd.DataFrame(列們)
+    if 檔.exists():
+        表 = pd.concat([pd.read_csv(檔, dtype={"code": str}), 表])
+    if 表.empty:
+        return
+    表 = 表.drop_duplicates(["date", "code", "subject"]).sort_values(["date", "time"])
+    表[表["date"] >= (dt.date.today() - dt.timedelta(days=400)).isoformat()].to_csv(檔, index=False)
+    print(f"重大訊息（承銷／推薦／掛牌）：今天 {len(列們)} 筆")
 
 
 if __name__ == "__main__":

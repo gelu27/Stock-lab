@@ -552,6 +552,35 @@ def 守週線強勢(版本鍵):
     return engine.守週線強勢股(指標)
 
 
+def 波段區(K, sr):
+    """回檔尺（0.382／0.5／0.618）、等幅測距、底背離與劇本條件樹。"""
+    尺 = macro.回檔尺(K)
+    背 = macro.低檔背離(K) or []
+    價 = sr["價位"]
+    樹 = macro.劇本樹(float(K["close"].iloc[-1]), list(zip(價.loc[價["角色"] == "支撐", "名稱"], 價.loc[價["角色"] == "支撐", "價位"])),
+                    list(zip(價.loc[價["角色"] == "壓力", "名稱"], 價.loc[價["角色"] == "壓力", "價位"])))
+    if 尺:
+        (起日, 起價, _), (止日, 止價, _) = 尺["起"], 尺["止"]
+        話 = (f"📏 <b>回檔尺</b>：{起日:%m/%d} {起價:,.0f} → {止日:%m/%d} {止價:,.0f}（{尺['方向']}），目前已回 {尺['已回%']:.0f}%；"
+              + "、".join(f"{k} 在 {v:,.0f}" for k, v in 尺["回檔"].items()))
+        等 = 尺.get("等幅")
+        if 等:
+            話 += (f"<br>📐 <b>等幅測距</b>：A {等['A'][1]:,.0f}（{等['A'][0]:%m/%d}）→ B {等['B'][1]:,.0f}（{等['B'][0]:%m/%d}）→ "
+                   f"C {等['C'][1]:,.0f}（{等['C'][0]:%m/%d}），第二段{等['型態']}跟第一段一樣大的話目標約 "
+                   f"{等['點數目標']:,.0f}（點數）／{等['百分比目標']:,.0f}（百分比）" + ("，<b>已達成</b>" if 等["已達成"] else ""))
+        st.markdown(f'<div class="verdict">{話}</div>', unsafe_allow_html=True)
+    for b in 背:
+        (st.success if b["型態"] == "底背離" else st.warning)(
+            f"{'🟢' if b['型態'] == '底背離' else '🟠'} {b['型態']}：{b['前低'][0]:%m/%d} {b['前低'][1]:,.0f}（RSI {b['前低'][2]:.0f}）→ "
+            f"{b['後低'][0]:%m/%d} {b['後低'][1]:,.0f}（RSI {b['後低'][2]:.0f}）。{b['說明']}")
+    if 樹:
+        a, b = st.columns(2)
+        a.markdown("**🌳 劇本：偏多**\n" + "\n".join(f"- {x}" for x in 樹["偏多"]))
+        b.markdown("**🌳 劇本：偏空**\n" + "\n".join(f"- {x}" for x in 樹["偏空"]))
+        st.caption(f"關鍵價位是最近的支撐 {樹['關鍵'][0]} {樹['關鍵'][1]:,.0f}；條件成立才換劇本，不預測哪一天會到。"
+                   "回檔尺用 5% 以上的波段；等幅測距是「第二段跟第一段一樣長」的經驗法則，不一定會到。")
+
+
 def 關鍵價位區():
     段落("LEVELS // 關鍵價位：支撐、壓力與觀察條件")
     選 = st.segmented_control("指數", ["加權指數", "櫃買指數"], default="加權指數", key="價位指數",
@@ -575,6 +604,7 @@ def 關鍵價位區():
         st.markdown(燈號卡(項們), unsafe_allow_html=True)
     if 黑:
         st.markdown(黑K卡(黑), unsafe_allow_html=True)
+    波段區(K, sr)
     技術 = 指數技術觀察(代號, _版本)
     if 技術:
         st.markdown("**分析師常用條件**：週線、KD、扣抵值、爆量 K 棒")
@@ -1292,7 +1322,123 @@ def 事件區():
                        "資料：櫃買中心債券發行資料。")
 
 
-首頁區塊 = ["30秒", "市場", "狀態", "價位", "AI解讀", "焦點", "國際", "連動", "加權指數", "權值", "資金", "選擇權", "情緒", "族群", "行事曆", "事件", "排行"]
+import macro
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def 總經資料(版本鍵):
+    美 = engine.讀取美股()
+    行 = pd.read_csv(engine.資料夾 / "econ_calendar.csv") if (engine.資料夾 / "econ_calendar.csv").exists() else None
+    財 = pd.read_csv(engine.資料夾 / "us_earnings.csv") if (engine.資料夾 / "us_earnings.csv").exists() else None
+    K = engine.讀取指數K線("TAIEX")
+    return 美, 行, 財, K
+
+
+def 大事倒數條():
+    """首頁最上面：未來 7 天最近的高影響國際事件倒數。"""
+    try:
+        _, 行, _, _ = 總經資料(_版本)
+        事 = macro.下一個大事(行)
+    except Exception:
+        事 = None
+    if not 事:
+        return
+    剩 = 事["剩"]
+    時 = f"{剩.days} 天 {剩.seconds // 3600} 小時" if 剩.days else f"{剩.seconds // 3600} 小時 {剩.seconds % 3600 // 60} 分"
+    名們 = "、".join(f"{engine.國別.get(e['country'], e['country'])} {engine.經濟中文.get(e['title'], e['title'])}"
+                    + (f"（預期 {e['forecast']}）" if isinstance(e.get("forecast"), str) and e["forecast"] else "") for e in 事["事件們"][:3])
+    st.markdown(f'<div class="verdict">⏰ <b>{時}後</b>（台北 {事["時間"]:%m/%d %H:%M}）：{名們}</div>', unsafe_allow_html=True)
+
+
+def 總經區():
+    段落("MACRO // 總經與國際資金：風險燈、美股溫度、經濟數據、事件統計")
+    美, 行, 財, K = 總經資料(_版本)
+    燈們 = macro.風險燈(美)
+    if 燈們:
+        st.markdown(f"**🌐 全球風險燈**：{macro.風險總結(燈們)}")
+        卡片格([卡片(f"{x['項目']} · {x['日期']:%m/%d}", f"{x['最新']:,.2f}",
+                    f"{x['燈']}　20 日 {x['20日變化']:+.2f}{'%' if x['單位'] == '%' else ''}",
+                    "#FFC24B" if "壓力" in x["燈"] else ("#00D68F" if "寬鬆" in x["燈"] else "#EDEDED")) for x in 燈們])
+        st.caption("；".join(f"{x['項目']}：{x['說明']}" for x in 燈們) + "。資料：Yahoo 財經（美股收盤後更新）。")
+    else:
+        st.caption("美元指數、原油、HYG、美債殖利率下次資料更新後就會出現。")
+    a, b = st.columns(2)
+    with a:
+        比 = macro.費半相對強弱(美)
+        if 比:
+            st.markdown(f"**📉 費半 ÷ S&P 500**：{比['最新']:.3f}，比一年高點（{比['高點日']:%m/%d}）{比['回撤%']:+.1f}%，"
+                        f"20 日 {比['20日變化%']:+.1f}%")
+            圖 = go.Figure(go.Scatter(x=比["序列"].index, y=比["序列"].values, mode="lines", line=dict(color=青, width=2)))
+            st.plotly_chart(圖表外觀(圖, 200), width="stretch", config={"displayModeBar": False})
+            st.caption("比值往下＝半導體輸給大盤，資金從 AI 半導體流出；台股電子權值常跟著弱。")
+    with b:
+        溫 = macro.美股溫度(美)
+        if 溫:
+            st.markdown(f"**🌡️ 美股溫度（價格面）**：{溫['溫度']:.0f} / 100，{溫['看法']}")
+            st.markdown("、".join(f"{k} {v:.0f}" for k, v in 溫["項目"].items()) + f"（距 200 日線 {溫['距200日線%']:+.1f}%）")
+            st.caption("S&P 500 距 200 日線與兩年區間位置、RSI、VIX 反向的百分位平均；75 以上過熱、30 以下偏冷。"
+                       "沒有免費的本益比歷史，所以只看價格，不是真正的估值。")
+        台 = macro.台幣外資(讀檔("讀取匯率", _版本), 市場每日(_版本).get("外資"))
+        if 台:
+            st.markdown(f"**💱 台幣與外資**：美元兌台幣 {台['最新']:.3f}（5 日 {台['5日變化%']:+.2f}%，數字變大＝台幣貶），"
+                        f"外資 5 日 {台['外資5日億']:+,.0f} 億")
+            for w in 台["警示"]:
+                st.warning(w)
+    合, 家 = macro.AI巨頭資本支出(macro.讀取資本支出())
+    if 家 is not None and len(家):
+        st.markdown("**🏗️ AI 巨頭資本支出與自由現金流**（最新一季，億美元）")
+        表格(家, hide_index=True, width="stretch", column_config={c: st.column_config.NumberColumn(format="%.0f") for c in
+             ("資本支出(億美元)", "營業現金流(億美元)", "自由現金流(億美元)")} | {"年增%": st.column_config.NumberColumn(format="%+.0f"),
+             "資本支出÷營業現金流%": st.column_config.NumberColumn(format="%.0f")})
+        if 合 is not None and len(合) >= 2:
+            圖 = go.Figure([go.Bar(x=合.index, y=合["capex"], name="資本支出", marker_color="#FFB020"),
+                           go.Scatter(x=合.index, y=合["fcf"], name="自由現金流", mode="lines+markers", line=dict(color=青))])
+            st.plotly_chart(圖表外觀(圖, 240).update_layout(legend=dict(orientation="h", y=1.1)), width="stretch")
+        st.caption("資本支出越大＝AI 伺服器、散熱、PCB 等台廠訂單越多；但自由現金流（營業現金流 − 資本支出）轉負，代表要靠借錢撐，"
+                   "市場會擔心「AI 投資回不了本」。資料：各公司財報（Yahoo 財經整理）。")
+    數 = macro.美國數據表(macro.讀取美國數據(), 行)
+    if len(數):
+        st.markdown("**📊 美國經濟數據：公布值 vs 預期**")
+        表格(數, hide_index=True, width="stretch", column_config={c: st.column_config.NumberColumn(format="%.2f") for c in ("公布值", "前一期", "預期")})
+        st.caption("通膨、就業「高於預期（偏熱）」＝降息可能延後，對科技股不利；「偏冷」相反。資料：美國勞工統計局（BLS）；預期：Forex Factory（網站開始收集後才有）。")
+    if K is not None:
+        with st.expander("📅 事件與季節統計（加權指數 5 年）"):
+            分 = st.tabs(["FOMC 後隔天", "非農後隔天", "美股財報後隔天", "月份／星期／結算週"])
+            for 頁, (名, 日們) in zip(分[:2], (("FOMC", macro.FOMC日), ("非農", macro.非農日(K["date"].min(), K["date"].max())))):
+                with 頁:
+                    r = macro.事件反應(K, 日們)
+                    if r:
+                        卡片格([卡片(f"{名}後隔天平均", f"{r['平均%']:+.2f}%", f"{r['次數']} 次，上漲機率 {r['上漲機率%']:.0f}%", 漲跌色(r["平均%"])),
+                               卡片("平均波動", f"{r['平均波動%']:.2f}%", f"平常日 {r['平常波動%']:.2f}%")])
+                        表格(r["明細"].head(12).assign(**{"事件日": lambda d: d["事件日"].dt.strftime("%Y/%m/%d"),
+                                                          "台股日": lambda d: d["台股日"].dt.strftime("%Y/%m/%d")}),
+                             hide_index=True, width="stretch", column_config={"漲跌%": st.column_config.NumberColumn(format="%+.2f")})
+                    st.caption("事件在美國晚上公布，台股反應看隔天。非農日用「每月第一個週五」近似。過去統計不代表下次一定一樣。")
+            with 分[2]:
+                反 = macro.財報反應(財, 美, K)
+                if len(反):
+                    st.markdown(f"美股龍頭財報後：加權隔天平均 {反['加權隔日%'].mean():+.2f}%（{len(反)} 次），"
+                                f"美股本身漲時加權平均 {反.loc[反['美股漲跌%'] > 0, '加權隔日%'].mean():+.2f}%、"
+                                f"跌時 {反.loc[反['美股漲跌%'] < 0, '加權隔日%'].mean():+.2f}%")
+                    表格(反.head(30), hide_index=True, width="stretch",
+                         column_config={c: st.column_config.NumberColumn(format="%+.2f") for c in ("美股漲跌%", "加權隔日%", "費半同日%")}
+                         | {c: st.column_config.DateColumn(format="MM/DD") for c in ("財報日", "美股反應日", "台股日")})
+                    st.caption("盤後公布看美股隔天、盤前看當天；台股看美股反應之後的第一個交易日。財報資料從 10 月下旬開始累積。")
+                else:
+                    st.caption("美股財報資料累積中（財報公司的股價下次資料更新後補齊）。")
+            with 分[3]:
+                月, 週, 結 = macro.季節統計(K)
+                c1, c2 = st.columns([3, 2])
+                c1.markdown("**月份效應**")
+                c1.dataframe(月, width="stretch")
+                c2.markdown("**星期效應**")
+                c2.dataframe(週, width="stretch")
+                c2.markdown("**結算週（每月第三個週三那週）**")
+                c2.dataframe(結, width="stretch")
+                st.caption("只有約 5 年資料，每個月份只有 4～5 次樣本，差異多半不顯著，當參考就好。")
+
+
+首頁區塊 = ["30秒", "市場", "狀態", "價位", "AI解讀", "焦點", "國際", "總經", "連動", "加權指數", "權值", "資金", "選擇權", "情緒", "族群", "行事曆", "事件", "排行"]
 
 
 新手區塊 = ["30秒", "市場", "狀態", "AI解讀", "焦點", "排行"]
@@ -1336,7 +1482,7 @@ def _國際():
         國際行情()
     except Exception:
         st.caption("國際行情暫時無法顯示。")
-區塊函式 = {"30秒": 三十秒卡, "市場": 市場卡片, "狀態": 狀態區, "價位": 關鍵價位區, "AI解讀": AI解讀區, "焦點": 焦點區, "國際": _國際, "連動": 連動區,
+區塊函式 = {"30秒": 三十秒卡, "市場": 市場卡片, "狀態": 狀態區, "價位": 關鍵價位區, "AI解讀": AI解讀區, "焦點": 焦點區, "國際": _國際, "總經": 總經區, "連動": 連動區,
          "加權指數": 加權圖 if 加權 is not None and len(加權) > 1 else None, "權值": 權值區, "資金": 資金面區, "選擇權": 選擇權區, "事件": 事件區,
          "情緒": 情緒區, "族群": 族群熱力圖, "行事曆": 行事曆區, "排行": 排行區}
 要畫 = [x for x in 顯示 if 區塊函式.get(x)]
@@ -1363,6 +1509,7 @@ def 區塊片段(名):
         st.rerun(scope="app")
 
 
+大事倒數條()
 盤中即時條()
 for x in 要畫:
     st.markdown(f'<div class="anchor" id="h-{x}"></div>', unsafe_allow_html=True)
