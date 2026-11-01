@@ -951,7 +951,20 @@ def 個股查詢(問):
 
 if __name__ == "__main__":
     模式 = sys.argv[1] if len(sys.argv) > 1 else "daily"
-    if 模式 == "test":
+    if 模式 == "check":
+        設 = bool(os.environ.get("SITE_PASSWORD", "").strip())
+        包, _ = 讀設定("journal.json")
+        日 = 讀日記()
+        if not 設:
+            結果 = "❌ 還沒有設定 SITE_PASSWORD"
+        elif 包 and 包.get("加密") and not 日:
+            結果 = "⚠️ 有設定 SITE_PASSWORD，但解不開交易日記，密碼可能跟網站不一樣"
+        else:
+            庫 = 持股文字().strip().count("\n")
+            結果 = f"✅ SITE_PASSWORD 設定正確，讀到網站庫存 {庫} 檔"
+        print(結果)
+        推播("🔧 設定檢查：" + 結果)
+    elif 模式 == "test":
         推播("✅ 台股觀測實驗室：LINE 推播設定成功！之後每個交易日收盤後會傳摘要給你。")
     elif 模式 == "alert":
         盤中提醒()
