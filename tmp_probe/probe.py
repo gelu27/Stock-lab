@@ -1,3 +1,4 @@
+import sys, os; sys.path.insert(0, os.getcwd())
 import update_data as u, pandas as pd
 for f in (u.抓美國數據, u.抓美股資本支出, u.抓內部人轉讓, u.抓興櫃推薦券商, u.抓重大訊息):
     try:
