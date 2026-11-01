@@ -982,6 +982,96 @@ def 抓美股日線(範圍="2y"):
     print(f"美股日線完成：{表['symbol'].nunique()} 檔，最新 {表['date'].max()}")
 
 
+def 抓費半長線():
+    """費半、S&P 500 從 1994 年起的每日收盤 → data/sox_long.csv（算費半距歷史高點的回撤、歷年大跌後表現）。
+    us_daily.csv 只留 2 年，這個檔只放兩個指數，約 300KB。"""
+    列們 = []
+    for 符號 in ("^SOX", "^GSPC"):
+        try:
+            r = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{requests.utils.quote(符號)}"
+                             "?range=max&interval=1d", headers={"User-Agent": "Mozilla/5.0"}, timeout=60)
+            結果 = r.json()["chart"]["result"][0]
+            時區 = 結果["meta"].get("gmtoffset", 0)
+            列們 += [{"date": dt.datetime.utcfromtimestamp(時 + 時區).strftime("%Y-%m-%d"), "symbol": 符號, "close": round(收, 2)}
+                    for 時, 收 in zip(結果["timestamp"], 結果["indicators"]["quote"][0]["close"]) if 收]
+        except Exception as 錯誤:
+            print(f"費半長線 {符號} 失敗：{錯誤}")
+    if not 列們:
+        return
+    表 = pd.DataFrame(列們)
+    表 = 表[表["date"] >= "1994-01-01"].drop_duplicates(["date", "symbol"], keep="last").sort_values(["symbol", "date"])
+    表.to_csv(資料夾 / "sox_long.csv", index=False)
+    print(f"費半長線完成：{len(表)} 筆（{表['date'].min()}～{表['date'].max()}）")
+
+
+def _表格列(html):
+    """把 HTML 表格拆成每列的儲存格文字（不靠 lxml）。"""
+    import html as 轉碼
+    import re
+    列們 = []
+    for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", html, flags=re.S | re.I):
+        格們 = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", tr, flags=re.S | re.I)
+        列們.append([re.sub(r"\s+", "", 轉碼.unescape(re.sub(r"<[^>]+>", "", g))) for g in 格們])
+    return 列們
+
+
+def _解析夜盤法人(html, 日期):
+    """期交所「盤後交易時段三大法人－區分各期貨契約」頁面 → 台指期、小台、微台三種的各法人多、空、淨交易口數。"""
+    商品們 = {"臺股期貨": "TX", "小型臺指期貨": "MTX", "微型臺指期貨": "TMF"}
+    身份們 = {"自營商": "dealer", "投信": "trust", "外資": "foreign", "外資及陸資": "foreign"}
+    結果, 商品 = [], None
+    for 格們 in _表格列(html):
+        名格 = [g for g in 格們 if "期貨" in g and g not in 身份們]
+        if 名格:  # 這列開始一個新商品（有 rowspan 的第一列）；不是台指三兄弟就略過（電子期、股票期貨…）
+            商品 = next((代 for 名, 代 in 商品們.items() if 名 in 名格[0]), None)
+        身 = next((i for i, g in enumerate(格們) if g in 身份們), None)
+        if 商品 is None or 身 is None:
+            continue
+        數們 = []
+        for g in 格們[身 + 1:]:
+            try:
+                數們.append(float(g.replace(",", "")))
+            except ValueError:
+                pass
+        if len(數們) >= 6:
+            結果.append({"date": 日期, "product": 商品, "who": 身份們[格們[身]],
+                       "long": int(數們[0]), "short": int(數們[2]), "net": int(數們[4]), "net_amt": int(數們[5])})
+    return 結果
+
+
+def 抓夜盤法人(天數=12):
+    """期交所夜盤（15:00～隔天 05:00）三大法人交易口數 → data/futures_night.csv。
+    這是「夜盤當次買賣」不是未平倉；期交所把夜盤歸到下一個交易日，所以日期是夜盤結束後那個交易日。"""
+    檔 = 資料夾 / "futures_night.csv"
+    舊 = pd.read_csv(檔) if 檔.exists() else pd.DataFrame(columns=["date"])
+    有了 = set(舊["date"].astype(str))
+    今天 = dt.datetime.now(台北時區).date()
+    列們 = []
+    for 差 in range(天數, -1, -1):
+        日 = 今天 - dt.timedelta(days=差)
+        if 日.weekday() >= 5 or 日.isoformat() in 有了:
+            continue
+        try:
+            time.sleep(3)
+            r = requests.post("https://www.taifex.com.tw/cht/3/futContractsDateAh", headers=標頭, timeout=60,
+                              data={"queryType": "1", "goDay": "", "doQuery": "1", "dateaddcnt": "",
+                                    "queryDate": f"{日:%Y/%m/%d}", "commodityId": ""})
+            r.encoding = "utf-8"
+            新 = _解析夜盤法人(r.text, 日.isoformat())
+            if 新:
+                列們 += 新
+            else:
+                print(f"夜盤法人 {日} 沒有資料（休市或尚未公布）")
+        except Exception as 錯誤:
+            print(f"夜盤法人 {日} 失敗：{錯誤}")
+    if not 列們:
+        return
+    表 = pd.concat([舊, pd.DataFrame(列們)]).drop_duplicates(["date", "product", "who"], keep="last").sort_values(["date", "product", "who"])
+    表 = 表[表["date"].astype(str) >= (今天 - dt.timedelta(days=400)).isoformat()]
+    表.to_csv(檔, index=False)
+    print(f"夜盤法人完成：最新 {表['date'].max()}，共 {表['date'].nunique()} 天")
+
+
 def 抓指數K線(年數=5):
     """加權指數（證交所 MI_5MINS_HIST）與櫃買指數（櫃買中心 indexInfo/inx）每日開高低收 → data/index_ohlc.csv。
     兩個來源都是一次一個月；第一次會補 5 年，之後只抓上個月和這個月。"""
@@ -1496,7 +1586,7 @@ def main():
     if not 參數.skip_latest:
         for 工作 in (抓分時, 抓興櫃, 抓基本面, 抓匯率, 抓處置注意, 抓借券, 抓法說會, 抓融資金額, 抓期貨未平倉, 抓小台散戶,
                      抓美股日線, 抓經濟行事曆, 抓美股財報, 抓指數K線, 抓選擇權, 抓新股申購, 抓外資持股, 抓當沖, 抓庫藏股, 抓可轉債, 抓公司簡介,
-                     抓內部人轉讓, 抓興櫃推薦券商, 抓重大訊息, 抓美國數據, 抓美股資本支出):  # 這些出問題不影響主資料庫
+                     抓內部人轉讓, 抓興櫃推薦券商, 抓重大訊息, 抓美國數據, 抓美股資本支出, 抓費半長線, 抓夜盤法人):  # 這些出問題不影響主資料庫
             try:
                 工作()
             except Exception as 錯誤:

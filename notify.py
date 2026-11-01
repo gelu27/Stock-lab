@@ -331,6 +331,10 @@ def 提醒事項(代號們):
         行們 += 興櫃承銷提醒(代號們, 狀態)
     except Exception as e:
         print("興櫃承銷失敗：", repr(e))
+    try:
+        行們 += 台幣提醒(狀態)
+    except Exception as e:
+        print("台幣提醒失敗：", repr(e))
     if 狀態 != 舊狀態:
         try:
             寫設定("alert_state.json", 狀態, sha)
@@ -341,6 +345,33 @@ def 提醒事項(代號們):
         行們 += ["", "📅 近 3 天日程"] + [f"{r['日期']:%m/%d} {r['類型']} {r['股票'] if r['代號'] else ''} {r['說明'][:40]}".replace("  ", " ")
                                         for _, r in 日程.iterrows()]
     return 行們
+
+
+def 台幣提醒(狀態):
+    """美元兌台幣接近一年高點（台幣最弱）或台幣與外資同步流出入時通知；同一種警示 5 天內只通知一次。"""
+    import engine
+    import macro
+    匯 = engine.讀取匯率()
+    if 匯 is None or len(匯) < 30:
+        return []
+    外資億 = None
+    價 = engine.讀取資料庫(最近天數=10)
+    if 價 is not None and "foreign" in 價:
+        外資億 = (價["foreign"].astype(float) * 價["close"].astype(float)).groupby(價["date"]).sum() / 1e8
+    結 = macro.台幣外資(匯, 外資億)
+    if not 結 or not 結["警示"]:
+        return []
+    今 = dt.datetime.now(台北).date()
+    記 = 狀態.setdefault("fx", {})
+    新 = []
+    for w in 結["警示"]:
+        鍵 = "high" if "一年高點" in w else ("out" if "流出" in w else "in")
+        上次 = 記.get(鍵)
+        if 上次 and (今 - dt.date.fromisoformat(上次)).days < 5:
+            continue
+        記[鍵] = 今.isoformat()
+        新.append(w)
+    return (["", "💱 台幣與外資"] + 新) if 新 else []
 
 
 def 營收新高提醒(代號們, 狀態):

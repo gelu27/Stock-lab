@@ -515,9 +515,27 @@ def 槓桿趨勢():
     if 燈列:
         表格(pd.DataFrame(燈列), hide_index=True, width="stretch",
              column_config={c: st.column_config.NumberColumn(format="%+d") for c in ("淨未平倉(口)", "較前日(口)", "近 5 日(口)")})
+    夜 = 夜盤法人資料(_版本)
+    if 夜 is not None and len(夜):
+        最 = 夜["date"].max()
+        近 = 夜[夜["date"] == 最]
+        名 = {"TX": "台指期", "MTX": "小台", "TMF": "微台"}
+        身 = {"foreign": "外資", "trust": "投信", "dealer": "自營商"}
+        夜表 = 近.assign(商品=近["product"].map(名), 法人=近["who"].map(身)).pivot_table(
+            index="法人", columns="商品", values="net", aggfunc="sum").reindex(columns=[v for v in 名.values() if v in 近["product"].map(名).values])
+        st.markdown(f"**🌙 夜盤法人交易口數**（歸屬 {最:%m/%d} 的夜盤，多空淨額，口）")
+        表格(夜表.reset_index(), hide_index=True, width="stretch",
+             column_config={c: st.column_config.NumberColumn(format="%+d") for c in 夜表.columns})
+        外 = 近[(近["product"] == "TX") & (近["who"] == "foreign")]
+        if len(外) and len(燈列):
+            未 = next((x["淨未平倉(口)"] for x in 燈列 if x["法人"] == "外資"), None)
+            if 未 is not None:
+                st.caption(f"對照：外資夜盤台指期淨{'買' if 外['net'].iloc[0] >= 0 else '賣'} {abs(外['net'].iloc[0]):,} 口，"
+                           f"但日盤收盤後的淨未平倉是 {未:+,.0f} 口——夜盤的一兩千口只是當晚的動作，方向要看未平倉。")
     st.caption("投信台指期多半是替 ETF 避險或加碼的多單，主要看外資的方向；合計＝三者相加。"
                "「未平倉」是收盤後還留著的多空部位（口數），跟新聞常說的「成交量／交易口數」不同：交易口數是當天買賣了多少口，"
-               "隔天就歸零；未平倉才代表法人押的方向。夜盤（15:00～隔天 05:00）的交易算在下一個交易日，期交所不公布夜盤單獨的法人未平倉。"
+               "隔天就歸零；未平倉才代表法人押的方向。夜盤（15:00～隔天 05:00）的交易算在下一個交易日；期交所只公布夜盤的法人"
+               "「交易口數」（上表），不公布夜盤單獨的未平倉，所以網路上說的「夜盤未平倉」其實多半是交易口數。"
                "資料來源：證交所、櫃買中心、期交所。")
 
 
@@ -1412,6 +1430,16 @@ def 總經資料(版本鍵):
     return 美, 行, 財, K
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def 費半回撤資料(版本鍵):
+    return macro.費半回撤(macro.讀取費半長線())
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def 夜盤法人資料(版本鍵):
+    return macro.讀取夜盤法人()
+
+
 def 大事倒數條():
     """首頁最上面：未來 7 天最近的高影響國際事件倒數。"""
     try:
@@ -1449,6 +1477,21 @@ def 總經區():
             圖 = go.Figure(go.Scatter(x=比["序列"].index, y=比["序列"].values, mode="lines", line=dict(color=青, width=2)))
             st.plotly_chart(圖表外觀(圖, 200), width="stretch", config={"displayModeBar": False})
             st.caption("比值往下＝半導體輸給大盤，資金從 AI 半導體流出；台股電子權值常跟著弱。")
+        撤 = 費半回撤資料(_版本)
+        if 撤:
+            st.markdown(f"**🕳️ 費半距歷史高點**：{撤['最新']:,.0f}，比 {撤['高點日']:%Y/%m/%d} 高點 {撤['高點']:,.0f} "
+                        f"{撤['回撤%']:+.1f}%")
+            明 = 撤["明細"]
+            if len(明):
+                有 = 明.dropna(subset=["之後20日%"])
+                st.markdown(f"{撤['起']:%Y} 年以來費半第一次跌破 −20% 共 {len(明)} 次；之後 20 個交易日平均 "
+                            f"{有['之後20日%'].mean():+.1f}%（上漲 {(有['之後20日%'] > 0).sum()}/{len(有)} 次），"
+                            f"60 日平均 {明['之後60日%'].mean():+.1f}%")
+                with st.expander("歷次費半跌破 −20% 之後"):
+                    表格(明.assign(跌破日=明["跌破日"].dt.strftime("%Y/%m/%d")), hide_index=True, width="stretch",
+                         column_config={c: st.column_config.NumberColumn(format="%+.1f") for c in ("當時回撤%", "之後20日%", "之後60日%", "該段最深%")})
+                    st.caption("同一段大跌只算第一次跌破（回撤要先回到 −5% 以內才算新的一段）。"
+                               "「該段最深」看出跌破 −20% 之後通常還會再跌多少；過去統計不代表下次一樣。")
     with b:
         溫 = macro.美股溫度(美)
         if 溫:
@@ -1481,7 +1524,7 @@ def 總經區():
         st.caption("通膨、就業「高於預期（偏熱）」＝降息可能延後，對科技股不利；「偏冷」相反。資料：美國勞工統計局（BLS）；預期：Forex Factory（網站開始收集後才有）。")
     if K is not None:
         with st.expander("📅 事件與季節統計（加權指數 5 年）"):
-            分 = st.tabs(["FOMC 後隔天", "非農後隔天", "美股財報後隔天", "月份／星期／結算週"])
+            分 = st.tabs(["FOMC 後隔天", "非農後隔天", "美股財報後隔天", "月份／星期／結算週", "自訂區間"])
             for 頁, (名, 日們) in zip(分[:2], (("FOMC", macro.FOMC日), ("非農", macro.非農日(K["date"].min(), K["date"].max())))):
                 with 頁:
                     r = macro.事件反應(K, 日們)
@@ -1514,6 +1557,32 @@ def 總經區():
                 c2.markdown("**結算週（每月第三個週三那週）**")
                 c2.dataframe(結, width="stretch")
                 st.caption("只有約 5 年資料，每個月份只有 4～5 次樣本，差異多半不顯著，當參考就好。")
+            with 分[4]:
+                預設 = st.segmented_control("範本", ["水逆", "自己輸入"], default="水逆", key="區間範本") or "水逆"
+                文字 = "\n".join(f"{a}~{b}" for a, b in macro.水逆區間) if 預設 == "水逆" else ""
+                文字 = st.text_area("日期區間（每行一段：起~迄）", 文字, height=120, key=f"區間文字{預設}",
+                                    placeholder="例如\n2024-01-13~2024-01-13（總統大選）\n2026-11-03~2026-11-10")
+                區們 = macro.解析區間(文字)
+                結 = macro.區間統計(K, 區們) if 區們 else None
+                if 結:
+                    摘, t = 結["摘要"], 結["t值"]
+                    卡片格([卡片("區間內每天平均", f"{摘.loc['區間內', '平均%']:+.3f}%", f"{int(摘.loc['區間內', '天數'])} 天，上漲機率 {摘.loc['區間內', '上漲機率%']:.0f}%",
+                                漲跌色(摘.loc["區間內", "平均%"])),
+                           卡片("其他日子平均", f"{摘.loc['其他日子', '平均%']:+.3f}%", f"上漲機率 {摘.loc['其他日子', '上漲機率%']:.0f}%",
+                                漲跌色(摘.loc["其他日子", "平均%"])),
+                           卡片("差異可信嗎", "可能有差" if abs(t) >= 2 else "看不出差別", f"t 值 {t:+.2f}（絕對值 2 以上才算明顯）",
+                                "#FFC24B" if abs(t) >= 2 else "#EDEDED"),
+                           卡片("各段漲跌", f"{結['漲段']} 漲 / {結['跌段']} 跌", f"共 {len(結['段'])} 段")])
+                    段 = 結["段"]
+                    if len(段):
+                        表格(段.sort_values("起", ascending=False).assign(起=lambda d: d["起"].dt.strftime("%Y/%m/%d"),
+                                                                       迄=lambda d: d["迄"].dt.strftime("%Y/%m/%d")),
+                             hide_index=True, width="stretch",
+                             column_config={c: st.column_config.NumberColumn(format="%+.1f") for c in ("期間漲跌%", "期間最大跌幅%")})
+                    st.caption("用加權指數收盤算：區間內＝落在這些日期裡的交易日。水逆日期是天文曆，拿來檢驗「水逆股市比較差」的說法；"
+                               "期間漲跌從區間開始前一天收盤算到區間最後一天。玄學或節日說法都可以貼日期進來驗證。")
+                elif 文字.strip():
+                    st.caption("看不懂日期或區間內交易日太少，請用「2026-10-24~2026-11-13」這種格式，每行一段。")
 
 
 首頁區塊 = ["30秒", "市場", "狀態", "價位", "AI解讀", "焦點", "國際", "總經", "連動", "加權指數", "權值", "資金", "選擇權", "情緒", "族群", "行事曆", "事件", "排行"]

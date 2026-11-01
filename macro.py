@@ -393,3 +393,96 @@ def 劇本樹(現價, 支撐們, 壓力們):
     空 = [f"跌破 {s1[0]} {s1[1]:,.0f}"] + ([f"→ 先看 {支[1][0]} {支[1][1]:,.0f}"] if len(支) > 1 else ["→ 找下一個支撐"]) + \
          ([f"再破就看 {支[2][0]} {支[2][1]:,.0f}"] if len(支) > 2 else [])
     return {"現價": 現價, "偏多": 多, "偏空": 空, "關鍵": s1}
+
+
+# ---------- 27 補充：費半本身的回撤（長期資料 data/sox_long.csv） ----------
+def 讀取費半長線():
+    f = 資料夾 / "sox_long.csv"
+    if not f.exists():
+        return None
+    t = pd.read_csv(f, parse_dates=["date"])
+    return t.pivot_table(index="date", columns="symbol", values="close").sort_index()
+
+
+def 費半回撤(長, 門檻=-20.0, 重置=-5.0, 往後=(20, 60)):
+    """費半距歷史高點的回撤，以及過去「第一次跌破 門檻%」那天之後 20／60 個交易日的報酬。
+    回撤回到 重置% 以內才算新的一次，避免同一段大跌被算很多次。"""
+    if 長 is None or "^SOX" not in 長:
+        return None
+    s = 長["^SOX"].dropna()
+    if len(s) < 300:
+        return None
+    撤 = (s / s.cummax() - 1) * 100
+    列們, 可觸發 = [], True
+    for i, (d, v) in enumerate(撤.items()):
+        if v > 重置:
+            可觸發 = True
+        elif v <= 門檻 and 可觸發:
+            可觸發 = False
+            列 = {"跌破日": d, "當時回撤%": float(v)}
+            for n in 往後:
+                列[f"之後{n}日%"] = float((s.iloc[i + n] / s.iloc[i] - 1) * 100) if i + n < len(s) else np.nan
+            段 = 撤.iloc[i:]
+            回 = 段[段 > 重置]
+            底 = 段.loc[: 回.index[0]] if len(回) else 段
+            列["該段最深%"] = float(底.min())
+            列們.append(列)
+    明細 = pd.DataFrame(列們).sort_values("跌破日", ascending=False) if 列們 else pd.DataFrame()
+    return {"最新": float(s.iloc[-1]), "日期": s.index[-1], "高點": float(s.cummax().iloc[-1]),
+            "高點日": s.idxmax(), "回撤%": float(撤.iloc[-1]), "門檻": 門檻, "明細": 明細,
+            "起": s.index[0]}
+
+
+# ---------- 34 補充：自訂日期區間回測（例如水逆、選舉） ----------
+水逆區間 = [("2021-01-30", "2021-02-21"), ("2021-05-29", "2021-06-22"), ("2021-09-27", "2021-10-18"),
+          ("2022-01-14", "2022-02-04"), ("2022-05-10", "2022-06-03"), ("2022-09-09", "2022-10-02"),
+          ("2022-12-29", "2023-01-18"), ("2023-04-21", "2023-05-15"), ("2023-08-23", "2023-09-15"),
+          ("2023-12-13", "2024-01-01"), ("2024-04-01", "2024-04-25"), ("2024-08-05", "2024-08-28"),
+          ("2024-11-25", "2024-12-15"), ("2025-03-15", "2025-04-07"), ("2025-07-18", "2025-08-11"),
+          ("2025-11-09", "2025-11-29"), ("2026-02-26", "2026-03-20"), ("2026-06-29", "2026-07-23"),
+          ("2026-10-24", "2026-11-13")]
+
+
+def 解析區間(文字):
+    """每行一段「起~迄」（也接受「起 迄」「起,迄」），日期格式 YYYY-MM-DD 或 YYYY/MM/DD。回傳 [(起, 迄)]，看不懂的行略過。"""
+    import re
+    區們 = []
+    for 行 in str(文字).splitlines():
+        日們 = re.findall(r"\d{4}[-/]\d{1,2}[-/]\d{1,2}", 行)
+        if len(日們) >= 2:
+            起, 迄 = (pd.Timestamp(x.replace("/", "-")) for x in 日們[:2])
+            if 起 <= 迄:
+                區們.append((起, 迄))
+    return 區們
+
+
+def 區間統計(K, 區們):
+    """加權指數在這些日期區間「裡面」和「外面」每天的平均漲跌、上漲機率，加上每一段的累積漲跌。
+    t 值絕對值小於 2 通常代表差異可能只是運氣。"""
+    c = K.sort_values("date").set_index("date")["close"]
+    r = c.pct_change().dropna() * 100
+    內 = pd.Series(False, index=r.index)
+    段們 = []
+    for 起, 迄 in 區們:
+        遮 = (r.index >= 起) & (r.index <= 迄)
+        內 |= 遮
+        前 = c[c.index < 起]
+        段 = c[(c.index >= 起) & (c.index <= 迄)]
+        if len(前) and len(段):
+            段們.append({"起": 起, "迄": 迄, "交易日": int(遮.sum()), "期間漲跌%": float((段.iloc[-1] / 前.iloc[-1] - 1) * 100),
+                       "期間最大跌幅%": float((段.min() / 前.iloc[-1] - 1) * 100), "進行中": bool(迄 > c.index[-1])})
+    a, b = r[內], r[~內]
+    if len(a) < 5 or len(b) < 5:
+        return None
+    t = (a.mean() - b.mean()) / np.sqrt(a.var() / len(a) + b.var() / len(b))
+    摘要 = pd.DataFrame({"天數": [len(a), len(b)], "平均%": [a.mean(), b.mean()], "上漲機率%": [(a > 0).mean() * 100, (b > 0).mean() * 100],
+                       "波動%": [a.std(), b.std()]}, index=["區間內", "其他日子"]).round(3)
+    段表 = pd.DataFrame(段們)
+    return {"摘要": 摘要, "t值": float(t), "段": 段表,
+            "漲段": int((段表["期間漲跌%"] > 0).sum()) if len(段表) else 0, "跌段": int((段表["期間漲跌%"] <= 0).sum()) if len(段表) else 0}
+
+
+# ---------- 12 補充：夜盤三大法人交易口數（data/futures_night.csv） ----------
+def 讀取夜盤法人():
+    f = 資料夾 / "futures_night.csv"
+    return pd.read_csv(f, parse_dates=["date"]) if f.exists() else None
