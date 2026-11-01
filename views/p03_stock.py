@@ -534,25 +534,53 @@ def 個股網紅說法(代號):
 
 
 def 個股券商報告(代號, 收盤):
-    """03 個股 AI 分頁：這檔的券商報告、目標價區間、白話翻譯與交叉驗證。"""
+    """03 個股 AI 分頁：這檔的券商報告、共識面板、目標價拆解、EPS 共識走勢、白話翻譯與交叉驗證。"""
     報告們 = [x for x in 券商報告清單(st.session_state.get("_券商版本", 0)) if str(x.get("代號")) == str(代號)]
     段落("BROKER // 券商報告")
     if not 報告們:
         st.caption("還沒有這檔的券商報告，可以到「04 選股 → 券商報告」上傳 PDF 或目標價截圖。")
         return
     表 = engine.券商報告表(報告們)
-    目 = 表["目標價"].dropna()
-    if len(目):
-        卡片格([卡片("目標價區間", f"{目.min():,.0f} ~ {目.max():,.0f}", f"{len(目)} 份報告，分歧 {(目.max() / 目.min() - 1) * 100:.0f}%"),
-               卡片("中位數距現價", f"{(目.median() / 收盤 - 1) * 100:+.1f}%", f"中位數 {目.median():,.0f}"),
-               卡片("最新修正", f"目標價{表['目標價修正'].iloc[0]}", f"EPS {表['EPS修正'].iloc[0]} · {表['券商'].iloc[0]}")])
+    共 = engine.券商共識(報告們, 收盤)
+    if 共 and 共["目標價數"]:
+        卡們 = [卡片("目標價區間（每家最新）", f"{共['最低']:,.0f} ~ {共['最高']:,.0f}",
+                    f"{共['家數']} 家；最樂觀 {共['最樂觀']}、最悲觀 {共['最悲觀']}"),
+               卡片("共識中位數", f"{共['中位數']:,.0f}", f"距現價 {共['中位數空間%']:+.1f}%", 漲跌色(共["中位數空間%"])),
+               卡片("多／中／空", f"{共['看多']}／{共['中性']}／{共['看空']}", f"上修 {共['上修']} 家、下修 {共['下修']} 家"),
+               卡片("現價在區間的位置", "—" if pd.isna(共.get("現價位置%")) else f"{共['現價位置%']:.0f}%", "0%＝最低目標價、100%＝最高")]
+        if 共["外資家數"] and 共["本土家數"]:
+            卡們.append(卡片("外資 vs 本土中位數", f"{共['外資中位數']:,.0f} / {共['本土中位數']:,.0f}",
+                            f"外資 {共['外資家數']} 家、本土 {共['本土家數']} 家"))
+        卡片格(卡們)
+        st.caption("共識只算近半年、每家券商最新一份，用中位數不用平均，避免被一個極端目標價帶走。")
+    集 = [x for x in engine.集體升降評(報告們) if x[0] == str(代號)]
+    for _, _, 方向, 家, 名們 in 集:
+        (st.success if 方向 == "上修" else st.warning)(f"📣 近 3 天 {家} 家券商同時{方向}目標價：{名們}")
     表 = engine.加潛在空間(表, {str(代號): 收盤})
     表格(表.drop(columns=["代號", "名稱", "現價"]), hide_index=True, width="stretch",
                  column_config={"日期": st.column_config.DateColumn(format="YYYY-MM-DD"),
                                 "潛在空間%": st.column_config.NumberColumn(format="%+.1f%%")})
+    st.caption("標籤：「一次性」＝報告提到業外、處分、回沖等不會重複的獲利；「估 2027」＝用哪一年 EPS 估值；"
+               "「追價上修」＝前次目標價已經低於報告前股價才上修，不當成新的看多訊號。")
+    拆 = engine.目標價拆解(報告們)
+    if len(拆):
+        with st.expander(f"🔍 目標價為什麼變？（{len(拆)} 份有前次目標價）"):
+            表格(拆.drop(columns=["代號", "名稱"]), hide_index=True, width="stretch",
+                 column_config={"日期": st.column_config.DateColumn(format="YYYY-MM-DD")})
+            st.caption("目標價＝倍數 × EPS，所以總變動可以拆成「倍數變動」和「EPS 與估值年度變動」兩塊。"
+                       "主要是倍數變的話，代表券商換了估值看法，不是公司獲利變好。")
+    走 = engine.EPS共識走勢(報告們)
+    if len(走) and 走["日期"].nunique() >= 2:
+        圖 = go.Figure()
+        for 年, g in 走.groupby("年度"):
+            圖.add_trace(go.Scatter(x=g["日期"], y=g["中位數"], mode="lines+markers", name=年,
+                                    customdata=g["家數"], hovertemplate="%{x|%m/%d} %{y:.2f}（%{customdata} 家）<extra></extra>"))
+        st.markdown("**EPS 共識走勢（各券商最新預估的中位數）**")
+        st.plotly_chart(圖表外觀(圖, 260), width="stretch")
     營收 = engine.讀取營收歷史(代號)
     價 = 個股價格(代號)
-    for x in 報告們[:5]:
+    全部 = st.toggle(f"顯示全部 {len(報告們)} 份報告", key=f"券商全部_{代號}") if len(報告們) > 5 else True
+    for x in (報告們 if 全部 else 報告們[:5]):
         驗 = engine.驗收券商報告(x, 價) if 價 is not None else {"結果": "無資料"}
         目 = engine._數(x.get("目標價"))
         空 = f"，空間 {(目 / 收盤 - 1) * 100:+.0f}%" if not np.isnan(目) and 收盤 else ""
@@ -568,6 +596,21 @@ def 個股券商報告(代號, 收盤):
             核 = engine.交叉驗證(x, 營收, 價)
             if 核:
                 st.markdown("**數字核對（跟網站資料比）**\n" + "\n".join(f"- {燈} {說}（{網}）" for 說, 燈, 網 in 核))
+    if 價 is not None:
+        命 = engine.券商命中率(報告們, {str(代號): 價})
+        if not 命.empty:
+            st.markdown("**這檔各券商的準度**")
+            表格(命, width="stretch")
+
+
+def 循環股提醒(r, 概念們):
+    """景氣循環股本益比很低時提醒：可能是獲利高峰，不是便宜。"""
+    循環 = r.get("產業") in engine.循環產業 or any(k in "".join(概念們) for k in engine.循環概念字)
+    pe = r.get("本益比")
+    if 循環 and pd.notna(pe) and 0 < pe < 12:
+        st.info(f"🔄 這是景氣循環股，本益比只有 {pe:.1f} 倍。循環股常在**獲利高峰時本益比最低**（EPS 很大）、"
+                "谷底時本益比最高甚至虧損，所以低本益比不一定便宜。建議改看股價淨值比在歷史的位置，"
+                "或用景氣全周期的平均 EPS 估值；同時留意報價、庫存、運價等領先指標有沒有轉弱。")
 
 
 # ---------- 03 個股查詢 ----------
@@ -598,6 +641,7 @@ if "股本億" not in 今日.columns and 代號 in 股.index:
 概念們 = engine.個股概念(代號)
 if 概念們:
     st.caption("🏷️ 概念股：" + "、".join(概念們))
+循環股提醒(r, 概念們)
 鏈 = engine.產業鏈位置(代號, dict(zip(今日["代號"], 今日["名稱"])))
 if 鏈:
     st.caption("🔗 " + 鏈.replace("\n", "　｜　"))
@@ -1112,7 +1156,14 @@ with 分頁[4]:
         if 券們:
             摘要 += "\n\n使用者上傳的券商報告摘要（數字以此為準，再上網補充）：\n" + "\n".join(
                 f"- {x.get('日期')} {x.get('券商')} {x.get('評等')}，目標價 {x.get('目標價')}（前次 {x.get('前次目標價')}），"
-                f"EPS 今年 {x.get('EPS今年')}／明年 {x.get('EPS明年')}，{x.get('評價方法') or ''}；{x.get('理由') or ''}" for x in 券們)
+                f"EPS 今年 {x.get('EPS今年')}／明年 {x.get('EPS明年')}，{x.get('評價方法') or ''}；{x.get('理由') or ''}"
+                + (f"〔{engine.報告標籤(x)}〕" if engine.報告標籤(x) else "") for x in 券們)
+        全券 = [x for x in 券商報告清單(st.session_state.get("_券商版本", 0)) if str(x.get("代號")) == 代號]
+        if 全券:
+            摘要 += "\n- 券商共識：" + engine.共識文字(engine.券商共識(全券, float(r["收盤"])))
+            集 = [x for x in engine.集體升降評(全券) if x[0] == 代號]
+            if 集:
+                摘要 += "\n- 近 3 天集體調整：" + "；".join(f"{家} 家{方}目標價（{名}）" for _, _, 方, 家, 名 in 集)
         try:
             K = 個股K線(代號)
             價文 = engine.價位摘要(K, 全.set_index("date")["成交值億"] if "成交值億" in 全 else None)
@@ -1140,6 +1191,11 @@ with 分頁[4]:
             else:
                 st.caption(f"讀取過去的 AI 報告失敗：{錯}")
         上次 = 紀錄們[0] if 紀錄們 else None
+        if 上次:
+            卡 = engine.拆解AI建議(上次.get("內容", ""))[1] or {}
+            摘要 += (f"\n\n上次網站 AI 報告（{上次['時間'][:10]}，當時收盤 {上次.get('收盤')}）：看法 {卡.get('看法')}、"
+                   f"合理價 {卡.get('目標價合理')}、評價方法 {卡.get('評價方法')}、今年 EPS {卡.get('今年EPS')}、明年 EPS {卡.get('明年EPS')}、"
+                   f"看錯條件 {卡.get('看錯條件')}")
         天數 = (pd.Timestamp.now(tz="Asia/Taipei").tz_localize(None).normalize()
                 - pd.Timestamp(上次["時間"][:10])).days if 上次 else None
         過久 = int(設定.get("AI_STALE_DAYS", 7))
@@ -1189,6 +1245,23 @@ with 分頁[4]:
                         紀錄們 = [新] + 紀錄們
                         上次, 天數 = 新, 0
                         st.session_state["顯示貼上"] = False
+
+        if 可執行 and 引擎 == "Gemini":
+            會鍵 = f"會診_{代號}_{今天}"
+            if st.button("🩺 AI 多角色會診（技術／籌碼／基本面／唱反調，各 3 句）", key="會診鈕"):
+                用量 = AI用量()
+                if 用量.get(今天, 0) >= int(設定.get("AI_DAILY_LIMIT", 20)):
+                    st.warning("今天的 AI 次數已達上限，明天再試。")
+                else:
+                    with st.spinner("4 位 AI 分析師討論中，約 20 秒…"):
+                        try:
+                            st.session_state[會鍵] = engine.AI多角色會診(代號, r["名稱"], 摘要, 金鑰, 模型)
+                            用量[今天] = 用量.get(今天, 0) + 1
+                        except Exception as 錯:
+                            st.error(f"會診失敗：{錯}")
+            if st.session_state.get(會鍵):
+                with st.container(border=True):
+                    st.markdown(st.session_state[會鍵])
 
         按鈕字 = f"✨ 產生 {代號} {r['名稱']} 的 AI 分析" if not 上次 else "🔄 重新分析"
         if 可執行 and st.button(按鈕字, key="AI按鈕", type="primary" if not 上次 or 天數 >= 過久 else "secondary"):

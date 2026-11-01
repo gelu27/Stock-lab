@@ -311,6 +311,10 @@ def 提醒事項(代號們):
     except Exception as e:
         print("ETF 共識失敗：", repr(e))
     try:
+        行們 += 集體升降評提醒(狀態)
+    except Exception as e:
+        print("集體升降評失敗：", repr(e))
+    try:
         行們 += 條件訂閱提醒(狀態)
     except Exception as e:
         print("選股訂閱失敗：", repr(e))
@@ -385,6 +389,19 @@ def 條件訂閱提醒(狀態, 最多=15):
             if 出:
                 行們.append("　👋 剛剔除：" + "、".join(f"{c} {名.get(c, '')}" for c in 出[:最多]) + (f" 等 {len(出)} 檔" if len(出) > 最多 else ""))
     return (["", "🔔 選股訂閱變動"] + 行們) if 行們 else []
+
+
+def 集體升降評提醒(狀態):
+    """近 3 天 3 家以上券商同方向改目標價（同一檔同方向只通知一次）。"""
+    import engine
+    報告們 = (讀設定("broker_reports.json")[0] or {}).get("報告", [])
+    行們 = []
+    for 代, 名, 方向, 家, 名們 in engine.集體升降評(報告們):
+        鍵 = f"集體_{代}_{方向}"
+        if 狀態.get(鍵) != 家:
+            狀態[鍵] = 家
+            行們.append(f"{代} {名}：{家} 家{方向}目標價（{名們[:40]}）")
+    return ["", "📣 券商集體調整目標價（近 3 天）"] + 行們 if 行們 else []
 
 
 def ETF共識提醒(代號們, 狀態, 門檻=3):

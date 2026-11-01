@@ -847,6 +847,13 @@ def 焦點區():
     if 可編輯():
         我的 = list(庫存代號() or []) + [c for v in 自選股清單().values() for c in v]
     機會, 風險 = engine.焦點清單(今日, 評分, ETF變化, 警示表(_版本), 我的)
+    try:
+        集 = engine.集體升降評(券商報告清單(st.session_state.get("_券商版本", 0)))
+    except Exception:
+        集 = []
+    if 集:
+        st.markdown("📣 **券商集體調整目標價（近 3 天 3 家以上）**：" + "、".join(
+            f"{代} {名} {'⬆' if 方 == '上修' else '⬇'}{家} 家" for 代, 名, 方, 家, _ in 集[:10]))
     左, 右 = st.columns(2)
     for 欄, 名, 表, 鍵 in ((左, "🔍 值得研究", 機會, "焦點機會"), (右, "🛡️ 需要防守", 風險, "焦點風險")):
         with 欄:

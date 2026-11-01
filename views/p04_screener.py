@@ -67,6 +67,20 @@ def 券商報告總覽():
         st.caption("EPS 被上修通常比評等本身更有資訊（券商幾乎都給買進），可以搭配下面的驗收與自己的選股條件一起看。")
     else:
         st.caption("近 30 天沒有上修紀錄。")
+    集 = engine.集體升降評(報告們)
+    if 集:
+        段落("CONSENSUS SHIFT // 近 3 天集體調整目標價（3 家以上同方向）")
+        表格(pd.DataFrame(集, columns=["代號", "名稱", "方向", "家數", "券商"]), hide_index=True, width="stretch")
+        st.caption("很多家券商同時改目標價，比任何單一份報告更能代表法人共識在轉向。")
+    段落("HEAT // 近 7 天被寫最多的股票")
+    熱 = engine.覆蓋熱度(報告們).head(20)
+    if len(熱):
+        表格(熱, hide_index=True, width="stretch", column_config={"目標價中位數": st.column_config.NumberColumn(format="%.1f")})
+    拆 = engine.目標價拆解(報告們)
+    if len(拆):
+        with st.expander(f"🔍 目標價變動拆解（{len(拆)} 份，其中 {拆['倍數變動%'].notna().sum()} 份拆得出倍數）"):
+            表格(拆, hide_index=True, width="stretch", column_config={"日期": st.column_config.DateColumn(format="YYYY-MM-DD")})
+            st.caption("目標價＝倍數 × EPS。主要是倍數變的上修，代表券商在追估值，不是獲利變好。")
     段落("LIST // 全部報告")
     表 = engine.加潛在空間(表, dict(zip(今日["代號"].astype(str), 今日["收盤"])))
     表格(表.drop(columns=["報告收盤價"]), hide_index=True, width="stretch",
@@ -80,7 +94,8 @@ def 券商報告總覽():
         st.caption("還沒有可以驗收的報告。")
     else:
         表格(命, width="stretch")
-        st.caption("達標＝報告後 6 個月內股價碰到目標價；平均報酬＝報告日收盤到現在（最多 6 個月）。"
+        st.caption("達標率＝已達標 ÷（已達標＋到期未達標）；看多後平均＝這家給看多之後的平均報酬。"
+                   "達標＝報告後 6 個月內股價碰到目標價；平均報酬＝報告日收盤到現在（最多 6 個月）。"
                    "多數報告定義「買進」是 6 個月報酬 15～30%，時間還不到 6 個月的算進行中。")
 
 
