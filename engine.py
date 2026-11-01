@@ -180,7 +180,7 @@ def 讀取資料庫(最近天數=None, 代號=None, 起日=None):
         釋放記憶體()
     數字 = 表.select_dtypes("float64").columns
     表[數字] = 表[數字].astype("float32")  # 省記憶體
-    return 表.sort_values(["code", "date"], ignore_index=True)
+    return 修正分割估值(表.sort_values(["code", "date"], ignore_index=True))
 
 
 def 資料起訖():
@@ -226,7 +226,7 @@ def 讀取基本面():
             表["營收創新高"] = (最新["revenue"] >= 以前最高).reindex(表.index).fillna(False)
     f = 資料夾 / "fundamental" / "eps.csv"
     if f.exists():
-        e = pd.read_csv(f, dtype={"code": str}).sort_values(["code", "quarter"])
+        e = 調整分割EPS(pd.read_csv(f, dtype={"code": str})).sort_values(["code", "quarter"])
         最新 = e.drop_duplicates("code", keep="last").set_index("code")
         最新 = 最新.rename(columns={"quarter": "EPS季度", "eps": "EPS"})[["EPS季度", "EPS"]]
         最新["近三季EPS"] = _近三季EPS(e).reindex(最新.index).fillna(最新["EPS"])
@@ -286,7 +286,8 @@ def 近四季EPS(代號):
     t = pd.read_csv(f, dtype={"code": str})
     if "eps" not in t.columns:
         return np.nan, None, np.nan
-    t = t[t["code"] == str(代號)].dropna(subset=["eps"]).sort_values("quarter")
+    t = 調整分割EPS(t[t["code"] == str(代號)])
+    t = t.dropna(subset=["eps"]).sort_values("quarter")
     if t.empty:
         return np.nan, None, np.nan
     t["年"], t["季"] = t["quarter"].str[:4].astype(int), t["quarter"].str[-1].astype(int)
@@ -323,7 +324,7 @@ def 近四季EPS表():
     f = 資料夾 / "fundamental" / "income.csv"
     if not f.exists():
         return pd.DataFrame(columns=["近四季EPS", "EPS季度", "單季EPS"])
-    t = pd.read_csv(f, dtype={"code": str})
+    t = 調整分割EPS(pd.read_csv(f, dtype={"code": str}))
     t = t.dropna(subset=["eps"]).sort_values(["code", "quarter"]).copy()
     t["序"] = t["quarter"].str[:4].astype(int) * 4 + t["quarter"].str[-1].astype(int)
     前 = t.groupby("code")[["序", "eps", "revenue"]].shift()
@@ -778,8 +779,141 @@ def _股本表():
 def _讀股本(_更新時間):
     c = pd.read_csv(資料夾 / "fundamental" / "capital.csv", dtype={"code": str, "industry": str})
     c = c.drop_duplicates("code", keep="last").set_index("code")
-    return pd.DataFrame({"股本億": (c["capital"] / 1e8).round(2), "發行股數": c["shares"],
+    股數 = c["shares"].astype(float)
+    # 面額分割後，公司基本資料的面額常常還沒改（股數＝股本÷10 元），發行股數要乘上分割倍數，市值、週轉率才不會少算
+    for (代號, _, 倍) in 分割紀錄().itertuples(index=False):
+        if 代號 in 股數.index and abs(c.at[代號, "capital"] / 10 - 股數[代號]) < 1:
+            股數[代號] = round(股數[代號] * 倍)
+    return pd.DataFrame({"股本億": (c["capital"] / 1e8).round(2), "發行股數": 股數,
                          "產業": c["industry"].fillna("") if "industry" in c else ""})
+
+
+# ---------- 面額分割（與大比例配股）：每股數字換成分割後的基準 ----------
+分割門檻 = 1.5  # 除權前收盤 ÷ 參考價 ≥ 1.5 才算（面額分割、大比例配股）；一般配股幾%影響小，不處理
+
+
+@lru_cache(maxsize=2)
+def _讀分割(_更新時間):
+    t = pd.read_csv(資料夾 / "fundamental" / "dividend.csv", dtype={"code": str})
+    t = t[t["type"].astype(str).str.strip() == "權"].copy()  # 只有「權」才能用參考價精準算出股數倍數（權息合併的會混到現金股利）
+    t["倍數"] = pd.to_numeric(t["pre_close"], errors="coerce") / pd.to_numeric(t["ref"], errors="coerce")
+    t = t[t["倍數"] >= 分割門檻]
+    t["date"] = pd.to_datetime(t["date"])
+    return t[["code", "date", "倍數"]].sort_values(["code", "date"], ignore_index=True)
+
+
+def 分割紀錄():
+    """面額分割與大比例配股：code、date（分割後第一個交易日）、倍數（1 股變幾股）。來源是交易所除權表的「權」。"""
+    f = 資料夾 / "fundamental" / "dividend.csv"
+    if not f.exists():
+        return pd.DataFrame(columns=["code", "date", "倍數"])
+    return _讀分割(f.stat().st_mtime)
+
+
+def 分割倍數(代號, 日期):
+    """這天的每股數字（EPS、每股淨值、股利）要除以多少，才會跟現在的股數基準一致。"""
+    s = 分割紀錄()
+    s = s[(s["code"] == str(代號)) & (s["date"] > pd.Timestamp(日期))]
+    return float(s["倍數"].prod()) if len(s) else 1.0
+
+
+def 分割倍數序列(代號, 日期們):
+    """每個日期各自的分割倍數（例如換算週轉率：分割前的成交股數要乘上倍數，才能跟現在的發行股數比）。"""
+    日期們 = pd.to_datetime(pd.Series(日期們))
+    倍 = pd.Series(1.0, index=日期們.index)
+    s = 分割紀錄()
+    for 日, 數 in s.loc[s["code"] == str(代號), ["date", "倍數"]].itertuples(index=False):
+        倍[日期們 < 日] *= 數
+    return 倍.to_numpy()
+
+
+_季報期限 = {1: (0, "05-15"), 2: (0, "08-14"), 3: (0, "11-14"), 4: (1, "03-31")}
+
+
+def _季報期限日(季度):
+    年, 季 = int(str(季度)[:4]), int(str(季度)[-1])
+    加年, 月日 = _季報期限[季]
+    return pd.Timestamp(f"{年 + 加年}-{月日}")
+
+
+def 調整分割EPS(t):
+    """財報 EPS 是公布當時的股數算的：分割前公布的季報，EPS 除以分割倍數，才能跟分割後的季報相加、跟現在股價比。
+    t 要有 code、quarter、eps（有 netinc 更準）。季報期限在分割日之前 → 舊股數；
+    季底在分割前、期限在分割後（可能分割前就公布了）→ 用「淨利 ÷ EPS」推算股數，跟上一季比有沒有放大來判斷。"""
+    s = 分割紀錄()
+    if not len(s) or "eps" not in t.columns or not len(t):
+        return t
+    s = s[s["code"].isin(set(t["code"]))]
+    if not len(s):
+        return t
+    t = t.copy()
+    t["eps"] = t["eps"].astype(float)
+    for (代號, 日, 倍) in s.itertuples(index=False):
+        列 = t.index[t["code"] == 代號]
+        if not len(列):
+            continue
+        季們 = t.loc[列, "quarter"]
+        期限 = 季們.map(_季報期限日)
+        季底 = 季們.map(lambda q: pd.Timestamp(f"{str(q)[:4]}-{int(str(q)[-1]) * 3:02d}-01") + pd.offsets.MonthEnd(0))
+        舊 = 期限 < 日
+        模糊 = (季底 < 日) & ~舊
+        if 模糊.any() and "netinc" in t.columns:
+            股數 = (t.loc[列, "netinc"] / t.loc[列, "eps"]).where(t.loc[列, "eps"].abs() > 0)
+            for i in 季們.index[模糊]:
+                前 = 股數[舊 & 股數.notna()]
+                if len(前) and pd.notna(股數[i]):
+                    舊[i] = 股數[i] / 前.iloc[-1] < 倍 ** 0.5  # 股數沒放大 → 還是分割前公布的
+        t.loc[舊[舊].index, "eps"] = t.loc[舊[舊].index, "eps"] / 倍
+    return t
+
+
+@lru_cache(maxsize=64)
+def _分割前估值(代號, 日):
+    """分割前最後一天的每股數字：(收盤÷本益比＝EPS, 收盤÷淨值比＝每股淨值, 收盤×殖利率＝股利)。"""
+    t = _讀每日檔("prices", 代號=[代號], 起日=pd.Timestamp(日) - pd.Timedelta(days=20))
+    if t is None:
+        return None
+    t = t[t["date"] < pd.Timestamp(日)].sort_values("date")
+    return None if t.empty else _每股數字(t.iloc[-1])
+
+
+def _每股數字(r):
+    def 除(a, b):
+        return float(a) / float(b) if pd.notna(a) and pd.notna(b) and float(b) > 0 else np.nan
+    return 除(r["close"], r.get("pe")), 除(r["close"], r.get("pb")), float(r["close"]) * float(r["dy"]) if pd.notna(r.get("dy")) else np.nan
+
+
+def 修正分割估值(表):
+    """交易所的本益比、殖利率、淨值比在分割後一段時間還用舊股數的 EPS、股利、淨值（例如緯穎分割後本益比 25 → 8，實際沒變）。
+    分割日以後，每天的「隱含每股數字」若還跟分割前差不多（沒有縮成 1/倍數），就換算回來；交易所改好後自動停止換算。
+    只看最近 15 個月內的分割（再早的，近四季財報都已是新股數）。"""
+    if 表 is None or not len(表) or not {"pe", "pb", "dy", "close", "date", "code"} <= set(表.columns):
+        return 表
+    s = 分割紀錄()
+    最新 = 表["date"].max()
+    s = s[(s["date"] > 最新 - pd.Timedelta(days=460)) & (s["date"] <= 最新) & s["code"].isin(set(表["code"].unique()))]
+    if not len(s):
+        return 表
+    for 欄 in ("pe", "pb", "dy"):
+        表[欄] = 表[欄].astype("float64")
+    for (代號, 日, 倍) in s.itertuples(index=False):
+        本檔 = 表["code"] == 代號
+        前 = 表[本檔 & (表["date"] < 日)]
+        基 = _每股數字(前.loc[前["date"].idxmax()]) if len(前) else _分割前估值(代號, 日)
+        if 基 is None:
+            continue
+        後 = 表.index[本檔 & (表["date"] >= 日)]
+        收 = 表.loc[後, "close"].astype("float64")
+        門檻 = 倍 ** -0.5  # 介於「沒調整（1）」和「已調整（1/倍數）」的中間
+        for 欄, 基值, 現 in (("pe", 基[0], 收 / 表.loc[後, "pe"]), ("pb", 基[1], 收 / 表.loc[後, "pb"]),
+                            ("dy", 基[2], 收 * 表.loc[後, "dy"])):
+            if not (pd.notna(基值) and 基值 > 0):
+                continue
+            沒調 = 後[((現 / 基值) > 門檻).to_numpy() & (表.loc[後, 欄] > 0).to_numpy()]
+            表.loc[沒調, 欄] = 表.loc[沒調, 欄] * (1 / 倍 if 欄 == "dy" else 倍)
+    for 欄 in ("pe", "pb", "dy"):
+        表[欄] = 表[欄].round(2).astype("float32")
+    return 表
 
 
 # 烏賊 0530 課程「如何選股」的五組條件（原本在 MoneyDJ 選股大師設定）
@@ -2385,8 +2519,13 @@ def 變化解讀(歷史, 週轉, 大):
     """白話解讀（Markdown 條列文字）。歷史：這檔近 N 日的指標表；週轉：每日週轉率 %；大：每週千張大戶表。"""
     說明 = []
     漲 = (歷史["還原價"].iloc[-1] / 歷史["還原價"].iloc[0] - 1) * 100
+    起價, 註 = 歷史["收盤"].iloc[0], ""
+    if "代號" in 歷史.columns:
+        倍 = 分割倍數(歷史["代號"].iloc[-1], 歷史["date"].iloc[0])
+        if 倍 != 1:  # 期間有面額分割，起點價格換成分割後的基準才看得懂
+            起價, 註 = 起價 / 倍, "，起點已換算面額分割"
     說明.append(f"**股價**：這段期間 {'上漲' if 漲 >= 0 else '下跌'} {abs(漲):.1f}%"
-              f"（{歷史['收盤'].iloc[0]:,.2f} → {歷史['收盤'].iloc[-1]:,.2f}）。")
+              f"（{起價:,.2f} → {歷史['收盤'].iloc[-1]:,.2f}{註}）。")
     if 週轉.notna().any():
         近, 平 = 週轉.tail(5).mean(), 週轉.mean()
         倍 = 近 / 平 if 平 else np.nan
@@ -3890,7 +4029,8 @@ def 金融股獲利表():
         return pd.DataFrame()
     t = pd.read_csv(f, dtype={"code": str})
     金 = _股本表().index[_股本表()["產業"] == "金融保險"]
-    t = t[t["code"].isin(金)].dropna(subset=["eps"]).sort_values(["code", "quarter"]).copy()
+    t = 調整分割EPS(t[t["code"].isin(金)])
+    t = t.dropna(subset=["eps"]).sort_values(["code", "quarter"]).copy()
     if t.empty:
         return pd.DataFrame()
     t["序"] = t["quarter"].str[:4].astype(int) * 4 + t["quarter"].str[-1].astype(int)

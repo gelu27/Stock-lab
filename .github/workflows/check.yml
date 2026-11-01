@@ -21,3 +21,5 @@ jobs:
         run: python tests/test_pages.py
       - name: 融資成本估算
         run: python tests/test_margin.py
+      - name: 面額分割換算
+        run: python tests/test_split.py
