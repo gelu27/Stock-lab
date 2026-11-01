@@ -6,10 +6,10 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "test = 傳測試訊息、daily-force = 立刻傳最近一天收盤摘要、alert = 檢查到價"
+        description: "test = 傳測試訊息、daily-force = 立刻傳最近一天收盤摘要、alert = 檢查到價、check = 檢查 SITE_PASSWORD"
         default: test
         type: choice
-        options: [test, daily-force, alert]
+        options: [test, daily-force, alert, check]
 
 permissions:
   contents: write
