@@ -101,7 +101,7 @@ def 券商報告總覽():
 
 網紅指令 = ("請用繁體中文完整整理這支影片，不要只寫摘要，也不要加入你自己的看法：（貼上影片連結）\n"
           "格式：一、頻道、日期、長度。二、逐段內容（時間點、講什麼、理由），保留所有數字。"
-          "三、提到的股票（每檔一行：代號 名稱：看多或看空。理由：…，有價位要寫）。四、所有「如果…就…」的判斷條件。"
+          "三、提到的股票（每檔一行：代號 名稱：看多或看空。理由：…，有價位要寫）。四、所有「如果…就…」的判斷條件（有提到股票名稱、均線天數或價位的要原樣寫出來，例如「台積電站回 20 週均線就買回」）。"
           "五、引用的資料來源。六、畫面上的圖表與字卡。七、影片本身前後矛盾或沒說清楚的地方"
           "（不要用你自己的知識判斷股價、EPS 等數字對不對，你的資料可能不是最新的）。")
 
@@ -146,8 +146,15 @@ def 網紅說法總覽():
     if not 影片們:
         st.caption("還沒有影片。存進來後，這裡會整理每位分析師的看法、紅旗，並在 20 個交易日後對答案。")
         return
+    排除 = [v for v in 影片們 if engine.是AI工具影片(v)]
+    影片們 = [v for v in 影片們 if not engine.是AI工具影片(v)]
+    if 排除:
+        st.caption(f"已排除 {len(排除)} 支在講 AI 工具用法的影片（不是在講股票）：" + "、".join(str(v.get("標題") or v["頻道"])[:20] for v in 排除[:5]))
     代們 = {str(x["代號"]) for v in 影片們 for x in v.get("股票", []) if str(x.get("代號", "")).isdigit()}
     價們 = {c: 個股價格(c) for c in 代們}
+    網紅熱度區(影片們)
+    網紅條件區(影片們, 價們)
+    網紅價位區(影片們)
     明細, 彙 = engine.網紅對答案(影片們, {k: v for k, v in 價們.items() if v is not None}, 指數K線("TAIEX", _版本))
     段落("SCORE // 誰說得準（20 個交易日後，扣掉大盤漲跌）")
     if 彙.empty:
@@ -169,6 +176,61 @@ def 網紅說法總覽():
                                     "超額%": st.column_config.NumberColumn(format="%+.1f")})
     st.caption("紅旗是規則自動標的：用績效建立可信度、保證獲利用語、業配、沒有條件、幾乎全部看多、點名太多檔、沒有價位。"
                "有紅旗不代表說錯，只是要多查證。")
+
+
+def 網紅熱度區(影片們):
+    熱 = engine.網紅共識熱度(影片們, 天數=14)
+    段落("HEAT // 近 14 天被多個頻道點名")
+    if 熱.empty:
+        st.caption("近 14 天沒有被 2 個以上頻道點名的股票。")
+        return
+    熱 = 熱.head(15)
+    表格(熱, hide_index=True, width="stretch")
+    st.caption("同一檔被很多頻道一起講，常是題材最熱的時候；全部看多時要小心是不是已經漲一段。看多／看空是各有幾個頻道。")
+
+
+def 網紅條件區(影片們, 價們):
+    清單 = engine.網紅條件清單(影片們, 天數=30, 名表=dict(zip(今日["名稱"], 今日["代號"])))
+    段落("CHECK // 「如果…就…」條件現在成立了嗎（近 30 天影片）")
+    if not 清單:
+        st.caption("近 30 天的影片沒有條件。")
+        return
+    匯 = 讀檔("讀取匯率", _版本)
+    外 = None
+    if 有籌碼:
+        近 = 指標[指標["date"] >= 最新日 - pd.Timedelta(days=20)]
+        外 = (近["外資買超"] * 1000 * 近["收盤"]).groupby(近["date"]).sum() / 1e8
+    K加 = 指數K線("TAIEX", _版本)
+    列們 = []
+    for r in 清單:
+        K = None
+        if r["代號"] == "TAIEX":
+            K = K加
+        elif r["代號"]:
+            p = 價們.get(r["代號"]) if r["代號"] in 價們 else 個股價格(r["代號"])
+            K = p.rename(columns={"收盤": "close"}) if p is not None else None
+        狀, 說 = engine.檢查條件(r["條件"], r["標的"] or "", K, 匯, 外)
+        if 狀:
+            列們.append({"影片日": r["日期"], "頻道": r["頻道"], "條件": r["條件"],
+                       "現在": "✅ 成立" if 狀 == "成立" else "⏳ 還沒", "依據": 說})
+    if not 列們:
+        st.caption(f"{len(清單)} 個條件裡，沒有網站看得懂的（只會判斷均線、價位、KD 交叉、台幣、外資）。")
+        return
+    表格(pd.DataFrame(列們), hide_index=True, width="stretch",
+         column_config={"影片日": st.column_config.DateColumn(format="MM/DD")})
+    st.caption(f"{len(清單)} 個條件裡有 {len(列們)} 個網站能自動判斷，只看條件的前半段（例如「站回 20 週線」）現在是不是真的。"
+               "條件成立不代表後半段（就會漲）一定發生。")
+
+
+def 網紅價位區(影片們):
+    價 = engine.網紅價位(影片們, dict(zip(今日["代號"], 今日["收盤"])), 天數=60)
+    if 價.empty:
+        return
+    段落("PLAN // 評論者給的價位（近 60 天）")
+    表格(價.sort_values("日期", ascending=False), hide_index=True, width="stretch",
+         column_config={"日期": st.column_config.DateColumn(format="MM/DD"),
+                        "距離%": st.column_config.NumberColumn(format="%+.1f")})
+    st.caption("從理由裡挑出「支撐、停損、目標價 … 元」。距離%＝價位比現價高或低多少。")
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner="計算各策略過去的表現（第一次約 10 秒）…")

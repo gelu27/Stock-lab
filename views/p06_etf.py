@@ -157,7 +157,7 @@ if 分析["較晚"] or 分析["未追蹤"]:
     st.caption(("**較晚揭露**（資料日比其他檔早，多為 T+1 公布）：" + "、".join(分析["較晚"]) + "　" if 分析["較晚"] else "")
                + ("**沒有每日持股資料**：" + "、".join(分析["未追蹤"]) + "（多為投資海外，或投信未公開每日持股）"
                   if 分析["未追蹤"] else ""))
-ETF頁 = st.tabs(["📝 今日解讀", "🔥 個股視角", "🏦 基金視角", "🏆 持股排名", "🔍 單一 ETF", "🔎 個股反查"])
+ETF頁 = st.tabs(["📝 今日解讀", "🔥 個股視角", "🏦 基金視角", "🏆 持股排名", "🔍 單一 ETF", "🔎 個股反查", "🎯 經理人記分板"])
 
 with ETF頁[0]:
     段落(f"TODAY // 今日解讀　{資料日:%Y/%m/%d}")
@@ -462,3 +462,35 @@ with ETF頁[5]:
 st.caption("資料來源：優先用各投信官網每日公布的持股（野村、統一、群益、復華、中信、第一金、富邦、凱基、摩根、台新、永豐、聯博、安聯）；"
            "官網抓不到時改用公開彙整 nctuwanglin.github.io/active-etf，再不行用 github.com/janeytu/tw-etf-pages 的快照"
            "（國泰、兆豐官網擋 GitHub，只能靠彙整）。總覽表的「來源」欄可看每檔用的是哪一個。僅供研究參考，不構成投資建議。")
+
+
+with ETF頁[6]:
+    段落("SCORE // 經理人加碼之後 20 個交易日，有沒有贏大盤")
+    明, 彙, 爛 = engine.經理人記分板(變化, 寬價格(_版本), 指數K線("TAIEX", _版本))
+    if 彙.empty:
+        st.caption("還沒有足夠的加碼紀錄。")
+    else:
+        名 = dict(zip(今日["代號"], 今日["名稱"]))
+        def 整理(t):
+            t = t.reset_index()
+            t.insert(1, "名稱", t["etf"].map(名).fillna(""))
+            return t.rename(columns={"etf": "ETF"})
+        格 = {"平均超額%": st.column_config.NumberColumn(format="%+.1f"), "贏大盤%": st.column_config.NumberColumn(format="%.0f"),
+             "已到期": st.column_config.NumberColumn(format="%.0f")}
+        表格(整理(彙), hide_index=True, width="stretch", column_config=格)
+        st.caption("每次「新增／加碼」（已扣掉申購造成的被動買進）之後 20 個交易日的股價報酬 − 同期加權報酬，取平均。"
+                   "已到期＝滿 20 天的次數；贏大盤%＝有幾成的加碼之後贏大盤。持股資料只留近 70 天，樣本會慢慢變多。")
+        段落("CONTRARIAN // 爛盤逆勢加碼（加權當天跌 1% 以上還在買）")
+        if 爛.empty:
+            st.caption("最近沒有大跌日的加碼紀錄。")
+        else:
+            表格(整理(爛), hide_index=True, width="stretch", column_config=格)
+            近 = 明[明["爛盤"]].sort_values("date", ascending=False).head(15)
+            if len(近):
+                表格(pd.DataFrame({"日期": 近["date"].dt.strftime("%m/%d"), "ETF": 近["etf"], "代號": 近["code"],
+                                   "名稱": 近["name"], "大盤%": 近["大盤%"], "之後超額%": 近["超額%"],
+                                   "滿20天": np.where(近["到期"], "✓", "")}),
+                     hide_index=True, width="stretch",
+                     column_config={"大盤%": st.column_config.NumberColumn(format="%+.2f"),
+                                    "之後超額%": st.column_config.NumberColumn(format="%+.1f")})
+            st.caption("大家都在賣的時候還敢加碼，比較能看出經理人真的有信心。不滿 20 天的超額是到最新一天為止。")

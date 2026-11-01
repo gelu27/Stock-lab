@@ -5646,3 +5646,230 @@ def 讀取公司介紹(代號, 設定):
 
 def 儲存公司介紹(代號, 紀錄, 設定):
     return 儲存設定檔(設定, f"company/{代號}.json", 紀錄, f"公司介紹 {代號}")
+
+
+# ========== 第四批：董監轉讓、經理人記分板、網紅條件與價位 ==========
+def 讀取內部人轉讓():
+    """data/insider_transfer.csv：董監大股東轉讓事前申報（每天抓當天的，慢慢累積）。"""
+    return _讀("insider_transfer.csv", dtype={"code": str}, parse_dates=["date"])
+
+
+def 價格寬表(指標, 欄="還原價"):
+    """指標（代號, date, 還原價）→ 以日期為 index、代號為欄位的寬表，算事件後報酬用。"""
+    if 指標 is None or not len(指標):
+        return pd.DataFrame()
+    return 指標.pivot_table(index="date", columns="代號", values=欄, aggfunc="last").sort_index()
+
+
+def 事件後報酬(事件, 寬表, 加權=None, 天數=20, 代欄="code", 日欄="date"):
+    """每個事件（代號＋日期）之後 天數 個交易日的報酬，扣掉同期加權＝超額報酬。
+    以事件日收盤為基準（申報、ETF 公布持股都是收盤後才知道）。不到期的用最新價，標「到期」=False。"""
+    t = 事件.copy()
+    t["報酬%"], t["超額%"], t["到期"] = np.nan, np.nan, False
+    if 寬表.empty or not len(t):
+        return t
+    日們 = 寬表.index
+    加 = None
+    if 加權 is not None and len(加權):
+        加 = 加權.set_index("date")["close"].reindex(日們).ffill()
+    起位 = 日們.searchsorted(pd.to_datetime(t[日欄]).values, side="right") - 1
+    報, 超, 到 = [], [], []
+    for 位, c in zip(起位, t[代欄].astype(str)):
+        if 位 < 0 or c not in 寬表.columns or 位 >= len(日們) - 1:
+            報.append(np.nan); 超.append(np.nan); 到.append(False)
+            continue
+        終 = min(位 + 天數, len(日們) - 1)
+        a, b = 寬表[c].iloc[位], 寬表[c].iloc[終]
+        r = (b / a - 1) * 100 if pd.notna(a) and pd.notna(b) and a > 0 else np.nan
+        報.append(r)
+        超.append(r - (加.iloc[終] / 加.iloc[位] - 1) * 100 if 加 is not None and pd.notna(r) else r)
+        到.append(位 + 天數 <= len(日們) - 1)
+    t["報酬%"], t["超額%"], t["到期"] = np.round(報, 1), np.round(超, 1), 到
+    return t
+
+
+def 內部人記分板(轉讓, 寬表, 加權=None):
+    """董監申報轉讓之後 20／60 天，股價有沒有比大盤差。依申報方式分組（一般交易＝在市場上賣，最值得注意）。"""
+    if 轉讓 is None or not len(轉讓):
+        return pd.DataFrame(), pd.DataFrame()
+    t = 事件後報酬(轉讓, 寬表, 加權, 20)
+    t60 = 事件後報酬(轉讓, 寬表, 加權, 60)
+    t["超額60%"], t["到期60"] = t60["超額%"].values, t60["到期"].values
+    t["方式"] = t["方式"].fillna("").str.replace(r"\(.*\)", "", regex=True).str.strip()
+    g = t.groupby("方式")
+    彙 = pd.DataFrame({"筆數": g.size(), "20天到期": g["到期"].sum(),
+                      "20天平均超額%": g.apply(lambda x: x.loc[x["到期"], "超額%"].mean()).round(1),
+                      "20天輸大盤%": g.apply(lambda x: (x.loc[x["到期"], "超額%"] < 0).mean() * 100).round(0),
+                      "60天平均超額%": g.apply(lambda x: x.loc[x["到期60"], "超額60%"].mean()).round(1)})
+    return t, 彙.sort_values("筆數", ascending=False)
+
+
+def 經理人記分板(變化, 寬表, 加權=None, 天數=20, 爛盤=-1.0):
+    """主動式 ETF 每次「新增／加碼」之後 天數 個交易日的超額報酬，看哪位經理人的加碼最準。
+    另外單獨看「爛盤逆勢加碼」：加權當天跌 1% 以上還在加碼。回傳 (明細, 依 ETF 彙總, 爛盤彙總)。"""
+    if 變化 is None or not len(變化):
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    e = 變化[變化["type"].isin(["新增", "加碼"])].copy()
+    if "adj_amount" in e:
+        e = e[e["adj_amount"].fillna(0) > 0]
+    e = 事件後報酬(e, 寬表, 加權, 天數)
+    if 加權 is not None and len(加權):
+        漲 = 加權.set_index("date")["close"].pct_change() * 100
+        e["大盤%"] = pd.to_datetime(e["date"]).map(漲).round(2)
+    else:
+        e["大盤%"] = np.nan
+    e["爛盤"] = e["大盤%"] <= 爛盤
+
+    def 彙(t):
+        到 = t[t["到期"]]
+        if not len(t):
+            return pd.DataFrame()
+        g, gd = t.groupby("etf"), 到.groupby("etf")
+        r = pd.DataFrame({"加碼次數": g.size(), "已到期": gd.size(), "平均超額%": gd["超額%"].mean().round(1),
+                          "贏大盤%": gd["超額%"].apply(lambda s: (s > 0).mean() * 100).round(0)}).fillna({"已到期": 0})
+        return r.sort_values(["平均超額%"], ascending=False)
+    return e, 彙(e), 彙(e[e["爛盤"]])
+
+
+AI工具字 = re.compile(r"ChatGPT|Gemini|Claude|NotebookLM|Copilot|Perplexity|提示詞|[Pp]rompt|AI\s*工具|AI\s*教學|GPTs")
+
+
+def 是AI工具影片(v):
+    """在講怎麼用 AI 工具的影片（不是在講股票），不計入對答案與熱度。"""
+    文 = f"{v.get('標題') or ''} {v.get('頻道') or ''}"
+    return bool(AI工具字.search(文)) and len(v.get("股票") or []) <= 1
+
+
+def 網紅共識熱度(影片們, 天數=14, 今天=None, 最少頻道=2):
+    """最近 天數 天被 2 個以上頻道點名的股票，看多／看空各幾個頻道。"""
+    今天 = pd.Timestamp(今天 or pd.Timestamp.today().normalize())
+    列們 = [{"代號": str(x.get("代號")), "名稱": x.get("名稱"), "看法": x.get("看法"), "頻道": v.get("頻道")}
+           for v in 影片們 if not 是AI工具影片(v)
+           and pd.notna(d := pd.to_datetime(v.get("日期"), errors="coerce")) and d >= 今天 - pd.Timedelta(days=天數)
+           for x in v.get("股票", [])]
+    t = pd.DataFrame(列們)
+    if t.empty:
+        return t
+    g = t.groupby("代號")
+    彙 = pd.DataFrame({"名稱": g["名稱"].first(), "頻道數": g["頻道"].nunique(),
+                      "看多": g.apply(lambda x: x.loc[x["看法"] == "看多", "頻道"].nunique()),
+                      "看空": g.apply(lambda x: x.loc[x["看法"] == "看空", "頻道"].nunique()),
+                      "頻道": g["頻道"].apply(lambda s: "、".join(dict.fromkeys(s))[:60])}).reset_index()
+    return 彙[彙["頻道數"] >= 最少頻道].sort_values(["頻道數", "看多"], ascending=False)
+
+
+價位字 = re.compile(r"(支撐|壓力|停損|目標價?|上看|跌破|站上|站回|守住?|突破|買點|賣點|回測|低接|加碼|減碼)"
+                 r"[^\d，。；]{0,6}?(\d{2,5}(?:\.\d+)?)\s*(?:元|塊)")
+
+
+def 網紅價位(影片們, 現價=None, 天數=60, 今天=None):
+    """從理由裡挑出「支撐 / 停損 / 目標價 … N 元」這種價位計畫，和現價比距離。"""
+    今天 = pd.Timestamp(今天 or pd.Timestamp.today().normalize())
+    列們 = []
+    for v in 影片們:
+        d = pd.to_datetime(v.get("日期"), errors="coerce")
+        if pd.isna(d) or d < 今天 - pd.Timedelta(days=天數) or 是AI工具影片(v):
+            continue
+        for x in v.get("股票", []):
+            for 類, 價 in 價位字.findall(str(x.get("理由") or "")):
+                價 = float(價)
+                現 = (現價 or {}).get(str(x.get("代號")))
+                if 現 and not (現 * 0.3 < 價 < 現 * 3):
+                    continue  # 像「2028 年」「EPS 200 元」這種不是股價
+                列們.append({"日期": d, "頻道": v.get("頻道"), "代號": str(x.get("代號")), "名稱": x.get("名稱"),
+                           "類型": 類, "價位": 價, "現價": 現,
+                           "距離%": round((價 / 現 - 1) * 100, 1) if 現 else np.nan})
+    return pd.DataFrame(列們)
+
+
+def 數字查核(理由, 本益比=None, EPS=None):
+    """影片說的「EPS × 倍數」和網站目前數字並列，不幫影片判對錯，只提醒差多少。"""
+    文 = str(理由 or "")
+    說 = []
+    m倍 = re.search(r"(\d{1,3}(?:\.\d+)?)\s*倍", 文)
+    mE = re.search(r"EPS[^\d]{0,6}(\d{1,4}(?:\.\d+)?)", 文)
+    if m倍:
+        說.append(f"影片用 {m倍.group(1)} 倍" + (f"，網站目前本益比 {本益比:.1f} 倍" if 本益比 and 本益比 > 0 else ""))
+    if mE:
+        說.append(f"影片用 EPS {mE.group(1)}" + (f"，網站近四季 EPS {EPS:.2f}" if EPS is not None and EPS == EPS else ""))
+    return "；".join(說)
+
+
+_週期 = {"日": 1, "週": 5, "周": 5, "月": 20}
+
+
+def 條件目標(文字, 股票們, 名表=None):
+    """條件講的是哪一個標的：先找影片點名的股票名稱，再看有沒有講大盤。回傳 (代號, 名稱) 或 None。"""
+    for x in 股票們 or []:
+        if x.get("名稱") and x["名稱"] in 文字 and str(x.get("代號", "")).isdigit():
+            return str(x["代號"]), x["名稱"]
+    for 名, 代 in (名表 or {}).items():
+        if len(名) >= 2 and 名 in 文字:
+            return str(代), 名
+    if re.search(r"台股|大盤|加權|指數", 文字):
+        return "TAIEX", "加權指數"
+    return None
+
+
+def 檢查條件(文字, 標的, K=None, 匯率=None, 外資億=None):
+    """把一句「如果…就…」的前半段拿來跟現在的資料比。K＝標的日 K（date, close 由舊到新）。
+    回傳 (狀態, 說明)；狀態：成立／未成立／None（看不懂或沒資料）。只判斷看得懂的幾種：均線、價位、KD 交叉、台幣、外資。"""
+    文 = str(文字)
+    if K is not None and len(K) >= 20:
+        收 = K["close"].astype(float).reset_index(drop=True)
+        現 = float(收.iloc[-1])
+        m = re.search(r"(站上|站回|突破|守住|跌破|失守|跌到)\s*(\d{1,3})\s*(日|週|周|月)\s*(?:均線|線|均)", 文)
+        if m:
+            n = int(m.group(2)) * _週期[m.group(3)]
+            if len(收) >= n:
+                線 = float(收.tail(n).mean())
+                上 = 現 > 線
+                要上 = m.group(1) in ("站上", "站回", "突破", "守住")
+                return ("成立" if 上 == 要上 else "未成立",
+                        f"{標的} 收盤 {現:,.2f}，{m.group(2)}{m.group(3)}線 {線:,.2f}（{'在上面' if 上 else '在下面'}）")
+        m = re.search(r"(站上|站回|突破|守住|跌破|失守|跌到|回到)\s*(\d{2,6}(?:\.\d+)?)\s*(點|元)?", 文)
+        if m and not re.match(r"\d+\s*(日|週|周|月)", 文[m.end(2):m.end(2) + 2]):
+            價 = float(m.group(2))
+            if 現 * 0.5 < 價 < 現 * 2:
+                要上 = m.group(1) in ("站上", "站回", "突破", "守住", "回到")
+                上 = 現 >= 價
+                return ("成立" if 上 == 要上 else "未成立", f"{標的} 收盤 {現:,.2f}，條件價 {價:,.0f}")
+        if re.search(r"KD", 文) and re.search(r"黃金交叉|死亡交叉", 文) and "high" in K and "low" in K:
+            高, 低 = K["high"].astype(float).reset_index(drop=True), K["low"].astype(float).reset_index(drop=True)
+            rsv = (收 - 低.rolling(9).min()) / (高.rolling(9).max() - 低.rolling(9).min()) * 100
+            k = rsv.ewm(alpha=1 / 3, adjust=False).mean()
+            d = k.ewm(alpha=1 / 3, adjust=False).mean()
+            近 = (k > d).tail(4).tolist()
+            金 = 近[-1] and not all(近)
+            死 = (not 近[-1]) and any(近)
+            要金 = "黃金交叉" in 文
+            return ("成立" if (金 if 要金 else 死) else "未成立",
+                    f"{標的} K {k.iloc[-1]:.0f}、D {d.iloc[-1]:.0f}" + ("，近 3 天黃金交叉" if 金 else "，近 3 天死亡交叉" if 死 else ""))
+    if "台幣" in 文 and 匯率 is not None and len(匯率) >= 6 and re.search(r"貶|升", 文):
+        x = 匯率["usdtwd"].dropna()
+        變 = (float(x.iloc[-1]) / float(x.iloc[-6]) - 1) * 100
+        貶 = 變 > 0
+        要貶 = bool(re.search(r"續貶|貶值|做頭續貶|再貶", 文)) or ("貶" in 文 and "止貶" not in 文)
+        if "止貶" in 文 or "升值" in 文:
+            要貶 = False
+        return ("成立" if 貶 == 要貶 else "未成立", f"近 5 日美元兌台幣 {變:+.2f}%（{'台幣貶' if 貶 else '台幣升'}）")
+    if "外資" in 文 and 外資億 is not None and len(外資億) >= 5 and re.search(r"買|賣", 文):
+        五 = float(外資億.tail(5).sum())
+        要賣 = bool(re.search(r"賣", 文)) and not re.search(r"回補|轉買|買超", 文)
+        return ("成立" if (五 < 0) == 要賣 else "未成立", f"外資近 5 日{'賣超' if 五 < 0 else '買超'} {abs(五):,.0f} 億")
+    return None, ""
+
+
+def 網紅條件清單(影片們, 天數=30, 今天=None, 名表=None):
+    """最近 天數 天影片的「如果…就…」條件，附上要拿哪個標的去檢查。"""
+    今天 = pd.Timestamp(今天 or pd.Timestamp.today().normalize())
+    列們 = []
+    for v in 影片們:
+        d = pd.to_datetime(v.get("日期"), errors="coerce")
+        if pd.isna(d) or d < 今天 - pd.Timedelta(days=天數) or 是AI工具影片(v):
+            continue
+        for 條 in v.get("條件") or []:
+            目 = 條件目標(條, v.get("股票"), 名表)
+            列們.append({"日期": d, "頻道": v.get("頻道"), "條件": 條, "代號": 目[0] if 目 else None,
+                       "標的": 目[1] if 目 else None})
+    return 列們
