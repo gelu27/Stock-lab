@@ -10,6 +10,8 @@
 #   LINE_TOKEN    LINE Messaging API 的 Channel access token（必填）
 #   LINE_USER_ID  你的 LINE User ID（選填；沒填就用 broadcast 傳給所有加好友的人，只有你自己的話效果一樣）
 #   HOLDINGS      庫存 CSV（選填，跟 Streamlit Secrets 的 holdings 一樣格式），有填才會附上今日損益
+#   SITE_PASSWORD 網站密碼（選填，跟 Streamlit Secrets 的 password 一樣）。有填就直接讀網站上改過的庫存與交易日記
+#                 （停損價跌破會通知），不用再手動改 HOLDINGS
 # 自選股與到價提醒在網站上設定，存在 ai-reports 分支的 watchlist.json、alerts.json。
 
 import base64
@@ -52,6 +54,67 @@ def 寫設定(檔名, 內容物, sha):
         資料["sha"] = sha
     requests.put(f"https://api.github.com/repos/{倉庫}/contents/{檔名}", headers=_gh標頭(), json=資料,
                  timeout=30).raise_for_status()
+
+
+_日記快取 = {}
+
+
+def 讀日記():
+    """網站的交易日記（ai-reports 分支 journal.json，有設密碼會加密），要設定 SITE_PASSWORD 才解得開。"""
+    if "v" not in _日記快取:
+        日記 = {}
+        包, _ = 讀設定("journal.json")
+        if 包:
+            try:
+                import engine
+                日記 = engine.解密(包, os.environ.get("SITE_PASSWORD", "").strip()) if 包.get("加密") else 包
+            except Exception as e:
+                print("交易日記解不開（SITE_PASSWORD 沒設或不對）：", repr(e))
+        _日記快取["v"] = 日記
+    return _日記快取["v"]
+
+
+def 持股文字():
+    """庫存 CSV 文字（代號,股數,總成本）。順序跟網站一樣：交易日記勾「當作庫存」→ 網站上的庫存清單
+    → Secrets HOLDINGS → 交易日記推算。"""
+    日記 = 讀日記()
+    推算 = None
+    if 日記.get("交易"):
+        import engine
+        推算 = engine.交易日記統計(日記["交易"])[1]
+    欄 = ["代號", "股數", "總成本"]
+    if 日記.get("當作庫存") and 推算 is not None and len(推算):
+        return 推算[欄].to_csv(index=False)
+    if 日記.get("庫存清單"):
+        return pd.DataFrame(日記["庫存清單"], columns=欄).to_csv(index=False)
+    h = os.environ.get("HOLDINGS", "").strip()
+    if h:
+        return h
+    return 推算[欄].to_csv(index=False) if 推算 is not None and len(推算) else ""
+
+
+def 停損們():
+    """還持有、最近一筆買進有記停損價的股票 → {代號: 停損價}。"""
+    日記 = 讀日記()
+    if not 日記.get("交易"):
+        return {}
+    import engine
+    庫 = engine.交易日記統計(日記["交易"])[1]
+    結果 = {}
+    for 代 in (庫["代號"] if 庫 is not None and len(庫) else []):
+        買們 = [t for t in 日記["交易"] if str(t["代號"]) == 代 and t["買賣"] == "買" and t.get("停損")]
+        if 買們:
+            結果[代] = float(max(買們, key=lambda x: x["日期"])["停損"])
+    return 結果
+
+
+def 停損提醒(t):
+    行們 = []
+    for 代, 停 in 停損們().items():
+        列 = t[t["code"] == 代]
+        if len(列) and 列["close"].iloc[0] <= 停:
+            行們.append(f"{名稱(t, 代)} 收 {列['close'].iloc[0]:,.2f}，已跌破停損 {停:g}")
+    return ["", "🛑 停損（交易日記）"] + 行們 if 行們 else []
 
 
 def 清理(值):
@@ -122,7 +185,7 @@ def 收盤摘要(強制=False):
         行們.append("強勢族群：" + "、".join(f"{k} {v:+.1f}%" for k, v in 族.head(3).items()))
         行們.append("弱勢族群：" + "、".join(f"{k} {v:+.1f}%" for k, v in 族.tail(3)[::-1].items()))
 
-    持股 = os.environ.get("HOLDINGS", "").strip()
+    持股 = 持股文字().strip()
     if 持股:
         h = pd.read_csv(io.StringIO(持股), dtype={"代號": str})
         h["代號"] = h["代號"].str.strip()
@@ -150,6 +213,11 @@ def 收盤摘要(強制=False):
         行們 += 價位提醒(([] if not 持股 else h["代號"].tolist()) + 代號們)
     except Exception as e:
         print("價位提醒失敗：", repr(e))
+
+    try:
+        行們 += 停損提醒(t)
+    except Exception as e:
+        print("停損提醒失敗：", repr(e))
 
     try:
         行們 += 評分摘要(持股, 代號們)
@@ -369,8 +437,12 @@ def 評分摘要(持股, 自選們=()):
     if len(大變):
         行們.append("📈 評分大變動（一天 ±10 分以上）：" + "、".join(
             f"{r['名稱']} {r['總分'] - r['較昨日']:.1f}→{r['總分']:.1f}" for _, r in 大變.iterrows()))
-    高 = 分[(分["5日均量"] >= 500) & ~分.index.str.startswith("00")].sort_values("總分", ascending=False).head(5)
-    行們.append("🔝 高分股：" + "、".join(f"{r['名稱']} {r['總分']:.1f}" for _, r in 高.iterrows()))
+    可 = 分[(分["5日均量"] >= 500) & ~分.index.str.startswith("00")]
+    新 = 可[(可["總分"] >= 75) & ((可["總分"] - 可["較昨日"].fillna(0)) < 75)].sort_values("總分", ascending=False)
+    if len(新):
+        行們.append("🆕 新進 75 分以上：" + "、".join(f"{r['名稱']} {r['總分']:.1f}" for _, r in 新.head(15).iterrows()))
+    高 = 可.sort_values("總分", ascending=False).head(10)
+    行們.append("🔝 高分前 10：" + "、".join(f"{r['名稱']} {r['總分']:.1f}" for _, r in 高.iterrows()))
     行們.append("（規則計分，僅供參考，非投資建議）")
     return 行們
 
@@ -413,6 +485,11 @@ def 盤中提醒():
     狀態, sha = 讀設定("alert_state.json")
     價位訊息 = 盤中價位提醒(狀態, 今天)
     提醒, _ = 讀設定("alerts.json")
+    try:
+        for c, 停 in 停損們().items():
+            提醒.setdefault(c, {})["停損"] = 停
+    except Exception as e:
+        print("讀停損失敗：", repr(e))
     if not 提醒:
         if 價位訊息:
             推播("📍 大盤盤中關鍵價位\n" + "\n".join(價位訊息))
@@ -442,6 +519,9 @@ def 盤中提醒():
                 字 = "漲到" if 方向 == "上" else "跌到"
                 訊息.append(f"🔔 {m.get('n', c)} {字} {價:,.2f}（提醒價 {設[方向]:g}）{m.get('t', '')}")
                 狀態[鍵] = 今天
+        if 設.get("停損") and 價 <= 設["停損"] and 狀態.get(f"{c}_停損") != 今天:
+            訊息.append(f"🛑 {m.get('n', c)} 跌破交易日記停損 {設['停損']:g}（現在 {價:,.2f}）{m.get('t', '')}")
+            狀態[f"{c}_停損"] = 今天
     if 價位訊息:
         訊息 = ["📍 大盤盤中關鍵價位"] + 價位訊息 + ([""] if 訊息 else []) + 訊息
     if 訊息:
@@ -479,6 +559,22 @@ def 健康檢查():
     籌 = _最新檔日("chips")
     if 價 and (籌 is None or 籌 < 價):
         問題.append(f"三大法人／融資資料落後（最新 {籌:%m/%d}，股價 {價:%m/%d}）" if 籌 else "沒有三大法人／融資資料")
+
+    # 融資約 21:00 才公布，22:23 會補抓；今天以前的籌碼檔還缺融資就是補抓失敗
+    缺融 = []
+    for f in sorted((資料夾 / "chips").glob("*/*.csv.gz"))[-8:]:
+        if pd.Timestamp(f.name[:8]).date() >= 今天:
+            continue
+        欄 = pd.read_csv(f, nrows=200)
+        if "margin" not in 欄.columns or 欄["margin"].notna().sum() < 50:
+            缺融.append(f"{pd.Timestamp(f.name[:8]):%m/%d}")
+    if 缺融:
+        問題.append("融資融券缺漏：" + "、".join(缺融) + "（晚上 22:23 補抓沒成功，可到 Actions 手動跑「補融資融券」）")
+    公司 = 資料夾 / "company_profile.csv"
+    if 公司.exists():
+        更 = pd.read_csv(公司, usecols=["更新日"])["更新日"].dropna()
+        if len(更) and (今天 - pd.Timestamp(更.max()).date()).days > 7:
+            問題.append(f"公司介紹資料：最新更新 {pd.Timestamp(更.max()):%m/%d}，已超過 7 天沒輪抓")
 
     def 太舊(名稱, 最新, 容許天數):
         if 最新 is None:
@@ -573,7 +669,7 @@ def 週報():
     上 = 上[上.index.str.fullmatch(r"\d{4}")]
     行們.append(f"本週上漲 {(上 > 0).sum()} 檔／下跌 {(上 < 0).sum()} 檔")
 
-    持股 = os.environ.get("HOLDINGS", "").strip()
+    持股 = 持股文字().strip()
     庫存們 = []
     if 持股:
         h = pd.read_csv(io.StringIO(持股), dtype={"代號": str})

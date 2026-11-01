@@ -77,6 +77,7 @@ jobs:
           LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
           HOLDINGS: ${{ secrets.HOLDINGS }}
+          SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: AI 收盤解讀（有設定 GEMINI_API_KEY 才會執行）
         continue-on-error: true

@@ -482,7 +482,28 @@ def 槓桿趨勢():
                        "散戶加槓桿、外資偏空，兩者同時出現時大盤常較脆弱。")
         elif 融變 < 0 and pd.notna(外變) and 外變 > 0:
             st.success(f"近 {天數} 天融資減少 {融變:+,.0f} 張、外資期貨淨部位增加 {外變:+,.0f} 口：籌碼變乾淨、外資轉多。")
-    st.caption("投信台指期多半是替 ETF 避險或加碼的多單，主要看外資的方向；合計＝三者相加。資料來源：證交所、櫃買中心、期交所。")
+    燈列 = []
+    for 欄, 名 in (("外資期貨", "外資"), ("投信期貨", "投信"), ("自營期貨", "自營商")):
+        x = 每日.get(欄, pd.Series(dtype=float)).dropna()
+        if len(x) < 2:
+            continue
+        變 = x.diff().dropna()
+        連 = 0
+        for v in 變[::-1]:
+            if v == 0 or (連 and np.sign(v) != np.sign(連)):
+                break
+            連 += int(np.sign(v))
+        燈列.append({"法人": 名, "淨未平倉(口)": x.iloc[-1], "較前日(口)": 變.iloc[-1], "近 5 日(口)": x.iloc[-1] - x.iloc[max(-6, -len(x))],
+                     "連續": f"{'加多' if 連 > 0 else '加空'} {abs(連)} 天" if 連 else "—",
+                     "燈號": "🔴 偏多加碼" if 變.iloc[-1] > 0 and x.iloc[-1] > 0 else "🟢 偏空加碼" if 變.iloc[-1] < 0 and x.iloc[-1] < 0
+                     else "🟡 空單回補" if 變.iloc[-1] > 0 else "🟡 多單減碼" if 變.iloc[-1] < 0 else "⚪ 持平"})
+    if 燈列:
+        表格(pd.DataFrame(燈列), hide_index=True, width="stretch",
+             column_config={c: st.column_config.NumberColumn(format="%+d") for c in ("淨未平倉(口)", "較前日(口)", "近 5 日(口)")})
+    st.caption("投信台指期多半是替 ETF 避險或加碼的多單，主要看外資的方向；合計＝三者相加。"
+               "「未平倉」是收盤後還留著的多空部位（口數），跟新聞常說的「成交量／交易口數」不同：交易口數是當天買賣了多少口，"
+               "隔天就歸零；未平倉才代表法人押的方向。夜盤（15:00～隔天 05:00）的交易算在下一個交易日，期交所不公布夜盤單獨的法人未平倉。"
+               "資料來源：證交所、櫃買中心、期交所。")
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -643,8 +664,35 @@ def 強弱圖(天數=120):
     st.caption("起點＝100。線往上＝櫃買（中小型股）比加權（大型權值股）強，往下＝資金集中在權值股。")
 
 
+def 盤中即時排行():
+    """按了才抓：昨天成交值前 200 檔的盤中即時價（證交所延遲約 5～20 秒），排出漲幅、跌幅、成交量。"""
+    with st.expander("⚡ 盤中即時排行（按了才抓，昨天成交值前 200 檔，約 3 秒）"):
+        if st.button("抓盤中即時排行", key="即時排行鈕"):
+            池 = 今日[~今日["代號"].str.startswith("00")].nlargest(200, "成交值億")
+            try:
+                即 = engine.即時報價(池["代號"].tolist(), dict(zip(池["代號"], 池["市場"])))
+                即 = 即.dropna(subset=["close"]).assign(幅度=lambda d: d["change"] / (d["close"] - d["change"]) * 100)
+                st.session_state["即時排行"] = 即
+            except Exception as e:
+                st.warning(f"即時行情暫時抓不到（{type(e).__name__}），等一下再試。")
+        即 = st.session_state.get("即時排行")
+        if 即 is None or 即.empty:
+            st.caption("盤中按一下就會抓；收盤後看下面的正式排行即可。")
+            return
+        顯 = 即.rename(columns={"code": "代號", "name": "名稱", "close": "現價", "幅度": "漲跌幅%", "volume": "成交張數", "time": "時間"})
+        欄 = ["代號", "名稱", "現價", "漲跌幅%", "成交張數", "時間"]
+        格式 = {"現價": st.column_config.NumberColumn(format="%.2f"), "漲跌幅%": st.column_config.NumberColumn(format="%+.2f"),
+              "成交張數": st.column_config.NumberColumn(format="%d")}
+        分 = st.tabs(["漲幅", "跌幅", "成交量"])
+        for 頁, (欄名, 大) in zip(分, (("漲跌幅%", True), ("漲跌幅%", False), ("成交張數", True))):
+            with 頁:
+                表格((顯.nlargest(20, 欄名) if 大 else 顯.nsmallest(20, 欄名))[欄], hide_index=True, width="stretch", column_config=格式)
+        st.caption(f"抓取時間 {即['time'].dropna().max() or ''}；只含昨天最熱門的 200 檔，冷門股盤中暴衝不會出現在這裡。")
+
+
 def 排行區():
     段落("RANKING // 排行（前 50 檔，含上市櫃）")
+    盤中即時排行()
     排行 = engine.排行資料(今日)
     漲停數, 跌停數 = int(排行["漲停"].sum()), int(排行["跌停"].sum())
     榜 = st.tabs(["漲幅", "跌幅", "成交量", "成交值", "週轉率", f"漲停 {漲停數}", f"跌停 {跌停數}", "法人買賣超"])
@@ -1254,7 +1302,7 @@ def 讀版面():
     隱 = [x for x in st.query_params.get("hide", "").split(",") if x in 首頁區塊]
     if 隱:
         return "自訂", [x for x in 首頁區塊 if x not in 隱]
-    return "完整", None
+    return "新手", None  # 預設新手版面（6 個區塊），手機打開比較快；完整版一鍵切換
 
 
 舊模式, 舊順序 = 讀版面()
@@ -1271,7 +1319,7 @@ with st.expander(f"⚙️ 首頁版面：{舊模式}"):
 新值 = "自訂:" + ",".join(顯示) if 模式 == "自訂" else 模式
 舊值 = "自訂:" + ",".join(舊順序) if 舊模式 == "自訂" else 舊模式
 if 新值 != 舊值 or "hide" in st.query_params:
-    if 新值 == "完整":
+    if 新值 == "新手":
         st.query_params.pop("layout", None)
     else:
         st.query_params["layout"] = 新值

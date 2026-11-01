@@ -802,7 +802,7 @@ def _解析損益(html):
     return pd.DataFrame(列們)
 
 
-def 抓損益表(季數=12):
+def 抓損益表(季數=22):  # 約 5 年，評分回測要用當時的 EPS、毛利率
     """各季綜合損益表（今年累計數），用來算毛利率；已經有的季度不重抓（最近 2 季會重抓）。"""
     檔案 = 資料夾 / "fundamental" / "income.csv"
     舊 = pd.read_csv(檔案, dtype={"code": str}) if 檔案.exists() else pd.DataFrame(
