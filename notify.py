@@ -318,6 +318,14 @@ def 提醒事項(代號們):
         行們 += 條件訂閱提醒(狀態)
     except Exception as e:
         print("選股訂閱失敗：", repr(e))
+    try:
+        行們 += 董監轉讓提醒(代號們, 狀態)
+    except Exception as e:
+        print("董監轉讓失敗：", repr(e))
+    try:
+        行們 += 網紅條件提醒(狀態)
+    except Exception as e:
+        print("網紅條件失敗：", repr(e))
     if 狀態 != 舊狀態:
         try:
             寫設定("alert_state.json", 狀態, sha)
@@ -402,6 +410,54 @@ def 集體升降評提醒(狀態):
             狀態[鍵] = 家
             行們.append(f"{代} {名}：{家} 家{方向}目標價（{名們[:40]}）")
     return ["", "📣 券商集體調整目標價（近 3 天）"] + 行們 if 行們 else []
+
+
+def 董監轉讓提醒(代號們, 狀態):
+    """庫存、自選股的董監大股東申報轉讓（同一筆只通知一次）。"""
+    import engine
+    轉 = engine.讀取內部人轉讓()
+    if 轉 is None or not len(轉):
+        return []
+    轉 = 轉[(轉["date"] >= 轉["date"].max() - pd.Timedelta(days=3)) & 轉["code"].isin(set(代號們))]
+    行們 = []
+    for _, x in 轉.iterrows():
+        鍵 = f"轉讓_{x['code']}_{x['date']:%Y%m%d}_{x['姓名']}"
+        if 狀態.get(鍵):
+            continue
+        狀態[鍵] = 1
+        比 = f"，佔其持股 {x['股數'] / x['持股'] * 100:.0f}%" if x["持股"] else ""
+        行們.append(f"{x['code']} {x['身分']} {x['姓名']}：{str(x['方式']).split('(')[0]} {x['股數'] / 1000:,.0f} 張{比}")
+    return ["", "🧾 董監申報轉讓（庫存／自選）"] + 行們 if 行們 else []
+
+
+def 網紅條件提醒(狀態, 天數=30):
+    """網紅影片裡看得懂的「如果…就…」條件，從「還沒」變成「成立」時通知一次。"""
+    import engine
+    import hashlib
+    影片們 = (讀設定("influencer_notes.json")[0] or {}).get("影片", [])
+    if not 影片們:
+        return []
+    最新 = engine.讀取資料庫(最近天數=7)
+    名表 = {}
+    if 最新 is not None and "name" in 最新:
+        最新 = 最新[最新["date"] == 最新["date"].max()]
+        名表 = dict(zip(最新["name"], 最新["code"]))
+    清單 = engine.網紅條件清單(影片們, 天數=天數, 名表=名表)
+    代們 = sorted({r["代號"] for r in 清單 if r["代號"] and r["代號"] != "TAIEX"})
+    價 = engine.讀取資料庫(最近天數=200, 代號=代們) if 代們 else None
+    K加, 匯 = engine.讀取指數K線("TAIEX"), engine.讀取匯率()
+    行們 = []
+    for r in 清單:
+        K = K加 if r["代號"] == "TAIEX" else (價[價["code"] == r["代號"]].sort_values("date")
+                                            if 價 is not None and r["代號"] else None)
+        狀, 說 = engine.檢查條件(r["條件"], r["標的"] or "", K, 匯, None)
+        if not 狀:
+            continue
+        鍵 = "網紅條件_" + hashlib.md5(f"{r['頻道']}{r['條件']}".encode()).hexdigest()[:10]
+        if 狀態.get(鍵) == "未成立" and 狀 == "成立":
+            行們.append(f"{r['頻道']}（{r['日期']:%m/%d}）：{r['條件'][:50]}\n  → {說}")
+        狀態[鍵] = 狀
+    return ["", "🎬 網紅條件成立了"] + 行們[:8] if 行們 else []
 
 
 def ETF共識提醒(代號們, 狀態, 門檻=3):

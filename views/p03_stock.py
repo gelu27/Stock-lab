@@ -427,6 +427,12 @@ def 個股事件(代號):
                         "內容": f"{x['market']}，承銷價 {x['price']:g} 元、{x['shares'] / 1000:,.0f} 張，"
                                f"申購 {x['start']:%m/%d}～{x['end']:%m/%d}，抽籤 {x['draw_date']:%m/%d}"
                                + (f"，中籤率 {x['win_rate']:g}%" if pd.notna(x["win_rate"]) and x["win_rate"] else "")})
+    轉 = 讀檔("讀取內部人轉讓", _版本)
+    if 轉 is not None:
+        for _, x in 轉[轉["code"] == 代號].iterrows():
+            列們.append({"日期": x["date"], "事件": "🧾 董監轉讓",
+                        "內容": f"{x['身分']} {x['姓名']} 申報{str(x['方式']).split('(')[0]} {x['股數'] / 1000:,.0f} 張"
+                               + (f"（佔其持股 {x['股數'] / x['持股'] * 100:.0f}%）" if x["持股"] else "") + f"，期間 {x['期間']}"})
     if not 列們:
         return None
     t = pd.DataFrame(列們).dropna(subset=["日期"]).sort_values("日期", ascending=False)
@@ -526,10 +532,21 @@ def 個股網紅說法(代號):
     if not 說們:
         return
     段落("INFLUENCER // 網紅怎麼說")
+    列 = 今日[今日["代號"] == str(代號)]
+    _本益比 = float(列["本益比"].iloc[0]) if len(列) and "本益比" in 列 and pd.notna(列["本益比"].iloc[0]) else None
+    _EPS = engine.近四季EPS(str(代號))[0] if any("EPS" in str(x.get("理由")) for _, x in 說們) else None
+    _EPS = _EPS if _EPS is not None and pd.notna(_EPS) else None
+    現 = float(列["收盤"].iloc[0]) if len(列) else None
+    價 = engine.網紅價位(list({id(v): v for v, _ in 說們}.values()), {str(代號): 現} if 現 else None, 天數=90)
+    價 = 價[價["代號"] == str(代號)] if len(價) else 價
+    if len(價):
+        st.markdown("**評論者的價位計畫**：" + "；".join(
+            f"{r['頻道']} {r['類型']} {r['價位']:,.0f}" + (f"（距今 {r['距離%']:+.1f}%）" if pd.notna(r["距離%"]) else "") for _, r in 價.head(6).iterrows()))
     for v, x in sorted(說們, key=lambda t: str(t[0].get("日期")), reverse=True)[:8]:
         圖 = {"看多": "🔴", "看空": "🟢"}.get(x["看法"], "⚪")
+        查 = engine.數字查核(x.get("理由"), _本益比, _EPS)
         st.markdown(f"- `{v.get('日期') or '—'}` {圖} **{v['頻道']}**：{x.get('原文看法') or x['看法']}。{x.get('理由', '')}"
-                    + (" 🚩" if v.get("紅旗") else ""))
+                    + (" 🚩" if v.get("紅旗") else "") + (f"  \n  🔢 _{查}_" if 查 else ""))
     st.caption("紅色＝看多、綠色＝看空（跟台股漲跌顏色一樣）。🚩＝那支影片有紅旗，見 04 選股 → 網紅說法。")
 
 

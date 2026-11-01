@@ -1064,6 +1064,12 @@ def 個股價格(代號):
     return t[["date", "high", "low", "收盤"]] if len(t) else None
 
 
+@st.cache_data(ttl=43200, max_entries=1, show_spinner="整理事件後報酬中…")
+def 寬價格(版本鍵):
+    """近一年還原價寬表（日期 × 代號），算申報、加碼之後的報酬用。"""
+    return engine.價格寬表(指標)
+
+
 @st.cache_data(ttl=600, show_spinner=False)
 def 研究筆記():
     """自己的研究筆記（有密碼時加密存放），每個瀏覽階段從 GitHub 讀一次。"""
