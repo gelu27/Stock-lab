@@ -1,5 +1,7 @@
 // LINE 打字查詢：貼到 Cloudflare Workers（免費方案就夠）。
-// LINE 傳來的訊息 → 驗證簽章 → 只接受你自己的 LINE 帳號 → 觸發 GitHub 的 query.yml → 約 1 分鐘後 LINE 收到結果。
+// LINE 傳來的訊息 → 驗證簽章 → 只接受你自己的 LINE 帳號 → 顯示「輸入中」動畫 → 觸發 GitHub 的 query.yml
+// → 約 1 分鐘後收到文字摘要（用「回覆」傳，不算每月免費則數），再 1～2 分鐘收到 AI 分析、報告圖片與 PDF 連結。
+// 打「2330快」只回文字摘要。
 // Worker 的 Settings → Variables and Secrets 要設定（都選 Secret）：
 //   LINE_CHANNEL_SECRET  LINE Developers → Basic settings 的 Channel secret（32 個字）
 //   LINE_TOKEN           Channel access token（跟 GitHub Secrets 的 LINE_TOKEN 一樣）
@@ -11,6 +13,14 @@ async function 簽章正確(body, signature, secret) {
   const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body));
   return btoa(String.fromCharCode(...new Uint8Array(mac))) === signature;
+}
+
+async function 輸入中(token, userId) {  // 聊天室顯示「輸入中」動畫最多 60 秒，免費
+  await fetch("https://api.line.me/v2/bot/chat/loading/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ chatId: userId, loadingSeconds: 60 }),
+  });
 }
 
 async function 回覆(token, replyToken, text) {
@@ -42,9 +52,11 @@ export default {
       const r = await fetch(`https://api.github.com/repos/${REPO}/actions/workflows/query.yml/dispatches`, {
         method: "POST",
         headers: { Authorization: `Bearer ${env.GH_TOKEN}`, Accept: "application/vnd.github+json", "User-Agent": "line-query-worker" },
-        body: JSON.stringify({ ref: "main", inputs: { q } }),
+        body: JSON.stringify({ ref: "main", inputs: { q, reply: e.replyToken } }),
       });
-      await 回覆(env.LINE_TOKEN, e.replyToken, r.ok ? `🔍 查詢「${q}」中，約 1 分鐘後回覆。` : `查詢失敗（GitHub ${r.status}），請檢查 GH_TOKEN。`);
+      // 成功時不先回「查詢中」，把回覆權杖留給 GitHub 傳結果（回覆不算免費則數）；失敗才在這裡回覆
+      if (r.ok) await 輸入中(env.LINE_TOKEN, e.source.userId);
+      else await 回覆(env.LINE_TOKEN, e.replyToken, `查詢失敗（GitHub ${r.status}），請檢查 GH_TOKEN。`);
     }
     return new Response("ok");
   },
