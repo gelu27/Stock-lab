@@ -20,7 +20,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install pandas requests
+      - run: pip install pandas requests pyarrow
       - run: python notify.py query "$Q"
         env:
           Q: ${{ github.event.inputs.q }}
