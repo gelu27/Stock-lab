@@ -38,7 +38,8 @@ def ROE資料(代號, r):
     舊 = 全[全["date"] <= 最新日 - pd.Timedelta(days=365)].tail(1) if 全 is not None else pd.DataFrame()
     以前 = np.nan
     if pd.notna(去年四季) and len(舊) and 舊["淨值比"].iloc[0] > 0:
-        以前 = 去年四季 / (舊["收盤"].iloc[0] / 舊["淨值比"].iloc[0]) * 100
+        # 一年前的每股淨值是舊股數，期間有面額分割要換成現在的股數（EPS 已換過）
+        以前 = 去年四季 / (舊["收盤"].iloc[0] / 舊["淨值比"].iloc[0] / engine.分割倍數(代號, 舊["date"].iloc[0])) * 100
     return 現在, 以前, 季度, 四季
 
 
@@ -167,7 +168,8 @@ def 變化資料(代號, 天數=126):
     歷史 = 指標[指標["代號"] == 代號].tail(天數)
     股 = 讀檔("_股本表", _版本)
     股數 = 股.at[代號, "發行股數"] if 代號 in 股.index else np.nan
-    週轉 = 歷史["volume"] / 股數 * 100 if pd.notna(股數) and 股數 else pd.Series(np.nan, index=歷史.index)
+    週轉 = (歷史["volume"] * engine.分割倍數序列(代號, 歷史["date"]) / 股數 * 100 if pd.notna(股數) and 股數
+            else pd.Series(np.nan, index=歷史.index))  # 分割前的成交股數換成現在的股數基準
     大 = 大戶歷史(代號)
     if 大 is not None and len(歷史):
         大 = 大[大["date"] >= 歷史["date"].iloc[0] - pd.Timedelta(days=7)]
