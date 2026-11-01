@@ -537,6 +537,13 @@ def 計算指標(原始):
     平均跌 = 跌.groupby(表["code"]).transform(lambda s: s.ewm(alpha=1 / 14, adjust=False).mean())
     表["RSI"] = (100 - 100 / (1 + 平均漲 / 平均跌.replace(0, np.nan))).round(1)
     表["漲跌幅"] = (表["日報酬"] * 100).round(2)
+    # MACD 柱（DIF − 訊號線，用還原價）與今天是否剛翻紅；講義實測：單獨翻紅沒優勢，搭配多頭排列 20 日超額 +1.03%
+    表["MACD柱"] = 表.groupby("code", sort=False)["還原價"].transform(lambda s: MACD(s)[2])
+    表["MACD翻紅"] = (表["MACD柱"] > 0) & (表.groupby("code", sort=False)["MACD柱"].shift() <= 0)
+    # 均線糾結：5、10、20、60 日線最高與最低差距 < 2%（講義的「盤整走勢」；實測之後 20 日超額 −0.79%，偏弱）
+    均 = 表[["MA5", "MA10", "MA20", "MA60"]]
+    表["均線糾結"] = (均.max(axis=1) / 均.min(axis=1) - 1) < 0.02
+    del 均
 
     # 籌碼面（股數換成張數）
     if "total" in 表.columns:
@@ -588,6 +595,11 @@ def 選股(當日, 條件):
         結果 = 結果[結果["還原價"] > 結果[f"MA{c['站上均線']}"]]
     if c.get("均線多頭排列"):
         結果 = 結果[(結果["MA5"] > 結果["MA20"]) & (結果["MA20"] > 結果["MA60"])]
+    if c.get("MACD翻紅多頭") and "MACD翻紅" in 結果.columns:
+        結果 = 結果[結果["MACD翻紅"].astype(bool) & (結果["MA5"] > 結果["MA10"]) & (結果["MA10"] > 結果["MA20"])
+                  & (結果["MA20"] > 結果["MA60"])]
+    if c.get("排除均線糾結") and "均線糾結" in 結果.columns:
+        結果 = 結果[~結果["均線糾結"].astype(bool)]
     if c.get("20日漲幅下限") is not None:
         結果 = 結果[結果["20日漲幅"] >= c["20日漲幅下限"]]
     if c.get("RSI區間"):
@@ -1032,6 +1044,7 @@ def 計算庫存(持股, 最新行情, *其他報價):
     "均線交叉": "短均線由下往上穿過長均線時買進，由上往下穿過時賣出",
     "站上均線": "收盤價站上均線時買進，跌破均線時賣出",
     "RSI 超賣反彈": "RSI 低於下限時買進，高於上限時賣出",
+    "MACD 翻紅＋多頭排列": "MACD 柱由負翻正、且 5 > 10 > 20 > 60 日線多頭排列時買進；MACD 柱翻負時賣出（講義實測最有效的組合）",
     "盤整突破（烏賊）": "前 20 日箱型盤整（高低差 25% 以內），收盤突破箱頂且量大於五日均量 1.5 倍時買進；跌破十日線賣出",
     "均線勾起（烏賊）": "股價貼近 5 日或 10 日線（3% 以內）且 5 日線剛勾起時買進；跌破十日線賣出",
 }
@@ -1055,6 +1068,10 @@ def 個股回測(指標, 代號, 開始, 結束, 策略="均線交叉", 短=5, �
         想持有 = 表["還原價"] > 均(長)
     elif 策略 == "RSI 超賣反彈":  # 低於下限進場，高於上限出場，中間維持原狀
         想持有 = _進出狀態(表["RSI"] < RSI下限, 表["RSI"] > RSI上限)
+    elif 策略 == "MACD 翻紅＋多頭排列":
+        柱 = MACD(全部["還原價"])[2].reindex(表.index)
+        多頭 = (均(5) > 均(10)) & (均(10) > 均(20)) & (均(20) > 均(60))
+        想持有 = _進出狀態((柱 > 0) & (柱.shift() <= 0) & 多頭, 柱 < 0)
     else:  # 烏賊課程：進場條件各自不同，出場都是跌破十日線
         if 策略 == "盤整突破（烏賊）":
             進 = (表["收盤"] > 表["箱頂"]) & (表["箱寬"] <= 25) & (表["量對5日均"] >= 1.5)
@@ -2617,6 +2634,7 @@ def 資料新鮮度():
         ("主動式 ETF 持股", _最新檔日("etf/holdings"), "每個交易日晚上", "交易日", 1),
         ("上市融資金額（維持率）", (lambda v: v and pd.Timestamp(v))(欄最大("margin_total.csv", "date")), "每個交易日", "交易日", 1),
         ("外資台指期未平倉", (lambda v: v and pd.Timestamp(v))(欄最大("futures_oi.csv", "date")), "每個交易日", "交易日", 1),
+        ("台指期正逆價差", (lambda v: v and pd.Timestamp(v))(欄最大("futures_basis.csv", "date")), "每個交易日", "交易日", 1),
         ("外資持股比", (lambda v: v and pd.Timestamp(v))(欄最大("qfii.csv.gz", "date")), "每個交易日", "交易日", 1),
         ("上市個股當沖", (lambda v: v and pd.Timestamp(v))(欄最大("daytrade.csv.gz", "date")), "每個交易日", "交易日", 1),
         ("選擇權籌碼", (lambda v: v and pd.Timestamp(v))(欄最大("options_pc.csv", "date")), "每個交易日", "交易日", 1),
@@ -5965,3 +5983,304 @@ def 新股掛牌表現(申購試算表):
     if not len(t):
         return None
     return {"檔數": len(t), "中位數%": float(t["報酬%"].median()), "上漲比例%": float((t["報酬%"] > 0).mean() * 100)}
+
+
+# ========== 基礎撐壓講義：正逆價差、教科書規則實測、K 棒白話、均線三態、期貨試算、布林、成交均價 ==========
+def 均線狀態(ma5, ma10, ma20, ma60):
+    """講義的均線三態：多頭排列（5>10>20>60）、空頭排列、均線糾結（四線差 < 2%），其他算均線交錯。回傳 (狀態, 燈, 說明)。"""
+    值 = [ma5, ma10, ma20, ma60]
+    if any(v is None or pd.isna(v) or v <= 0 for v in 值):
+        return None, "⚪", "資料不足 60 天"
+    if ma5 > ma10 > ma20 > ma60:
+        return "多頭排列", "🔴", "5 > 10 > 20 > 60 日線，短中長期買的人都賺錢，均線在下方當支撐"
+    if ma5 < ma10 < ma20 < ma60:
+        return "空頭排列", "🟢", "5 < 10 < 20 < 60 日線，各期間買的人都套牢，均線在上方變壓力"
+    if max(值) / min(值) - 1 < 0.02:
+        return "均線糾結", "🟡", f"四條均線只差 {(max(值) / min(值) - 1) * 100:.1f}%，盤整中、方向未定（實測之後偏弱）"
+    return "均線交錯", "⚪", "均線順序交錯，趨勢不明，看站上或跌破哪幾條"
+
+
+def K棒解讀(今, 昨, 前20高=None, 前20低=None, 量比=None):
+    """講義的 K 棒四價解讀：開盤（跳空）、收盤位置、上下影線、有沒有過昨高／破昨低。
+    今、昨：dict 或 Series，要有 open、high、low、close。量比：今天量 ÷ 20 日均量（大盤沒有就 None）。
+    回傳 (句子們, 規則鍵們)：規則鍵對應 讀取規則實測() 的列，用來附上「過去這種 K 棒之後的實際結果」。"""
+    o, h, l, c = (float(今[k]) for k in ("open", "high", "low", "close"))
+    yo, yh, yl, yc = (float(昨[k]) for k in ("open", "high", "low", "close"))
+    句, 鍵 = [], []
+    幅 = h - l
+    if 幅 <= 0 or c <= 0:
+        return ["今天幾乎沒有波動（一字線）。"], 鍵
+    if o > yh:
+        句.append(f"開盤 {o:,.2f} 跳空開在昨天最高 {yh:,.2f} 之上，開盤就很強。")
+        鍵.append("跳空開高")
+    elif o < yl:
+        句.append(f"開盤 {o:,.2f} 跳空開在昨天最低 {yl:,.2f} 之下，開盤就偏弱。")
+    elif yc > yo and abs(o / yc - 1) < 0.003:
+        句.append("昨天收紅、今天開平盤附近，講義認為多方企圖不強。")
+    位 = (c - l) / 幅
+    實體 = abs(c - o)
+    上影, 下影 = h - max(o, c), min(o, c) - l
+    if 位 >= 0.8:
+        句.append(f"收在當天高檔（全天區間的 {位 * 100:.0f}% 位置），多方收盤占上風。")
+        鍵.append("收在高檔")
+    elif 位 <= 0.2:
+        句.append(f"收在當天低檔（全天區間的 {位 * 100:.0f}% 位置），空方收盤占上風。")
+        鍵.append("收在低檔")
+    else:
+        句.append(f"收在當天中段（{位 * 100:.0f}% 位置），多空大致打平。")
+    if 上影 > 2 * 實體 and 上影 / c > 0.015:
+        創高 = 前20高 is not None and pd.notna(前20高) and h >= 前20高
+        句.append(f"留下 {上影 / c * 100:.1f}% 的長上影線，" + ("而且是在創 20 日新高時，講義說這是遇到壓力。" if 創高 else "上方有賣壓。"))
+        if 創高:
+            鍵.append("創高長上影線")
+    if 下影 > 2 * 實體 and 下影 / c > 0.015:
+        破低 = 前20低 is not None and pd.notna(前20低) and l <= 前20低
+        句.append(f"留下 {下影 / c * 100:.1f}% 的長下影線，" + ("而且是在破 20 日新低時，講義說這是有支撐。" if 破低 else "下方有買盤承接。"))
+        if 破低:
+            鍵.append("破低長下影線")
+    if 前20高 is not None and pd.notna(前20高):
+        if c > 前20高:
+            帶量 = 量比 is not None and pd.notna(量比) and 量比 >= 1.5
+            句.append(f"收盤突破前 20 日最高 {前20高:,.2f}" + ("，而且量放大到 20 日均量的 1.5 倍以上。" if 帶量 else
+                                                  "，但量沒有特別放大。" if 量比 is not None and pd.notna(量比) else "。"))
+            if 量比 is not None and pd.notna(量比):
+                鍵.append("突破帶量" if 帶量 else "突破量不足")
+        elif h > 前20高:
+            句.append(f"盤中衝過前 20 日最高 {前20高:,.2f}，收盤卻沒守住，講義說收盤突破才算數。")
+            鍵.append("假突破")
+    elif h > yh and c <= yh:
+        句.append("盤中過昨高但收盤沒站上，上方仍有壓力。")
+    return 句, 鍵
+
+
+規則清單 = [  # 鍵, 名稱, 講義說法, 預期方向（+1 偏多、−1 偏空）, 看幾天
+    ("多頭排列", "均線多頭排列（5>10>20>60）", "多頭走勢，偏多", 1, 20),
+    ("空頭排列", "均線空頭排列", "空頭走勢，偏空", -1, 20),
+    ("均線糾結", "均線糾結（四線差 < 2%）", "盤整，等方向", 0, 20),
+    ("糾結後突破", "均線糾結後收盤突破 20 日高", "盤整突破，有一波行情", 1, 20),
+    ("MACD翻紅", "MACD 柱翻紅（單獨）", "買進訊號", 1, 20),
+    ("MACD翻黑", "MACD 柱翻黑（單獨）", "賣出訊號", -1, 20),
+    ("MACD翻紅多頭", "MACD 柱翻紅＋多頭排列", "買進訊號＋趨勢向上", 1, 20),
+    ("跳空開高", "開盤跳空開在昨高之上", "主力拉抬，強勢續多", 1, 5),
+    ("收在高檔", "收在當天高檔（區間 80% 以上）", "多方強勢", 1, 5),
+    ("收在低檔", "收在當天低檔（區間 20% 以下）", "空方強勢", -1, 5),
+    ("創高長上影線", "創 20 日高留長上影線", "遇到壓力，注意拉回", -1, 5),
+    ("破低長下影線", "破 20 日低留長下影線", "出現支撐，注意反彈", 1, 5),
+    ("突破帶量", "收盤突破 20 日高＋量 ≥ 1.5 倍", "突破要帶量才可靠", 1, 20),
+    ("突破量不足", "收盤突破 20 日高、量不足", "沒量的突破不可靠", -1, 20),
+    ("假突破", "盤中過 20 日高、收盤沒過", "收盤沒突破不算數", -1, 20),
+]
+
+
+def 規則實測(最少成交值=5e7):
+    """用資料庫全部個股驗證 規則清單：每條規則出現後 N 日的平均報酬、勝率、超額（扣掉同一天所有樣本平均）。
+    很吃記憶體，跟評分回測一樣在 GitHub Actions 算好存 data/rule_backtest.json。"""
+    指 = 計算指標(讀取資料庫())
+    指 = 指[指["代號"].str.fullmatch(r"\d{4}") & (指["收盤"] > 0)]
+    t = 指[["date", "代號", "open", "high", "low", "收盤", "還原價", "volume", "value", "MA5", "MA10", "MA20", "MA60",
+           "MACD柱", "MACD翻紅", "均線糾結"]].rename(columns={"收盤": "close"}).copy()
+    del 指
+    釋放記憶體()
+    群 = t.groupby("代號", sort=False)
+    t["均額"] = 群["value"].transform(lambda s: s.rolling(20).mean())
+    t["均量"] = 群["volume"].transform(lambda s: s.rolling(20).mean().shift())
+    t["前高"] = 群["high"].transform(lambda s: s.rolling(20).max().shift())
+    t["前低"] = 群["low"].transform(lambda s: s.rolling(20).min().shift())
+    t["昨高"] = 群["high"].shift()
+    t["前柱"] = 群["MACD柱"].shift()
+    for n in (5, 20):
+        t[f"f{n}"] = 群["還原價"].shift(-n) / t["還原價"] - 1
+    t = t[(t["均額"] > 最少成交值)].dropna(subset=["MA60", "f20", "前高"])
+    for n in (5, 20):
+        t[f"x{n}"] = t[f"f{n}"] - t.groupby("date")[f"f{n}"].transform("mean")
+    多 = (t["MA5"] > t["MA10"]) & (t["MA10"] > t["MA20"]) & (t["MA20"] > t["MA60"])
+    空 = (t["MA5"] < t["MA10"]) & (t["MA10"] < t["MA20"]) & (t["MA20"] < t["MA60"])
+    糾 = t["均線糾結"].astype(bool)
+    實體 = (t["close"] - t["open"]).abs()
+    上影 = t["high"] - t[["open", "close"]].max(axis=1)
+    下影 = t[["open", "close"]].min(axis=1) - t["low"]
+    位 = (t["close"] - t["low"]) / (t["high"] - t["low"]).replace(0, np.nan)
+    突 = t["close"] > t["前高"]
+    帶量 = t["volume"] >= 1.5 * t["均量"]
+    遮罩 = {
+        "多頭排列": 多, "空頭排列": 空, "均線糾結": 糾, "糾結後突破": 糾 & 突,
+        "MACD翻紅": t["MACD翻紅"].astype(bool), "MACD翻黑": (t["MACD柱"] < 0) & (t["前柱"] >= 0),
+        "MACD翻紅多頭": t["MACD翻紅"].astype(bool) & 多,
+        "跳空開高": t["open"] > t["昨高"], "收在高檔": 位 >= 0.8, "收在低檔": 位 <= 0.2,
+        "創高長上影線": (上影 > 2 * 實體) & (上影 > 0.015 * t["close"]) & (t["high"] >= t["前高"]),
+        "破低長下影線": (下影 > 2 * 實體) & (下影 > 0.015 * t["close"]) & (t["low"] <= t["前低"]),
+        "突破帶量": 突 & 帶量, "突破量不足": 突 & ~帶量, "假突破": (t["high"] > t["前高"]) & ~突,
+    }
+    列們 = []
+    for 鍵, 名, 說法, 向, n in 規則清單:
+        m = 遮罩[鍵].fillna(False)
+        r, x = t.loc[m, f"f{n}"], t.loc[m, f"x{n}"]
+        if len(r) < 30:
+            continue
+        超 = float(x.mean() * 100)
+        if 向 == 0:
+            結論 = "偏弱" if 超 <= -0.3 else "偏強" if 超 >= 0.3 else "沒差"
+        else:
+            結論 = "成立" if 超 * 向 >= 0.3 else "相反" if 超 * 向 <= -0.3 else "沒差"
+        列們.append({"鍵": 鍵, "規則": 名, "講義說法": 說法, "天數": n, "筆數": int(len(r)),
+                    "平均報酬%": round(float(r.mean() * 100), 2), "勝率%": round(float((r > 0).mean() * 100), 1),
+                    "超額%": round(超, 2), "結論": 結論})
+    return {"計算日": f"{pd.Timestamp.now():%Y-%m-%d}", "起": f"{t['date'].min():%Y-%m-%d}",
+            "迄": f"{t['date'].max():%Y-%m-%d}", "樣本": int(len(t)), "規則": 列們}
+
+
+def 更新規則實測(強制=False, 間隔天數=25):
+    """GitHub Actions 每天呼叫；距離上次超過 間隔天數 才重算。"""
+    import json
+    檔 = 資料夾 / "rule_backtest.json"
+    if 檔.exists() and not 強制:
+        舊 = json.loads(檔.read_text())
+        if (pd.Timestamp.now() - pd.Timestamp(舊.get("計算日", "2000-01-01"))).days < 間隔天數:
+            print("規則實測：還不用重算")
+            return
+    結果 = 規則實測()
+    檔.write_text(json.dumps(結果, ensure_ascii=False, indent=1))
+    print(f"規則實測：已更新 {len(結果['規則'])} 條")
+
+
+def 讀取規則實測():
+    import json
+    檔 = 資料夾 / "rule_backtest.json"
+    return json.loads(檔.read_text()) if 檔.exists() else None
+
+
+def 規則實測句(實測, 鍵們):
+    """K 棒解讀用：把對到的規則接上一句「過去這種情況之後 N 日…」。"""
+    if not 實測 or not 鍵們:
+        return []
+    表 = {r["鍵"]: r for r in 實測.get("規則", [])}
+    句 = []
+    for k in 鍵們:
+        r = 表.get(k)
+        if r:
+            句.append(f"過去「{r['規則']}」{r['筆數']:,} 次，之後 {r['天數']} 日平均 {r['平均報酬%']:+.2f}%、"
+                     f"勝率 {r['勝率%']:.0f}%、比同期大家 {r['超額%']:+.2f}%（講義說法：{r['講義說法']} → {r['結論']}）")
+    return 句
+
+
+# ----- 台指期正逆價差＋未平倉四象限 -----
+def 讀取台指期價差():
+    """data/futures_basis.csv（期交所近月收盤、全市場未平倉）對上 index_ohlc.csv 的加權收盤。
+    回傳 DataFrame(index=date)：期貨、加權、價差、未平倉、價差變化、未平倉變化、象限、之後5日%。"""
+    f = 資料夾 / "futures_basis.csv"
+    指 = 資料夾 / "index_ohlc.csv"
+    if not f.exists() or not 指.exists():
+        return None
+    期 = pd.read_csv(f, parse_dates=["date"], dtype={"month": str}).set_index("date")
+    加 = pd.read_csv(指, parse_dates=["date"])
+    加 = 加[加["symbol"] == "TAIEX"].set_index("date")["close"]
+    t = 期.join(加.rename("加權"), how="inner").rename(columns={"fut_close": "期貨", "total_oi": "未平倉", "month": "月份"})
+    if t.empty:
+        return None
+    t["價差"] = (t["期貨"] - t["加權"]).round(2)
+    t["價差變化"] = t["價差"].diff().round(2)
+    t["未平倉變化"] = t["未平倉"].diff()
+    換月 = t["月份"] != t["月份"].shift()   # 換月那天價差跳動是合約換了，不算擴大縮小
+    t.loc[換月, "價差變化"] = np.nan
+    t["象限"] = [價差象限(b, db, doi) for b, db, doi in zip(t["價差"], t["價差變化"], t["未平倉變化"])]
+    t["之後5日%"] = ((t["加權"].shift(-5) / t["加權"] - 1) * 100).round(2)
+    return t
+
+
+def 價差象限(價差, 價差變化, 未平倉變化):
+    """講義四象限：正價差擴大＋未平倉增＝多方攻；正價差擴大＋未平倉減＝行情近尾聲；
+    逆價差擴大＋未平倉增＝空方強；逆價差擴大＋未平倉減＝空單回補、反彈機會。價差收斂＝中性。"""
+    if any(pd.isna(v) for v in (價差, 價差變化, 未平倉變化)):
+        return "—"
+    擴大 = (價差 > 0 and 價差變化 > 0) or (價差 < 0 and 價差變化 < 0)
+    if not 擴大:
+        return "價差收斂"
+    if 價差 > 0:
+        return "正價差擴大＋未平倉增" if 未平倉變化 > 0 else "正價差擴大＋未平倉減"
+    return "逆價差擴大＋未平倉增" if 未平倉變化 > 0 else "逆價差擴大＋未平倉減"
+
+
+象限解讀 = {
+    "正價差擴大＋未平倉增": ("🔴", "多方上攻力道強，講義：可看多"),
+    "正價差擴大＋未平倉減": ("🟡", "多單在獲利了結，講義：行情可能接近尾聲"),
+    "逆價差擴大＋未平倉增": ("🟢", "空方放空力道強，講義：可看空"),
+    "逆價差擴大＋未平倉減": ("🟡", "空單在回補，講義：反彈機會大"),
+    "價差收斂": ("⚪", "價差往 0 靠近，期現貨看法趨於一致"),
+}
+
+
+def 象限統計(t):
+    """四象限出現後加權指數 5 日報酬：次數、平均、上漲機率，對照全部日子。"""
+    if t is None or t["之後5日%"].notna().sum() < 20:
+        return None
+    s = t.dropna(subset=["之後5日%"])
+    s = s[s["象限"] != "—"]
+    g = s.groupby("象限")["之後5日%"].agg(次數="size", 平均報酬="mean", 上漲機率=lambda x: (x > 0).mean() * 100)
+    g.loc["全部日子"] = [len(s), s["之後5日%"].mean(), (s["之後5日%"] > 0).mean() * 100]
+    g = g.round(2)
+    g["次數"] = g["次數"].astype(int)
+    return g
+
+
+# ----- 期貨部位試算 -----
+期貨規格 = {"大台（TX）": 200, "小台（MTX）": 50, "微台（TMF）": 10}
+期貨保證金預設 = {  # 2026-08-12 期交所公告（一般交易時段結束後生效）；data/futures_margin.csv 有新資料會優先用
+    "大台（TX）": {"原始": 701_000, "維持": 538_000},
+    "小台（MTX）": {"原始": 175_250, "維持": 134_500},
+    "微台（TMF）": {"原始": 35_050, "維持": 26_900},
+}
+
+
+def 讀取期貨保證金():
+    """回傳 (保證金 dict, 來源說明)。data/futures_margin.csv（product, initial, maintenance, date）由 update_data 抓期交所。"""
+    f = 資料夾 / "futures_margin.csv"
+    保 = {k: dict(v) for k, v in 期貨保證金預設.items()}
+    來源 = "2026-08-12 期交所公告"
+    if f.exists():
+        try:
+            t = pd.read_csv(f)
+            for _, r in t.iterrows():
+                if r["product"] in 保 and r["initial"] > 0:
+                    保[r["product"]] = {"原始": int(r["initial"]), "維持": int(r["maintenance"])}
+            來源 = f"期交所保證金一覽（{t['date'].max()} 抓取）"
+        except Exception:
+            pass
+    return 保, 來源
+
+
+def 期貨試算(商品, 點位, 口數, 帳戶資金, 方向="多", 手續費=50, 保證金=None):
+    """回傳 dict：契約價值、原始／維持保證金、實際槓桿、每點損益、來回期交稅＋手續費、追繳點位、幾口錢做一口。
+    期交稅 = 契約價值 × 10 萬分之 2（單邊），手續費是單邊每口。"""
+    每點 = 期貨規格[商品]
+    保 = (保證金 or 讀取期貨保證金()[0])[商品]
+    契約 = 點位 * 每點 * 口數
+    原始, 維持 = 保["原始"] * 口數, 保["維持"] * 口數
+    稅 = round(點位 * 每點 * 2e-5) * 口數 * 2
+    費 = 手續費 * 口數 * 2
+    可虧 = 帳戶資金 - 維持
+    追繳距離 = 可虧 / (每點 * 口數) if 口數 else np.nan
+    return {
+        "契約價值": 契約, "原始保證金": 原始, "維持保證金": 維持,
+        "資金夠不夠": 帳戶資金 >= 原始,
+        "槓桿（對保證金）": 契約 / 原始 if 原始 else np.nan,
+        "槓桿（對帳戶資金）": 契約 / 帳戶資金 if 帳戶資金 else np.nan,
+        "幾口錢做一口": 帳戶資金 / (保["原始"] * 口數) if 口數 else np.nan,
+        "每點損益": 每點 * 口數, "來回交易成本": 稅 + 費, "期交稅（來回）": 稅,
+        "成本折合點數": (稅 + 費) / (每點 * 口數) if 口數 else np.nan,
+        "追繳距離（點）": 追繳距離,
+        "追繳點位": 點位 - 追繳距離 if 方向 == "多" else 點位 + 追繳距離,
+        "指數跌 10% 損益": -點位 * 0.1 * 每點 * 口數 * (1 if 方向 == "多" else -1),
+    }
+
+
+# ----- 布林通道、成交均價 -----
+def 布林通道(收盤, n=20, k=2):
+    """回傳 (中線, 上軌, 下軌)。"""
+    中 = 收盤.rolling(n).mean()
+    標 = 收盤.rolling(n).std()
+    return 中, 中 + k * 標, 中 - k * 標
+
+
+def 成交均價線(成交金額, 成交股數, n=20):
+    """近 n 日成交量加權均價＝Σ成交金額 ÷ Σ成交股數，比一般均線更接近這段期間買進者的平均成本（原始股價，不還原）。"""
+    return 成交金額.rolling(n).sum() / 成交股數.rolling(n).sum().replace(0, np.nan)

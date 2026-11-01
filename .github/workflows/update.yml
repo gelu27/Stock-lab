@@ -61,6 +61,9 @@ jobs:
       - name: 評分歷史驗證（約每月重算一次）
         continue-on-error: true
         run: python -c "import engine; engine.更新評分回測()"
+      - name: 講義規則實測（約每月重算一次）
+        continue-on-error: true
+        run: python -c "import engine; engine.更新規則實測()"
       - name: 存回 GitHub
         if: always()
         run: |
