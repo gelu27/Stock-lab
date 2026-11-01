@@ -1611,8 +1611,8 @@ def 抓興櫃推薦券商():
                       "since": 今.get("AddDate", "").astype(str).map(lambda x: 民國轉西元(x) if x.strip().isdigit() else "")})
     今 = 今[今["dealer"] != ""].drop_duplicates(["code", "dealer"])
     快照 = 資料夾 / "esb_dealers.csv"
-    if 快照.exists():
-        舊 = pd.read_csv(快照, dtype={"code": str})
+    舊 = pd.read_csv(快照, dtype={"code": str}) if 快照.exists() else None
+    if 舊 is not None and "name" in 舊.columns:  # 舊格式（券商代碼）的快照不比對，避免整批誤報
         鍵 = lambda t: set(zip(t["code"], t["dealer"]))
         新增, 退出 = 鍵(今) - 鍵(舊), 鍵(舊) - 鍵(今)
         舊代, 今代 = set(舊["code"]), set(今["code"])
