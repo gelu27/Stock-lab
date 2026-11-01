@@ -4,26 +4,34 @@ on:
   workflow_dispatch:
     inputs:
       q:
-        description: "股票代號或名稱（由 Cloudflare Worker 觸發，也可以手動測試）"
+        description: "股票代號或名稱（由 Cloudflare Worker 觸發，也可以手動測試）；結尾加「快」只回文字摘要"
         required: true
         default: "2330"
+      reply:
+        description: "LINE 回覆權杖（Worker 自動帶入；有的話第一則用回覆傳，不算每月免費則數）"
+        required: false
+        default: ""
 
 permissions:
-  contents: read
+  contents: write   # AI 報告存到 ai-reports 分支、PDF 放到 line-reports Release
 
 jobs:
   query:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install pandas requests pyarrow
+      - run: pip install pandas requests pyarrow fpdf2 matplotlib pymupdf
       - run: python notify.py query "$Q"
         env:
           Q: ${{ github.event.inputs.q }}
+          REPLY_TOKEN: ${{ github.event.inputs.reply }}
           LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+          GEMINI_SEARCH: ${{ secrets.GEMINI_SEARCH }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

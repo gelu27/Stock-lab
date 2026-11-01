@@ -143,6 +143,34 @@ def 推播(文字):
     r.raise_for_status()
 
 
+def 送出(訊息們):
+    """傳多則訊息（LINE message object，最多 5 則算 1 次）。有 REPLY_TOKEN（LINE 打字查詢）先用「回覆」，
+    回覆不算每月免費額度；權杖過期或用過了就改用推播。"""
+    權杖 = 清理(os.environ.get("LINE_TOKEN"))
+    訊息們 = [m for m in 訊息們 if m][:5]
+    if not 訊息們:
+        return
+    if not 權杖:
+        print("沒有設定 LINE_TOKEN，略過。內容如下：\n" + json.dumps(訊息們, ensure_ascii=False, indent=1))
+        return
+    標頭 = {"Authorization": f"Bearer {權杖}"}
+    回覆 = 清理(os.environ.pop("REPLY_TOKEN", ""))   # 回覆權杖只能用一次
+    if 回覆:
+        r = requests.post("https://api.line.me/v2/bot/message/reply", headers=標頭, timeout=15,
+                          json={"replyToken": 回覆, "messages": 訊息們})
+        print("LINE 回覆", r.status_code, r.text[:200])
+        if r.ok:
+            return
+    對象 = 清理(os.environ.get("LINE_USER_ID"))
+    內容 = {"messages": 訊息們}
+    if 對象:
+        內容["to"] = 對象
+    r = requests.post("https://api.line.me/v2/bot/message/" + ("push" if 對象 else "broadcast"),
+                      headers=標頭, json=內容, timeout=15)
+    print("LINE 推播", r.status_code, r.text[:200])
+    r.raise_for_status()
+
+
 def 最新行情():
     """最新一天的上市櫃收盤（代號、名稱、市場、收盤、漲跌、漲跌幅、成交值），加上產業與市值。"""
     檔 = sorted((資料夾 / "prices").glob("*/*.csv.gz"))[-1]
@@ -889,8 +917,9 @@ def 大盤解讀(模式):
     推播(f"🧠 {模式}大盤解讀（{dt.datetime.now(台北):%m/%d %H:%M}）\n\n{文字}")
 
 
-def 個股查詢(問):
-    """LINE 打字查詢：代號或名稱 → 股價、評分、最近支撐壓力、券商共識、董監轉讓、網紅點名。"""
+def 個股查詢(問, 完整=True):
+    """LINE 打字查詢：代號或名稱 → 股價、評分、基本面、籌碼、技術、支撐壓力、券商共識、董監轉讓、網紅點名；
+    完整=True 再附 AI 分析、PDF 第 1 頁圖片與 PDF 下載連結（約多 1～2 分鐘，第二批訊息）。"""
     import engine
     問 = str(問 or "").strip()
     最新 = engine.讀取資料庫(最近天數=7)
@@ -899,12 +928,13 @@ def 個股查詢(問):
     if not len(列):
         列 = 最新[最新["name"].astype(str).str.contains(問, regex=False)] if 問 else 列
     if not len(列):
-        推播(f"🔍 找不到「{問}」，請輸入股票代號（例如 2330）或完整名稱。")
+        送出([{"type": "text", "text": f"🔍 找不到「{問}」，請輸入股票代號（例如 2330）或完整名稱。"}])
         return
     r = 列.iloc[0]
     代, 名 = str(r["code"]), str(r["name"])
-    原始 = engine.讀取資料庫(最近天數=400, 代號=[代])
-    指標 = engine.計算指標(原始)
+    import line_report
+    今, 全 = line_report.準備(代)
+    指標 = 全.tail(400) if 全 is not None else engine.計算指標(engine.讀取資料庫(最近天數=400, 代號=[代]))
     行們 = [f"🔍 {代} {名}　{r['date']:%m/%d}", f"收盤 {r['close']:,.2f}（{符號(r['change'])}{abs(r['change']):,.2f}）"
           + (f"，本益比 {r['pe']:.1f}" if pd.notna(r.get("pe")) and r["pe"] > 0 else "")]
     try:
@@ -914,6 +944,11 @@ def 個股查詢(問):
             行們.append(f"🧮 評分 {分.at[代, '總分']:.1f}　{分.at[代, '看法']}")
     except Exception as e:
         print("評分失敗：", repr(e))
+    if 今 is not None:
+        try:
+            行們 += line_report.重點行們(代, 今, 全)
+        except Exception as e:
+            print("重點失敗：", repr(e))
     K = engine.還原K線(指標)
     if K is not None:
         sr = engine.支撐壓力(K, 量=指標.set_index("date")["成交值億"])
@@ -945,8 +980,20 @@ def 個股查詢(問):
             行們.append(f"🎬 近 30 天 {len({c for c, _ in 說})} 個頻道提到（看多 {多}、看空 {sum(1 for _, k in 說 if k == '看空')}）")
     except Exception as e:
         print("網紅失敗：", repr(e))
-    行們.append("（規則計分，僅供參考，非投資建議）")
-    推播("\n".join(行們))
+    設定 = {k: os.environ.get(k, "") for k in ("GEMINI_API_KEY", "GEMINI_MODEL", "GEMINI_SEARCH", "GITHUB_TOKEN")}
+    設定 = {k: v for k, v in 設定.items() if v}
+    設定["AI_REPO"] = 倉庫
+    要完整 = 完整 and 今 is not None
+    行們.append("（規則計分，僅供參考，非投資建議）"
+              + ("\n⏳ AI 分析與 PDF 報告產生中，約 1～2 分鐘後送到。" if 要完整 else ""))
+    送出([{"type": "text", "text": "\n".join(行們)[:4900]}])
+    if not 要完整:
+        return
+    try:
+        送出(line_report.完整報告(代, 今, 全, 設定))
+    except Exception as e:
+        print("完整報告失敗：", repr(e))
+        送出([{"type": "text", "text": f"⚠️ {代} {名} 的 AI／PDF 報告產生失敗：{str(e)[:150]}\n可到網站個股頁查看：{line_report.網站}/?s={代}"}])
 
 
 if __name__ == "__main__":
@@ -973,7 +1020,9 @@ if __name__ == "__main__":
     elif 模式 == "weekly":
         週報()
     elif 模式 == "query":
-        個股查詢(" ".join(sys.argv[2:]))
+        問 = " ".join(sys.argv[2:]).strip()
+        簡 = 問.endswith(("快", "簡")) and len(問) > 2   # 「2330快」只要文字摘要，不做 AI 與 PDF
+        個股查詢(問[:-1].strip() if 簡 else 問, 完整=not 簡)
     elif 模式 == "brief":
         大盤解讀(sys.argv[2] if len(sys.argv) > 2 else "收盤")
     else:
