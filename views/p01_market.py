@@ -1575,8 +1575,6 @@ def 董監轉讓區(現價):
         st.caption("超額＝申報後的股價報酬 − 同期加權報酬。平均是負的、輸大盤%高，代表內部人賣得有道理。樣本少時只是參考。")
 
 
-import macro
-
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def 總經資料(版本鍵):
