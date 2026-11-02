@@ -3285,8 +3285,8 @@ def 美股連動(指標, 分類="產業", 天數=120, 最少檔數=5):
 - 最後一行固定寫「（AI 依規則數據整理，僅供研究參考，不是買賣建議）」。"""
 
 
-def 大盤摘要(指標, 加權, 國際=None, 期貨=None):
-    """把網站上的大盤數據整理成一段文字，給 AI 寫大盤解讀用。"""
+def 大盤摘要(指標, 加權, 國際=None, 期貨=None, 設定=None):
+    """把網站上的大盤數據整理成一段文字，給 AI 寫大盤解讀用。有 設定 就加上網紅與券商的外部觀點。"""
     最新 = 指標["date"].max()
     今日 = 加基本面(指標[指標["date"] == 最新], 讀取基本面())
     行 = [f"資料日期：{最新:%Y-%m-%d}（台股最新收盤）"]
@@ -3344,6 +3344,27 @@ def 大盤摘要(指標, 加權, 國際=None, 期貨=None):
             行.append("未來 5 天重要事件：" + "；".join(f"{r['日期']:%m/%d} {r['時間']} {r['事件']}" for _, r in 日程.iterrows()))
     except Exception:
         pass
+    try:
+        本 = 大盤本益比()
+        if len(本) >= 12:
+            v, 近 = 本["本益比"].iloc[-1], 本[本["date"] >= 本["date"].max() - pd.Timedelta(days=365 * 5)]["本益比"]
+            行.append(f"上市加權本益比（近四季，網站估算）{v:.1f} 倍，5 年區間 {近.min():.1f}～{近.max():.1f} 倍、中位數 {近.median():.1f} 倍")
+    except Exception:
+        pass
+    try:
+        目, _, 彙 = 週線連跌統計(讀取指數K線("TAIEX"))
+        if 目["連跌週數"] >= 2 or 目["乖離%"] <= -3:
+            t = f"加權週線連跌 {目['連跌週數']} 週，週收盤比 5 週線 {目['乖離%']:+.1f}%"
+            if len(彙):
+                r = 彙.iloc[-1]
+                t += f"；過去 5 年連跌 3 週且乖離 −5% 以下共 {r['次數']} 次，{r['期間']}上漲機率 {r['上漲機率%']:.0f}%、平均 {r['平均%']:+.1f}%"
+            行.append(t)
+    except Exception:
+        pass
+    if 設定 is not None:
+        外 = 外部觀點摘要(設定, 指標, dict(zip(今日["名稱"], 今日["代號"])))
+        if 外:
+            行.append(外)
     return "\n".join(行)
 
 
@@ -6546,3 +6567,226 @@ def 布林通道(收盤, n=20, k=2):
 def 成交均價線(成交金額, 成交股數, n=20):
     """近 n 日成交量加權均價＝Σ成交金額 ÷ Σ成交股數，比一般均線更接近這段期間買進者的平均成本（原始股價，不還原）。"""
     return 成交金額.rolling(n).sum() / 成交股數.rolling(n).sum().replace(0, np.nan)
+
+
+# ========== 第六批：網紅與券商觀點餵給 AI、大盤本益比、週線連跌統計、法說會後反應 ==========
+外部觀點規則 = """
+- 外部觀點（網紅影片、券商報告）是別人的看法，不是事實：
+  · 只能當「市場在討論什麼」的線索，數字以網站數據為準；兩者不一致時寫出差異，不要替外部說法圓。
+  · 記分板命中率較高（到期 3 則以上、命中率 60% 以上）的頻道可以多參考，但要寫出命中率與樣本數；沒到期的不算準。
+  · 多個頻道或多家券商同方向，是「熱度」不是「保證」；全部看多時提醒可能已反應。
+  · 網紅的「如果…就…」條件若能用網站數據檢查，就寫出目前成立或還沒成立。
+  · 引用時寫出處（頻道名或券商名＋日期），不要照抄原文。"""
+大盤解讀提示 += 外部觀點規則
+AI系統提示 += 外部觀點規則
+
+
+def 網紅記分板(影片們, 價格們, 加權=None):
+    """依頻道彙總的命中率（網紅對答案），排除 AI 工具影片。回傳 DataFrame（index＝頻道）。"""
+    影片們 = [v for v in 影片們 or [] if not 是AI工具影片(v)]
+    if not 影片們 or not 價格們:
+        return pd.DataFrame()
+    _, 彙 = 網紅對答案(影片們, 價格們, 加權)
+    return 彙
+
+
+def _頻道標記(彙, 頻道):
+    if 彙 is None or 彙.empty or 頻道 not in 彙.index:
+        return ""
+    r = 彙.loc[頻道]
+    if not r["到期"]:
+        return "（還沒有到期的看法）"
+    return f"（記分板：到期 {r['到期']:.0f} 則、命中率 {r['命中率%']:.0f}%）"
+
+
+def 指標價格表(指標, 代號們):
+    """從 指標 拿出網紅對答案要的 {代號: DataFrame(date, 收盤)}。"""
+    t = 指標[指標["代號"].isin(set(代號們))][["代號", "date", "收盤"]]
+    return {c: g[["date", "收盤"]] for c, g in t.groupby("代號")}
+
+
+def 網紅觀點摘要(影片們, 指標=None, 代號=None, 今天=None, 名表=None):
+    """給 AI 用的網紅觀點文字（list of str）。代號＝None 是大盤用：近 7 天條件、共識熱度、準的頻道；有代號則是該股近 60 天說法。"""
+    影片們 = [v for v in 影片們 or [] if not 是AI工具影片(v)]
+    if not 影片們:
+        return []
+    今天 = pd.Timestamp(今天 or pd.Timestamp.today().normalize())
+    彙 = pd.DataFrame()
+    if 指標 is not None:
+        try:
+            代們 = {str(x.get("代號")) for v in 影片們 for x in v.get("股票", [])}
+            彙 = 網紅記分板(影片們, 指標價格表(指標, 代們), 讀取指數K線("TAIEX"))
+        except Exception as e:
+            print("網紅記分板失敗：", repr(e))
+    行 = []
+    if 代號:
+        for v in sorted(影片們, key=lambda v: str(v.get("日期")), reverse=True):
+            d = pd.to_datetime(v.get("日期"), errors="coerce")
+            if pd.isna(d) or d < 今天 - pd.Timedelta(days=60):
+                continue
+            for x in v.get("股票", []):
+                if str(x.get("代號")) == str(代號):
+                    行.append(f"- {d:%m/%d} {v['頻道']}{_頻道標記(彙, v['頻道'])}：{x.get('原文看法') or x.get('看法')}；{str(x.get('理由') or '')[:80]}")
+        return (["網紅影片說法（近 60 天，是觀點不是事實）："] + 行[:6]) if 行 else []
+    條們 = 網紅條件清單(影片們, 天數=7, 今天=今天, 名表=名表)
+    if 條們:
+        行.append("近 7 天網紅的「如果…就…」條件（可用數據檢查的請檢查）：")
+        行 += [f"- {r['日期']:%m/%d} {r['頻道']}{_頻道標記(彙, r['頻道'])}：{r['條件'][:60]}"
+              for r in sorted(條們, key=lambda r: r["日期"], reverse=True)[:10]]
+    熱 = 網紅共識熱度(影片們, 天數=14, 今天=今天)
+    if len(熱):
+        行.append("近 14 天被多個頻道點名：" + "、".join(f"{r['名稱']}（{r['頻道數']} 個頻道，看多 {r['看多']}／看空 {r['看空']}）"
+                                              for _, r in 熱.head(6).iterrows()))
+    if not 彙.empty:
+        準 = 彙[(彙["到期"] >= 3) & (彙["命中率%"] >= 60)].sort_values("命中率%", ascending=False)
+        if len(準):
+            行.append("記分板較準的頻道：" + "、".join(f"{k} {r['命中率%']:.0f}%（{r['到期']:.0f} 則）" for k, r in 準.head(5).iterrows()))
+            for v in sorted(影片們, key=lambda v: str(v.get("日期")), reverse=True):
+                d = pd.to_datetime(v.get("日期"), errors="coerce")
+                if v.get("頻道") in 準.index and pd.notna(d) and d >= 今天 - pd.Timedelta(days=7):
+                    行.append(f"- {d:%m/%d} {v['頻道']} 最近說：" + "；".join(
+                        f"{x.get('名稱')} {x.get('看法')}" for x in v.get("股票", [])[:4]))
+    return (["", "外部觀點：網紅影片（觀點不是事實）"] + 行) if 行 else []
+
+
+def 券商觀點摘要(報告們, 今天=None, 天數=7):
+    """給大盤 AI 用：近 天數 天券商報告的看法與目標價修正家數、集體升降評。"""
+    if not 報告們:
+        return []
+    今天 = pd.Timestamp(今天 or pd.Timestamp.now().normalize())
+    表 = 券商報告表(報告們)
+    近 = 表[表["日期"] >= 今天 - pd.Timedelta(days=天數)]
+    if 近.empty:
+        return []
+    行 = ["", f"外部觀點：券商報告（近 {天數} 天 {len(近)} 份）",
+         f"看多 {(近['看法'] == '看多').sum()}／中性 {(近['看法'] == '中性').sum()}／看空 {(近['看法'] == '看空').sum()} 份；"
+         f"目標價上修 {(近['目標價修正'] == '上修').sum()}、下修 {(近['目標價修正'] == '下修').sum()} 份"]
+    集 = 集體升降評(報告們, 今天=今天)
+    if 集:
+        行.append("近 3 天 3 家以上同方向調整：" + "；".join(f"{名} {家} 家{方}" for _, 名, 方, 家, _ in 集[:5]))
+    for 方 in ("上修", "下修"):
+        t = 近[近["目標價修正"] == 方]
+        if len(t):
+            行.append(f"{方}目標價的股票：" + "、".join(dict.fromkeys(t["名稱"].astype(str)))[:120])
+    return 行
+
+
+def 外部觀點摘要(設定, 指標=None, 名表=None):
+    """大盤 AI 用的網紅＋券商觀點。讀不到就回傳空字串。"""
+    行 = []
+    try:
+        行 += 網紅觀點摘要(讀取網紅說法(設定), 指標, 名表=名表)
+    except Exception as e:
+        print("網紅觀點失敗：", repr(e))
+    try:
+        行 += 券商觀點摘要(讀取券商報告(設定))
+    except Exception as e:
+        print("券商觀點失敗：", repr(e))
+    return "\n".join(行)
+
+
+_本益比快取 = {}
+
+
+def 大盤本益比(天數=None):
+    """同一天的資料只算一次（讀 5 年月檔約 7 秒）。"""
+    最新 = max((f.name for f in (資料夾 / "prices").glob("*/*.csv.gz")), default="")
+    鍵 = (最新, 天數)
+    if 鍵 not in _本益比快取:
+        _本益比快取.clear()
+        _本益比快取[鍵] = _大盤本益比(天數)
+    return _本益比快取[鍵].copy()
+
+
+def _大盤本益比(天數=None):
+    """上市加權本益比＝Σ市值 ÷ Σ(市值 ÷ 本益比)，只算本益比 > 0 的（虧損股證交所不給本益比）。
+    股數用 fundamental/capital.csv 目前的股數（歷史會有一點誤差）。每月取最後一個交易日，加上最近 天數 個交易日。
+    回傳 DataFrame(date, 本益比)。"""
+    股 = _讀("fundamental/capital.csv", dtype={"code": str})
+    if 股 is None or not len(股):
+        return pd.DataFrame(columns=["date", "本益比"])
+    股 = 股.set_index("code")["shares"]
+    列們 = []
+
+    def 算(t):
+        t = t[(t["market"] == "上市") & t["code"].isin(股.index) & (t["pe"] > 0)]
+        市 = t["close"] * t["code"].map(股)
+        return float(市.sum() / (市 / t["pe"]).sum()) if len(t) > 100 else np.nan
+
+    for f in sorted((資料夾 / "monthly").glob("prices_*.parquet")):
+        try:
+            t = pd.read_parquet(f, columns=["market", "code", "close", "pe", "date"])
+        except Exception:
+            continue
+        t["date"] = pd.to_datetime(t["date"])
+        末 = t["date"].max()
+        列們.append({"date": 末, "本益比": 算(t[t["date"] == 末])})
+    for f in sorted((資料夾 / "prices").glob("*/*.csv.gz"))[-(天數 or 1):]:
+        t = pd.read_csv(f, dtype={"code": str})
+        列們.append({"date": pd.to_datetime(f.name[:8]), "本益比": 算(t)})
+    return pd.DataFrame(列們).dropna().drop_duplicates("date", keep="last").sort_values("date").reset_index(drop=True)
+
+
+def 週線連跌統計(K, 連跌=3, 乖離門檻=-5.0, 週數=(1, 2, 4)):
+    """日 K 轉週 K，找「連跌 連跌 週以上、週收盤比 5 週線低 乖離門檻% 以上」的週，看之後 週數 週的漲跌。
+    回傳 (目前狀態 dict, 歷次 DataFrame, 彙總 DataFrame)。"""
+    週 = K.set_index("date")["close"].resample("W-FRI").last().dropna()
+    週 = 週[週.index <= K["date"].max() + pd.Timedelta(days=6)]
+    跌 = 週.diff() < 0
+    連 = 跌.groupby((~跌).cumsum()).cumsum()
+    乖 = (週 / 週.rolling(5).mean() - 1) * 100
+    目前 = {"連跌週數": int(連.iloc[-1]), "乖離%": round(float(乖.iloc[-1]), 1), "週收盤": float(週.iloc[-1])}
+    訊 = (連 >= 連跌) & (乖 <= 乖離門檻)
+    訊 = 訊 & ~訊.shift(1, fill_value=False)  # 同一段只算第一次
+    列們 = []
+    位置 = list(週.index)
+    for d in 週.index[訊]:
+        i = 位置.index(d)
+        列 = {"週": d, "連跌週數": int(連[d]), "乖離%": round(float(乖[d]), 1)}
+        for n in 週數:
+            列[f"{n}週後%"] = round((週.iloc[i + n] / 週.iloc[i] - 1) * 100, 1) if i + n < len(週) else np.nan
+        列們.append(列)
+    歷 = pd.DataFrame(列們)
+    if 歷.empty:
+        return 目前, 歷, pd.DataFrame()
+    彙 = pd.DataFrame([{"期間": f"{n} 週後", "次數": int(歷[f"{n}週後%"].notna().sum()),
+                       "上漲機率%": round(float((歷[f"{n}週後%"] > 0).mean() * 100), 0) if 歷[f"{n}週後%"].notna().any() else np.nan,
+                       "平均%": round(float(歷[f"{n}週後%"].mean()), 1), "最差%": 歷[f"{n}週後%"].min(), "最好%": 歷[f"{n}週後%"].max()}
+                      for n in 週數])
+    return 目前, 歷, 彙
+
+
+def 法說後反應(法說, 價格, 加權=None, 天數=3):
+    """法說會（data/calendar.csv）之後隔天與 天數 天的漲跌，扣掉同期加權。
+    法說多在盤後或盤中，所以「隔天」＝法說日之後第一個交易日收盤 vs 法說日收盤。價格＝DataFrame(代號, date, 收盤)。"""
+    if 法說 is None or not len(法說) or 價格 is None or not len(價格):
+        return pd.DataFrame()
+    加 = 加權.set_index("date")["close"] if 加權 is not None and len(加權) else None
+    群 = dict(tuple(價格.sort_values("date").groupby("代號")))
+    列們 = []
+    for _, r in 法說.iterrows():
+        p = 群.get(str(r["code"]))
+        if p is None:
+            continue
+        前, 後 = p[p["date"] <= r["date"]], p[p["date"] > r["date"]]
+        if not len(前) or not len(後):
+            continue
+        基 = float(前["收盤"].iloc[-1])
+        列 = {"法說日": r["date"], "代號": str(r["code"]), "名稱": r["name"]}
+        for n, 名 in ((1, "隔天%"), (天數, f"{天數}天%")):
+            if len(後) < n:
+                列[名] = 列[名.replace("%", "超額%")] = np.nan
+                continue
+            報 = (float(後["收盤"].iloc[n - 1]) / 基 - 1) * 100
+            超 = 報
+            if 加 is not None:
+                a, b = 加[加.index <= r["date"]], 加[加.index <= 後["date"].iloc[n - 1]]
+                if len(a) and len(b):
+                    超 = 報 - (float(b.iloc[-1]) / float(a.iloc[-1]) - 1) * 100
+            列[名], 列[名.replace("%", "超額%")] = round(報, 1), round(超, 1)
+        列們.append(列)
+    return pd.DataFrame(列們).sort_values("法說日", ascending=False).reset_index(drop=True)
+
+
+def 讀取法說會():
+    return _讀("calendar.csv", dtype={"code": str}, parse_dates=["date"])

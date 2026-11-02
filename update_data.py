@@ -19,7 +19,7 @@
 #   data/fx.csv                           美元兌台幣匯率（近 2 年，恐慌溫度計看一年高低點用）
 #   data/warning.csv                      處置股、注意股（交易所每日公告）
 #   data/sbl/20261022.csv.gz              借券賣出餘額（上市＋上櫃，單位：張，保留約一年）
-#   data/calendar.csv                     法說會日程（公開資訊觀測站，本月與下月）
+#   data/calendar.csv                     法說會日程（公開資訊觀測站，上月到下月，保留近 180 天）
 #   data/index_ohlc.csv                   加權指數、櫃買指數每日開高低收（證交所、櫃買中心，近 5 年），畫支撐壓力用
 #   data/options_pc.csv, options_inst.csv 臺指選擇權 P/C ratio、三大法人買賣權未平倉（期交所）
 #   data/options_oi.csv                   臺指選擇權最近月份、最近一週各履約價未平倉量（保留 20 天）
@@ -562,7 +562,8 @@ def 抓期貨未平倉(天數=400):
 def 抓法說會():
     """公開資訊觀測站「法人說明會一覽表」本月與下月 → data/calendar.csv。"""
     今天 = dt.datetime.now(台北時區).date()
-    月們 = [(今天.year, 今天.month), (今天.year + 今天.month // 12, 今天.month % 12 + 1)]
+    上月 = (今天.replace(day=1) - dt.timedelta(days=1))
+    月們 = [(上月.year, 上月.month), (今天.year, 今天.month), (今天.year + 今天.month // 12, 今天.month % 12 + 1)]
     列們 = []
     for 年, 月 in 月們:
         for 類 in ("sii", "otc"):
@@ -581,8 +582,15 @@ def 抓法說會():
                                "time": 格[3], "place": 格[4][:60], "summary": 格[5][:120]})
             time.sleep(3)
     if 列們:
-        表 = pd.DataFrame(列們).drop_duplicates(["code", "date", "time"]).sort_values(["date", "time", "code"])
-        表.to_csv(資料夾 / "calendar.csv", index=False)
+        表 = pd.DataFrame(列們)
+        舊檔 = 資料夾 / "calendar.csv"
+        if 舊檔.exists():  # 保留已開過的法說會（算法說後反應用），只留近 180 天
+            舊 = pd.read_csv(舊檔, dtype={"code": str})
+            表 = pd.concat([舊, 表])
+        起 = (今天 - dt.timedelta(days=180)).strftime("%Y-%m-%d")
+        表 = (表[表["date"].astype(str) >= 起].drop_duplicates(["code", "date", "time"], keep="last")
+             .sort_values(["date", "time", "code"]))
+        表.to_csv(舊檔, index=False)
         print(f"法說會完成，共 {len(表)} 場")
 
 

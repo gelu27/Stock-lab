@@ -933,7 +933,7 @@ def 大盤解讀(模式):
     except Exception as e:
         print("國際行情失敗：", repr(e))
         國際, 期貨 = {}, {}
-    摘要 = engine.大盤摘要(指標, engine.讀取加權指數(), 國際, 期貨)
+    摘要 = engine.大盤摘要(指標, engine.讀取加權指數(), 國際, 期貨, 設定)
     print(摘要)
     內容, 模型 = engine.AI大盤解讀(摘要, 模式, 設定)
     try:
