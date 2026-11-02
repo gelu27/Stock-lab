@@ -17,6 +17,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
+      - name: 自家模組都有重新載入（避免部署後用到舊版）
+        run: python tests/test_reload.py
       - name: 每個頁面都打開看看有沒有錯誤
         run: python tests/test_pages.py
       - name: 融資成本估算
