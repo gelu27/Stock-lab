@@ -64,6 +64,9 @@ jobs:
       - name: 講義規則實測（約每月重算一次）
         continue-on-error: true
         run: python -c "import engine; engine.更新規則實測()"
+      - name: 大盤融資洗盤日回測（約每月重算一次）
+        continue-on-error: true
+        run: python -c "import engine; engine.更新大盤融資洗盤()"
       - name: 存回 GitHub
         if: always()
         run: |

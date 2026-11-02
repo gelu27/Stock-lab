@@ -6790,3 +6790,117 @@ def 法說後反應(法說, 價格, 加權=None, 天數=3):
 
 def 讀取法說會():
     return _讀("calendar.csv", dtype={"code": str}, parse_dates=["date"])
+
+
+# ========== 網友 juju 盤勢筆記（2026-11）：月 K 連跌、大盤融資維持率距警戒線、大盤融資洗盤日 ==========
+def 月線連跌統計(K):
+    """日 K 轉月 K：目前連跌幾個月、今年跌了幾個月，以及過去「前兩個月漲、這個月跌」之後下個月怎麼走。
+    網紅說「月 K 今年沒有連跌兩個月」，這裡把它變成看得到的數字。回傳 (目前 dict, 歷次 DataFrame, 彙總 dict)。"""
+    k = K.set_index("date")["close"].astype(float)
+    月 = k.resample("ME").last().dropna()
+    報 = (月.pct_change() * 100).dropna()
+    最後日 = k.index.max()
+    完整 = 最後日 >= (最後日 + pd.offsets.MonthEnd(0) - pd.offsets.BDay(1))  # 月底前最後一兩個交易日才算收完
+    已收 = 報 if 完整 else 報.iloc[:-1]          # 只用收完的月份算連跌，本月另外顯示
+    已跌 = 已收 < 0
+    連 = 已跌.groupby((~已跌).cumsum()).cumsum()
+    今年 = 已收[已收.index.year == 報.index[-1].year]
+    今年跌 = 今年 < 0
+    今年最長 = int(今年跌.groupby((~今年跌).cumsum()).cumsum().max()) if len(今年) else 0
+    目前 = {"月份": 報.index[-1], "本月%": round(float(報.iloc[-1]), 1), "本月完整": bool(完整),
+            "連跌月數": int(連.iloc[-1]) if len(連) else 0, "今年跌月數": int(今年跌.sum()), "今年月數": int(len(今年)),
+            "今年最長連跌": 今年最長, "連跌兩月次數": int((已跌 & 已跌.shift(1, fill_value=False)).sum()),
+            "總月數": int(len(已收))}
+    條件 = (已收 < 0) & (已收.shift(1) > 0) & (已收.shift(2) > 0)
+    列們 = []
+    for d in 已收.index[條件]:
+        i = 報.index.get_loc(d)
+        下 = 報.iloc[i + 1] if i + 1 < len(報) and (i + 1 < len(已收)) else np.nan
+        列們.append({"月份": d, "前兩月%": round(float(已收.iloc[i - 2] / 100 + 1) * (已收.iloc[i - 1] / 100 + 1) * 100 - 100, 1),
+                    "當月%": round(float(已收.iloc[i]), 1), "下月%": round(float(下), 1) if pd.notna(下) else np.nan})
+    歷 = pd.DataFrame(列們)
+    彙 = {}
+    if len(歷) and 歷["下月%"].notna().any():
+        x = 歷["下月%"].dropna()
+        彙 = {"次數": int(len(x)), "上漲次數": int((x > 0).sum()), "上漲機率%": round(float((x > 0).mean() * 100)),
+             "平均%": round(float(x.mean()), 1), "中位數%": round(float(x.median()), 1), "最差%": float(x.min()), "最好%": float(x.max())}
+    return 目前, 歷, 彙
+
+
+def 維持率警戒點位(維持率, 加權收盤, 官方=None, 警戒=(165, 150, 130)):
+    """融資股票大致跟著大盤跌時，維持率要降到 165%／150%／130%，加權約要跌到幾點。
+    官方＝證交所／金管會公布的整戶維持率（有填就用它當基準，網站估算只用來算比例）。
+    回傳 [(警戒線, 加權約略點位, 還要跌%)]；已經低於的線不列。融資股通常跌得比大盤重，實際會更早到。"""
+    基 = float(官方) if 官方 else float(維持率)
+    if not 基 or not 加權收盤:
+        return []
+    return [(線, round(加權收盤 * 線 / 基), round((線 / 基 - 1) * 100, 1)) for 線 in 警戒 if 線 < 基]
+
+
+def 大盤融資變化(表, 代號欄="code", 價欄="close", 融資欄="margin"):
+    """全市場（四碼普通股）融資餘額每天增減的百分比，用「張數變化 × 當天收盤」加權，不受股價漲跌影響：
+    Σ(今天張數 − 昨天張數) × 收盤 ÷ Σ 昨天張數 × 收盤。面額分割當天張數暴增的股票不算。回傳 Series（%，index＝date）。"""
+    if 表 is None or 融資欄 not in 表.columns:
+        return pd.Series(dtype=float)
+    t = 表[[代號欄, "date", 價欄, 融資欄]].copy()
+    t = t[t[代號欄].astype(str).str.fullmatch(r"\d{4}")].sort_values([代號欄, "date"])
+    t[融資欄] = t[融資欄].astype("float64")
+    前 = t.groupby(代號欄, sort=False)[融資欄].shift()
+    有 = 前.notna() & t[融資欄].notna() & (前 > 0) & (t[融資欄] < 前 * 2.5)
+    價 = t[價欄].astype("float64")
+    分子 = ((t[融資欄] - 前) * 價)[有].groupby(t.loc[有, "date"]).sum()
+    分母 = (前 * 價)[有].groupby(t.loc[有, "date"]).sum()
+    return (分子 / 分母.where(分母 > 0) * 100).dropna().round(2)
+
+
+def 融資洗盤統計(變化, K, 門檻=-1.5, 間隔天數=14, 天數=(5, 20, 60)):
+    """大盤融資單日減少超過 門檻%（融資洗盤日）之後，加權 5／20／60 個交易日的漲跌，對照「任何一天買進」的平均。
+    同一段（間隔天數內）只算第一次。回傳 dict(門檻, 次數, 每期統計, 事件)。"""
+    c = K.set_index("date")["close"].astype(float)
+    事件, 上次 = [], None
+    for d, v in 變化[變化 <= 門檻].items():
+        if d not in c.index:
+            continue
+        if 上次 is None or (d - 上次).days > 間隔天數:
+            事件.append((d, float(v)))
+            上次 = d
+    統計 = []
+    for n in 天數:
+        後 = (c.shift(-n) / c - 1) * 100
+        x = 後.reindex([d for d, _ in 事件]).dropna()
+        基 = 後.dropna()
+        統計.append({"天數": n, "次數": int(len(x)), "平均%": round(float(x.mean()), 2) if len(x) else None,
+                   "上漲機率%": round(float((x > 0).mean() * 100)) if len(x) else None,
+                   "基準平均%": round(float(基.mean()), 2), "基準上漲機率%": round(float((基 > 0).mean() * 100))})
+    明細 = [{"date": f"{d:%Y-%m-%d}", "融資%": round(v, 2),
+             **{f"{n}日後%": (round(float(c.shift(-n).get(d) / c[d] * 100 - 100), 1) if pd.notna(c.shift(-n).get(d)) else None)
+                for n in 天數}} for d, v in 事件]
+    return {"門檻": 門檻, "次數": len(事件), "統計": 統計, "事件": 明細}
+
+
+def 更新大盤融資洗盤(強制=False, 間隔天數=25):
+    """GitHub Actions 呼叫：用全部歷史算大盤融資每日增減與洗盤日回測 → data/margin_flush.json（約每月重算）。"""
+    import json
+    檔 = 資料夾 / "margin_flush.json"
+    if 檔.exists() and not 強制:
+        舊 = json.loads(檔.read_text())
+        if (pd.Timestamp.now() - pd.Timestamp(舊.get("計算日", "2000-01-01"))).days < 間隔天數:
+            print("大盤融資洗盤：還不用重算")
+            return
+    表 = 讀取資料庫()
+    變 = 大盤融資變化(表)
+    del 表
+    釋放記憶體()
+    K = 讀取指數K線("TAIEX")
+    結果 = {"計算日": f"{pd.Timestamp.now():%Y-%m-%d}", "起": f"{變.index.min():%Y-%m-%d}", "迄": f"{變.index.max():%Y-%m-%d}",
+            "最大單日減%": round(float(變.min()), 2),
+            "分位": {f"{q:g}": round(float(變.quantile(q)), 2) for q in (0.01, 0.05, 0.1)},
+            "洗盤": 融資洗盤統計(變, K, -1.5), "大洗盤": 融資洗盤統計(變, K, -2.5)}
+    檔.write_text(json.dumps(結果, ensure_ascii=False, indent=1))
+    print(f"大盤融資洗盤：{結果['洗盤']['次數']} 次（≤ −1.5%）")
+
+
+def 讀取大盤融資洗盤():
+    import json
+    檔 = 資料夾 / "margin_flush.json"
+    return json.loads(檔.read_text()) if 檔.exists() else None

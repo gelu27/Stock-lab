@@ -364,6 +364,10 @@ def 提醒事項(代號們):
     except Exception as e:
         print("跌深融資提醒失敗：", repr(e))
     try:
+        行們 += 大盤融資洗盤提醒(狀態)
+    except Exception as e:
+        print("大盤融資洗盤提醒失敗：", repr(e))
+    try:
         行們 += 台幣提醒(狀態)
     except Exception as e:
         print("台幣提醒失敗：", repr(e))
@@ -488,6 +492,38 @@ def 跌深融資提醒(狀態, 冷卻天數=30):
                        f"融資 20 日 {r['融資20日增減']:+.1f}%")
     狀態["跌深_啟用"] = 狀態.get("跌深_啟用", f"{今天:%Y-%m-%d}")
     return (["", "📉 0050 跌深股融資洗完（實測比單純跌深好，仍要設停損）"] + 行們) if 行們 else []
+
+
+def 大盤融資洗盤提醒(狀態, 門檻=-1.5):
+    """大盤融資單日減少超過 1.5%（融資洗盤日）就通知一次，附 5 年回測與融資維持率離 165%／130% 還多遠。
+    融資約 21:00 才公布，所以通常隔天的收盤摘要才看得到前一天的洗盤。"""
+    import engine
+    表 = engine.讀取資料庫(最近天數=6)
+    變 = engine.大盤融資變化(表)
+    if not len(變):
+        return []
+    日, v = 變.index[-1], float(變.iloc[-1])
+    if v > 門檻 or 狀態.get("融資洗盤_最後") == f"{日:%Y-%m-%d}":
+        return []
+    狀態["融資洗盤_最後"] = f"{日:%Y-%m-%d}"
+    行們 = ["", f"🧹 大盤融資洗盤日 {日:%m/%d}：融資單日 {v:+.2f}%（門檻 {門檻}%）"]
+    洗 = engine.讀取大盤融資洗盤() or {}
+    for r in 洗.get("洗盤", {}).get("統計", []):
+        if r["天數"] == 20 and r.get("次數"):
+            行們.append(f"過去 {r['次數']} 次，20 日後上漲 {r['上漲機率%']}%、平均 {r['平均%']:+.1f}%（一般日子 {r['基準平均%']:+.1f}%）")
+    try:
+        指 = engine.計算指標(engine.讀取資料庫(最近天數=3))
+        維 = engine.融資維持率(指)
+        K = engine.讀取指數K線("TAIEX")
+        if 維 is not None and len(維) and K is not None:
+            收 = K.set_index("date")["close"].asof(維.index[-1])
+            點們 = engine.維持率警戒點位(float(維.iloc[-1]), float(收))
+            if 點們:
+                行們.append(f"上市融資維持率約 {維.iloc[-1]:.0f}%（網站估算）；" + "、".join(f"到 {a}% 加權約 {b:,.0f}" for a, b, _ in 點們[:2]))
+    except Exception as e:
+        print("維持率估算失敗：", repr(e))
+    行們.append("洗盤後偏多但不保證，還是要等止跌訊號、設停損。")
+    return 行們
 
 
 def 集體升降評提醒(狀態):

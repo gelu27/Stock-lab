@@ -325,6 +325,7 @@ def 市場每日(版本鍵):
         維持 = engine.融資維持率(近)
         if 維持 is not None:
             表["維持率"] = 維持.reindex(表.index)
+        表["融資變化%"] = engine.大盤融資變化(近, "代號", "收盤", "融資餘額").reindex(表.index)
     期 = 讀檔("讀取期貨未平倉", _版本)
     if 期 is not None and "foreign_oi" in 期:
         表["外資期貨"] = 期["foreign_oi"].reindex(表.index)
@@ -414,6 +415,17 @@ def 資金面區():
         等級, 色 = 維持率等級(維.iloc[-1])
         卡們.append(卡片(f"上市融資維持率 · {維.index[-1]:%m/%d}", f"{維.iloc[-1]:.1f}%",
                        ("" if pd.isna(差) else f"較前一日 {差:+.1f}　") + 等級 + "（網站估算）", 色))
+        官方 = float(st.session_state.get("官方維持率") or 0) or None
+        加收 = 每日["加權"].get(維.index[-1]) if "加權" in 每日 else None   # 用跟維持率同一天的收盤
+        加收 = None if 加收 is None or pd.isna(加收) else float(加收)
+        點們 = engine.維持率警戒點位(維.iloc[-1], 加收, 官方) if 加收 else []
+        if 點們:
+            線, 點, 跌 = 點們[0]
+            其他 = "、".join(f"{a}% 約 {b:,.0f}" for a, b, _ in 點們[1:])
+            卡們.append(卡片(f"維持率到 {線}% 加權約", f"{點:,.0f}",
+                           f"還要跌 {abs(跌):.1f}%" + (f"；{其他}" if 其他 else "")
+                           + ("（用官方值 " + f"{官方:.2f}%）" if 官方 else "（用網站估算）"),
+                           綠 if 跌 > -5 else "#EDEDED"))
     if "外資期貨" in 每日 and 每日["外資期貨"].notna().any():
         期 = 每日["外資期貨"].dropna()
         差 = 期.iloc[-1] - 期.iloc[-2] if len(期) >= 2 else np.nan
@@ -426,6 +438,17 @@ def 資金面區():
                        f"近 20 日平均 {沖.tail(20).mean():.1f}%" + (f"；上櫃 {當沖['上櫃'].dropna().iloc[-1]:.1f}%"
                                                                  if "上櫃" in 當沖 and 當沖["上櫃"].notna().any() else ""),
                        "#FFC24B" if 沖.iloc[-1] >= 30 else "#EDEDED"))
+    洗 = engine.讀取大盤融資洗盤()
+    if "融資變化%" in 每日 and 每日["融資變化%"].notna().any():
+        變 = 每日["融資變化%"].dropna()
+        統 = {r["天數"]: r for r in (洗 or {}).get("洗盤", {}).get("統計", [])}
+        r20 = 統.get(20)
+        是 = 變.iloc[-1] <= -1.5
+        說 = (f"🧹 融資洗盤日（≤ −1.5%）" if 是 else f"洗盤門檻 −1.5%；近 20 日最大減 {變.tail(20).min():+.1f}%")
+        if r20 and r20.get("次數"):
+            說 += f"；過去 {r20['次數']} 次 20 日後上漲 {r20['上漲機率%']}%（平均 {r20['平均%']:+.1f}%，一般日子 {r20['基準平均%']:+.1f}%）"
+        卡們.append(卡片(f"大盤融資單日增減 · {變.index[-1]:%m/%d}", f"{變.iloc[-1]:+.2f}%", 說,
+                       綠 if 是 else 漲跌色(變.iloc[-1])))
     淨 = 每日["上漲"] - 每日["下跌"]
     卡們.append(卡片("上漲減下跌（今日）", f"{淨.iloc[-1]:+,.0f} 家", f"近 20 日平均 {淨.tail(20).mean():+,.0f}", 漲跌色(淨.iloc[-1])))
     卡片格(卡們)
@@ -444,6 +467,12 @@ def 資金面區():
             "這裡是自己估算的（只算上市、用收盤市值），跟券商或財經網站公布的數字可能差 1～2%；"
             "有些網紅或媒體講的「大盤融資維持率」用的是別的算法（例如含上櫃、或只算某些券商客戶），可能差到 10% 以上。"
             "不同來源不要直接比高低，看同一個來源的變化方向比較準。")
+        st.number_input("官方公布的整戶維持率（選填，例如 173.46）：填了「到警戒線加權約幾點」就用官方值當基準",
+                        min_value=0.0, max_value=400.0, step=0.01, key="官方維持率",
+                        help="證交所／金管會或財經新聞公布的「整戶擔保維持率」。網站估算只算上市、用收盤市值，跟官方會差幾個百分點。")
+        st.caption("「到警戒線加權約幾點」假設融資股跟著大盤同比例跌；融資股通常跌得比大盤重，實際會更早碰到。"
+                   "165% 是網紅常說的警戒區，130% 是券商追繳線。")
+    融資洗盤區(洗)
     日 = 每日.index.strftime("%m/%d")
     圖 = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.06,
                        subplot_titles=("上漲家數 − 下跌家數", "上市融資維持率（%）", "外資台指期淨未平倉（口）"))
@@ -460,6 +489,27 @@ def 資金面區():
     st.caption("融資維持率 = 上市股票融資市值 ÷ 融資金額，意思見上方「ℹ️ 融資維持率是什麼」。"
                "外資淨未平倉 = 外資台指期（大台）多單減空單，負的代表偏空避險。")
     槓桿趨勢()
+
+
+def 融資洗盤區(洗):
+    """大盤融資單日大減（融資洗盤日）的 5 年回測：data/margin_flush.json，GitHub Actions 約每月重算。"""
+    if not 洗 or not 洗.get("洗盤"):
+        return
+    with st.expander("🧹 大盤融資洗盤日：融資單日大減之後，大盤通常怎麼走？"):
+        列們 = []
+        for 名, 鍵 in (("減 ≥ 1.5%", "洗盤"), ("減 ≥ 2.5%", "大洗盤")):
+            for r in 洗.get(鍵, {}).get("統計", []):
+                列們.append({"條件": 名, "天數": f"{r['天數']} 日後", "次數": r["次數"], "上漲機率%": r["上漲機率%"],
+                            "平均%": r["平均%"], "一般日子上漲機率%": r["基準上漲機率%"], "一般日子平均%": r["基準平均%"]})
+        表格(pd.DataFrame(列們), hide_index=True, width="stretch",
+             column_config={c: st.column_config.NumberColumn(format="%+.2f") for c in ("平均%", "一般日子平均%")})
+        事 = pd.DataFrame(洗["洗盤"].get("事件", []))
+        if len(事):
+            表格(事.iloc[::-1].rename(columns={"date": "日期", "融資%": "融資單日%"}), hide_index=True, width="stretch")
+        st.caption(f"融資單日增減＝每檔「融資張數變化 × 當天收盤」加總 ÷ 前一天融資市值（上市櫃普通股，不受股價漲跌影響）。"
+                   f"資料 {洗.get('起')}～{洗.get('迄')}，最大單日減 {洗.get('最大單日減%')}%；同一段 14 天內只算第一次。"
+                   "網紅常說「融資單日大減 200 億以上才是洗盤」，但 5 年內只有 2 天達到，所以改用百分比。"
+                   "這 5 年大多是多頭，結果偏樂觀，只是參考。")
 
 
 def 跌深區():
@@ -740,8 +790,17 @@ def 估值週線區(K):
         r = 彙.iloc[0]
         卡們.append(卡片("過去連跌 3 週＋乖離 −5% 後", f"1 週後上漲機率 {r['上漲機率%']:.0f}%",
                        f"{r['次數']} 次，平均 {r['平均%']:+.1f}%", "#EDEDED"))
+    月目, 月歷, 月彙 = engine.月線連跌統計(K)
+    本月 = (f"本月至今 {月目['本月%']:+.1f}%（還沒收完）" if not 月目["本月完整"] else f"本月 {月目['本月%']:+.1f}%")
+    卡們.append(卡片("加權月 K", f"今年 {月目['今年跌月數']}/{月目['今年月數']} 個月收跌",
+                   f"已連跌 {月目['連跌月數']} 個月、今年最長連跌 {月目['今年最長連跌']} 個月；{本月}",
+                   綠 if 月目["連跌月數"] >= 2 else "#EDEDED"))
+    if 月彙:
+        卡們.append(卡片("前兩月漲、這月跌之後", f"下月上漲 {月彙['上漲次數']}/{月彙['次數']} 次",
+                       f"平均 {月彙['平均%']:+.1f}%、最差 {月彙['最差%']:+.1f}%；5 年連跌兩個月 {月目['連跌兩月次數']} 次",
+                       "#EDEDED"))
     卡片格(卡們)
-    with st.expander("📈 大盤本益比走勢與週線連跌統計"):
+    with st.expander("📈 大盤本益比走勢、週線與月 K 連跌統計"):
         if len(本) >= 12:
             圖 = go.Figure(go.Scatter(x=本["date"], y=本["本益比"], line=dict(color=青, width=2), name="本益比"))
             圖.add_hline(y=float(本["本益比"].median()), line_dash="dot", line_color="#888", annotation_text="中位數")
@@ -756,6 +815,14 @@ def 估值週線區(K):
                  column_config={c: st.column_config.NumberColumn(format="%+.1f") for c in 歷.columns if c.endswith("%")})
         st.caption("條件：週 K 連跌 3 週以上，而且週收盤比 5 週線低 5% 以上（負乖離），同一段只算第一次。"
                    "網紅常說「負乖離大有機會反彈」，這裡用過去 5 年的加權指數檢查；樣本少，只是參考。")
+        if len(月歷):
+            st.markdown("**月 K：前兩個月漲、這個月跌之後，下個月怎麼走**")
+            表格(月歷.sort_values("月份", ascending=False).assign(月份=lambda d: d["月份"].dt.strftime("%Y/%m")),
+                 hide_index=True, width="stretch",
+                 column_config={c: st.column_config.NumberColumn(format="%+.1f") for c in ("前兩月%", "當月%", "下月%")})
+            st.caption("網紅常說「月 K 今年沒有連跌兩個月，拉回就是買點」。這裡把它變成數字：過去 5 年這種情況下個月多半反彈，"
+                       "但 2022/09、2025/02 下個月又跌 3.5%、10.2%，連跌兩個月 5 年內也發生過好幾次（多在 2022 空頭）。"
+                       "這是描述過去，不代表下個月一定漲。")
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
