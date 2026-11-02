@@ -413,7 +413,7 @@ def 資金面區():
         差 = 維.iloc[-1] - 維.iloc[-2] if len(維) >= 2 else np.nan
         等級, 色 = 維持率等級(維.iloc[-1])
         卡們.append(卡片(f"上市融資維持率 · {維.index[-1]:%m/%d}", f"{維.iloc[-1]:.1f}%",
-                       ("" if pd.isna(差) else f"較前一日 {差:+.1f}　") + 等級, 色))
+                       ("" if pd.isna(差) else f"較前一日 {差:+.1f}　") + 等級 + "（網站估算）", 色))
     if "外資期貨" in 每日 and 每日["外資期貨"].notna().any():
         期 = 每日["外資期貨"].dropna()
         差 = 期.iloc[-1] - 期.iloc[-2] if len(期) >= 2 else np.nan
@@ -441,7 +441,9 @@ def 資金面區():
             "- **140～150%**：偏低，融資戶多數在虧，要留意\n"
             "- **130～140%**：接近追繳線，股價再跌容易出現斷頭賣壓\n"
             "- **130% 以下**：個股維持率低於 130% 券商會追繳，補不足就強制賣出（斷頭）；大盤跌到這裡常是恐慌殺盤、也常接近底部\n\n"
-            "這裡是自己估算的，跟券商或財經網站公布的數字可能差 1～2%。")
+            "這裡是自己估算的（只算上市、用收盤市值），跟券商或財經網站公布的數字可能差 1～2%；"
+            "有些網紅或媒體講的「大盤融資維持率」用的是別的算法（例如含上櫃、或只算某些券商客戶），可能差到 10% 以上。"
+            "不同來源不要直接比高低，看同一個來源的變化方向比較準。")
     日 = 每日.index.strftime("%m/%d")
     圖 = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.06,
                        subplot_titles=("上漲家數 − 下跌家數", "上市融資維持率（%）", "外資台指期淨未平倉（口）"))
@@ -688,6 +690,7 @@ def 關鍵價位區():
         st.markdown(燈號卡(技術), unsafe_allow_html=True)
     if 代號 == "TAIEX":
         殺估值區()
+        估值週線區(K)
     天數 = st.segmented_control("圖表區間", [20, 60, 120, 250], default=120,
                               format_func=lambda d: {20: "1 個月", 60: "3 個月", 120: "半年", 250: "1 年"}[d],
                               key="價位區間", label_visibility="collapsed") or 120
@@ -713,6 +716,46 @@ def 關鍵價位區():
                "分析師常用條件整理自幾位 YouTube 分析師：20 週線守不守（宏爺）、KD 沒黃金交叉不算反轉（老王）、"
                "扣抵值看 5 日線何時翻揚（通勤族）、跌破爆量那天的低點凶多吉少（老王）。"
                "僅供研究參考，不是買賣建議。")
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def 大盤本益比資料(版本鍵):
+    return engine.大盤本益比(天數=60)
+
+
+def 估值週線區(K):
+    """大盤本益比在 5 年的哪裡＋週線連跌、離 5 週線很遠之後，過去通常怎麼走。"""
+    本 = 大盤本益比資料(_版本)
+    目, 歷, 彙 = engine.週線連跌統計(K)
+    卡們 = []
+    if len(本) >= 12:
+        近 = 本[本["date"] >= 本["date"].max() - pd.Timedelta(days=365 * 5)]["本益比"]
+        v = 本["本益比"].iloc[-1]
+        位 = (近 < v).mean() * 100
+        卡們.append(卡片(f"上市本益比 · {本['date'].iloc[-1]:%m/%d}", f"{v:.1f} 倍",
+                       f"5 年區間 {近.min():.1f}～{近.max():.1f}，比 {位:.0f}% 的時候貴", "#FF8A8A" if 位 >= 80 else ("#7EE2A8" if 位 <= 20 else "#EDEDED")))
+    卡們.append(卡片("加權週線", f"連跌 {目['連跌週數']} 週", f"週收盤比 5 週線 {目['乖離%']:+.1f}%",
+                   "#7EE2A8" if 目["乖離%"] <= -5 else "#EDEDED"))
+    if len(彙):
+        r = 彙.iloc[0]
+        卡們.append(卡片("過去連跌 3 週＋乖離 −5% 後", f"1 週後上漲機率 {r['上漲機率%']:.0f}%",
+                       f"{r['次數']} 次，平均 {r['平均%']:+.1f}%", "#EDEDED"))
+    卡片格(卡們)
+    with st.expander("📈 大盤本益比走勢與週線連跌統計"):
+        if len(本) >= 12:
+            圖 = go.Figure(go.Scatter(x=本["date"], y=本["本益比"], line=dict(color=青, width=2), name="本益比"))
+            圖.add_hline(y=float(本["本益比"].median()), line_dash="dot", line_color="#888", annotation_text="中位數")
+            圖.update_layout(height=260, margin=dict(l=10, r=10, t=10, b=10), showlegend=False)
+            st.plotly_chart(圖, width="stretch", config={"displayModeBar": False})
+            st.caption("本益比＝上市股票總市值 ÷ 總獲利（近四季，虧損股不算）。網站自己用證交所個股本益比和股數估算，"
+                       "每月取月底一天；跟財經媒體講的「預估本益比」（用明年獲利算，通常比較低）不同。")
+        if len(彙):
+            表格(彙, hide_index=True, width="stretch",
+                 column_config={c: st.column_config.NumberColumn(format="%+.1f") for c in ("平均%", "最差%", "最好%")})
+            表格(歷.sort_values("週", ascending=False).assign(週=lambda d: d["週"].dt.strftime("%Y/%m/%d")), hide_index=True, width="stretch",
+                 column_config={c: st.column_config.NumberColumn(format="%+.1f") for c in 歷.columns if c.endswith("%")})
+        st.caption("條件：週 K 連跌 3 週以上，而且週收盤比 5 週線低 5% 以上（負乖離），同一段只算第一次。"
+                   "網紅常說「負乖離大有機會反彈」，這裡用過去 5 年的加權指數檢查；樣本少，只是參考。")
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -1126,6 +1169,31 @@ def 行事曆區():
     st.caption("時間為台灣時間。國際經濟數據與央行會議來自 ForexFactory（只列美、中、日、歐、英的中高重要性），"
                "美股財報來自 Nasdaq（只列台股供應鏈相關龍頭，「盤後」＝台灣隔天早上公布），法說會與除權息只列市值前 50 大。"
                "台灣央行理監事會每季一次（3、6、9、12 月），日期請以央行公告為準。")
+    法說反應區()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def 法說反應資料(版本鍵):
+    法 = engine.讀取法說會()
+    if 法 is None:
+        return pd.DataFrame()
+    法 = 法[法["date"] < pd.Timestamp(今日["date"].max())]
+    return engine.法說後反應(法, 指標[指標["代號"].isin(set(法["code"]))][["代號", "date", "收盤"]], 指數K線("TAIEX", _版本))
+
+
+def 法說反應區():
+    with st.expander("🎤 法說會後隔天股價反應（扣掉大盤）"):
+        t = 法說反應資料(_版本)
+        if t.empty:
+            st.caption("法說會資料累積中（從 11 月起保留已開過的法說會）。")
+            return
+        st.markdown(f"近期 {len(t)} 場法說會：隔天贏大盤 {(t['隔天超額%'] > 0).sum()} 場、輸大盤 {(t['隔天超額%'] < 0).sum()} 場，"
+                    f"隔天平均超額 {t['隔天超額%'].mean():+.1f}%")
+        表格(t.head(60), hide_index=True, width="stretch",
+             column_config={"法說日": st.column_config.DateColumn(format="MM/DD")}
+             | {c: st.column_config.NumberColumn(format="%+.1f") for c in t.columns if c.endswith("%")})
+        st.caption("隔天＝法說會之後第一個交易日收盤比法說日收盤；超額＝再扣掉同期加權漲跌。"
+                   "網紅說「法說很好、隔天還跌，代表市場有問題」：如果最近很多公司法說後都輸大盤，就是市場情緒偏弱的線索。")
 
 
 def 連動區():
@@ -1243,7 +1311,7 @@ def AI解讀區():
             with st.spinner("AI 撰寫中，約 30～60 秒…"):
                 try:
                     國際, 期貨 = 抓國際()
-                    摘要 = engine.大盤摘要(指標, 加權, 國際, 期貨)
+                    摘要 = engine.大盤摘要(指標, 加權, 國際, 期貨, 設定)
                     內容, 模型 = engine.AI大盤解讀(摘要, 模式, 設定)
                     engine.儲存大盤解讀(設定, 模式, 內容, 模型)
                     st.session_state["_解讀版本"] = st.session_state.get("_解讀版本", 0) + 1

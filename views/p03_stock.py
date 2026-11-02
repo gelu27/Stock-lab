@@ -1234,6 +1234,12 @@ with 分頁[4]:
             if 集:
                 摘要 += "\n- 近 3 天集體調整：" + "；".join(f"{家} 家{方}目標價（{名}）" for _, _, 方, 家, 名 in 集)
         try:
+            網 = engine.網紅觀點摘要(網紅說法清單(st.session_state.get("_網紅版本", 0)), 指標, 代號=代號)
+            if 網:
+                摘要 += "\n\n" + "\n".join(網)
+        except Exception:
+            pass
+        try:
             K = 個股K線(代號)
             價文 = engine.價位摘要(K, 全.set_index("date")["成交值億"] if "成交值億" in 全 else None)
             if 價文:
