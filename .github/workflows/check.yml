@@ -19,5 +19,7 @@ jobs:
       - run: pip install -r requirements.txt
       - name: 每個頁面都打開看看有沒有錯誤
         run: python tests/test_pages.py
+      - name: 融資成本估算
+        run: python tests/test_margin.py
       - name: 面額分割換算
         run: python tests/test_split.py

@@ -360,6 +360,10 @@ def 提醒事項(代號們):
     except Exception as e:
         print("興櫃承銷失敗：", repr(e))
     try:
+        行們 += 跌深融資提醒(狀態)
+    except Exception as e:
+        print("跌深融資提醒失敗：", repr(e))
+    try:
         行們 += 台幣提醒(狀態)
     except Exception as e:
         print("台幣提醒失敗：", repr(e))
@@ -461,6 +465,29 @@ def 條件訂閱提醒(狀態, 最多=15):
             if 出:
                 行們.append("　👋 剛剔除：" + "、".join(f"{c} {名.get(c, '')}" for c in 出[:最多]) + (f" 等 {len(出)} 檔" if len(出) > 最多 else ""))
     return (["", "🔔 選股訂閱變動"] + 行們) if 行們 else []
+
+
+def 跌深融資提醒(狀態, 冷卻天數=30):
+    """0050 成分股（跌深榜）剛出現「🧹 融資洗完」就通知，同一檔 30 天內只通知一次；第一次執行只記錄不通知。
+    融資約 21:00 才公布，收盤摘要用的是最近一次公布的融資。"""
+    import engine
+    指標 = engine.計算指標(engine.讀取資料庫(最近天數=300))   # 融資成本要夠長的歷史才估得準
+    最新 = 指標["date"].max()
+    今日 = engine.加基本面(指標[指標["date"] == 最新], engine.讀取基本面())
+    榜, _ = engine.跌深榜(今日)
+    初次 = "跌深_啟用" not in 狀態
+    今天 = pd.Timestamp(dt.datetime.now(台北).date())
+    行們 = []
+    for _, r in 榜[榜["融資洗完"].astype(bool)].iterrows():
+        鍵 = f"跌深洗完_{r['代號']}"
+        if 鍵 in 狀態 and (今天 - pd.Timestamp(狀態[鍵])).days < 冷卻天數:
+            continue
+        狀態[鍵] = f"{今天:%Y-%m-%d}"
+        if not 初次:
+            行們.append(f"🧹 {r['代號']} {r['名稱']} 距今年高點 {r['距今年高點']:+.1f}%、融資維持率約 {r['融資維持率']:.0f}%、"
+                       f"融資 20 日 {r['融資20日增減']:+.1f}%")
+    狀態["跌深_啟用"] = 狀態.get("跌深_啟用", f"{今天:%Y-%m-%d}")
+    return (["", "📉 0050 跌深股融資洗完（實測比單純跌深好，仍要設停損）"] + 行們) if 行們 else []
 
 
 def 集體升降評提醒(狀態):
