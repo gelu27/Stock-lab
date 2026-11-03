@@ -1567,10 +1567,11 @@ def _解析合約負債(html):
     return {k: tuple(v) for k, v in 結果.items()}
 
 
-def 抓合約負債(每次=350, 季數=2):
+def 抓合約負債(每次=200, 季數=2, 時限分鐘=30):
     """公開資訊觀測站個別資產負債表 → fundamental/contract.csv（code、quarter、cl_cur 流動、cl_noncur 非流動，千元；
     src=mops 觀測站、finmind 歷史補的只有流動）。彙總表 balance.csv 已經有某季、但這裡還沒有的公司才去抓，
-    一家約 3 秒，每天最多 每次 家；沒有合約負債這行的公司也記一列（金額空白），不會一直重抓。"""
+    觀測站一家要 10～15 秒，每天最多 每次 家、時限分鐘 分鐘（財報季約兩週補完）；
+    沒有合約負債這行的公司也記一列（金額空白），不會一直重抓。"""
     檔 = 資料夾 / "fundamental" / "contract.csv"
     舊 = pd.read_csv(檔, dtype={"code": str}) if 檔.exists() else pd.DataFrame(columns=合約負債欄)
     資 = pd.read_csv(資料夾 / "fundamental" / "balance.csv", dtype={"code": str})
@@ -1581,8 +1582,11 @@ def 抓合約負債(每次=350, 季數=2):
     if not 待:
         print("合約負債：都是最新的")
         return
-    新們, 失敗 = [], 0
+    新們, 失敗, 開始 = [], 0, time.time()
     for c, q in 待:
+        if time.time() - 開始 > 時限分鐘 * 60:
+            print("合約負債：到時限，下次接著抓")
+            break
         time.sleep(3)
         文字 = ""
         try:
@@ -1613,9 +1617,9 @@ def 抓合約負債(每次=350, 季數=2):
     新 = 新.sort_values("有", kind="stable").drop_duplicates(["code", "quarter"], keep="last").drop(columns="有")
     表 = pd.concat([舊, 新])
     表["順"] = (表["src"] == "mops").astype(int)
-    表 = 表.sort_values(["順"]).drop_duplicates(["code", "quarter"], keep="last").drop(columns="順")
+    表 = 表.sort_values(["順"], kind="stable").drop_duplicates(["code", "quarter"], keep="last").drop(columns="順")
     表.sort_values(["code", "quarter"]).to_csv(檔, index=False)
-    print(f"合約負債完成：抓 {len(待)} 家次，共 {表['code'].nunique()} 家、{len(表)} 列")
+    print(f"合約負債完成：這次抓到 {新['code'].nunique()} 家，共 {表['code'].nunique()} 家、{len(表)} 列")
 
 
 def 抓合約負債歷史(每次=250, 間隔秒=1.2):
@@ -1631,7 +1635,16 @@ def 抓合約負債歷史(每次=250, 間隔秒=1.2):
     if not 待:
         print("合約負債歷史：都補完了")
         return
-    列們, 好了 = [], []
+    def 存檔(列們, 好了):
+        舊 = pd.read_csv(檔, dtype={"code": str}) if 檔.exists() else pd.DataFrame(columns=合約負債欄)
+        表 = pd.concat([舊, pd.DataFrame(列們, columns=合約負債欄)])
+        表["順"] = (表["src"] == "mops").astype(int)
+        表 = 表.sort_values("順", kind="stable").drop_duplicates(["code", "quarter"], keep="last").drop(columns="順")
+        表.sort_values(["code", "quarter"]).to_csv(檔, index=False)
+        完成.update(好了)
+        完成檔.write_text("\n".join(sorted(完成)) + "\n")
+
+    列們, 好了, 合計, 有資料 = [], [], 0, set()
     for c in 待:
         time.sleep(間隔秒)
         try:
@@ -1645,21 +1658,20 @@ def 抓合約負債歷史(每次=250, 間隔秒=1.2):
             break
         好了.append(c)
         d = pd.DataFrame(j.get("data") or [])
-        if not len(d):
-            continue
-        d = d[d["type"] == "CurrentContractLiabilities"]
-        for _, x in d.iterrows():
-            季 = pd.Timestamp(x["date"])
-            列們.append({"code": c, "quarter": f"{季.year}Q{(季.month - 1) // 3 + 1}", "cl_cur": x["value"] / 1000,
-                        "cl_noncur": None, "src": "finmind"})
+        if len(d):
+            for _, x in d[d["type"] == "CurrentContractLiabilities"].iterrows():
+                季 = pd.Timestamp(x["date"])
+                列們.append({"code": c, "quarter": f"{季.year}Q{(季.month - 1) // 3 + 1}", "cl_cur": x["value"] / 1000,
+                            "cl_noncur": None, "src": "finmind"})
+                有資料.add(c)
+        if len(好了) >= 100:  # 每 100 家存一次，中途被中斷也不會白抓
+            存檔(列們, 好了)
+            合計 += len(好了)
+            列們, 好了 = [], []
     if 好了:
-        舊 = pd.read_csv(檔, dtype={"code": str}) if 檔.exists() else pd.DataFrame(columns=合約負債欄)
-        表 = pd.concat([舊, pd.DataFrame(列們, columns=合約負債欄)])
-        表["順"] = (表["src"] == "mops").astype(int)
-        表 = 表.sort_values("順").drop_duplicates(["code", "quarter"], keep="last").drop(columns="順")
-        表.sort_values(["code", "quarter"]).to_csv(檔, index=False)
-        完成檔.write_text("\n".join(sorted(完成 | set(好了))) + "\n")
-    print(f"合約負債歷史：這次補 {len(好了)} 家（有資料 {len({x['code'] for x in 列們})} 家）")
+        存檔(列們, 好了)
+        合計 += len(好了)
+    print(f"合約負債歷史：這次補 {合計} 家（有合約負債 {len(有資料)} 家）")
 
 
 def 抓庫藏股(天數=400):
