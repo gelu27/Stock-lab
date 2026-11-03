@@ -26,6 +26,7 @@
 #   data/ipo.csv                          新股公開申購抽籤日程（證交所，今年與去年）
 #   data/daytrade.csv.gz, daytrade_market.csv 上市個股當沖成交股數、上市櫃整體當沖比重
 #   data/fundamental/balance.csv, cashflow.csv 各季資產負債（季底）、現金流量（今年累計），千元
+#   data/fundamental/contract.csv         各季合約負債（流動、非流動，千元；觀測站個別資產負債表，歷史用 FinMind 補）
 #   data/buyback.csv                      庫藏股（買回自己公司股份）近一年；data/cb.csv 國內可轉債發行資料
 #   data/qfii.csv.gz                      個股外資持股比率（證交所 MI_QFIIS、櫃買，每天累積約一年）
 #   data/mtx_retail.csv                   小台散戶多空比（期交所三大法人小台淨部位、小台未平倉量）
@@ -1535,6 +1536,144 @@ def 抓財報(季數=12):
             print(f"{名}完成，共 {表['quarter'].nunique()} 季")
 
 
+# ---------- 合約負債（預收款，看未來營收能見度） ----------
+合約負債欄 = ["code", "quarter", "cl_cur", "cl_noncur", "src"]
+
+
+def _解析合約負債(html):
+    """公開資訊觀測站個別資產負債表（ajax_t164sb03）HTML → {季度: (流動, 非流動)}，千元。
+    表頭依序有幾個「民國年月日」就有幾期（當季、去年底、去年同期；第四季只有今年底、去年底）。
+    回傳 None 代表頁面不是正常財報（查詢過量、查無資料）；{} 代表有財報但沒有合約負債這行。"""
+    去標籤 = lambda t: re.sub(r"<[^>]+>|&nbsp;|\s", "", t)
+    if "會計項目" not in html:
+        return None
+    日期們 = []
+    for 年, 月, _ in re.findall(r"(\d{2,3})年(\d{2})月(\d{2})日", html.split("會計項目", 1)[1][:3000]):
+        季度 = f"{int(年) + 1911}Q{(int(月) - 1) // 3 + 1}"
+        if 季度 not in 日期們:
+            日期們.append(季度)
+    結果 = {}
+    for 列 in re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S):
+        格 = [去標籤(t) for t in re.findall(r"<td[^>]*>(.*?)</td>", 列, re.S)]
+        if not 格 or not 格[0].startswith("合約負債"):
+            continue
+        位 = 1 if "非流動" in 格[0] else 0
+        數字們 = [轉數字(x) for x in 格[1::2]]  # 金額、%、金額、%…
+        for 季度, 值 in zip(日期們, 數字們):
+            舊 = 結果.get(季度, [None, None])
+            if 舊[位] is None and 值 is not None:
+                舊[位] = 值
+            結果[季度] = 舊
+    return {k: tuple(v) for k, v in 結果.items()}
+
+
+def 抓合約負債(每次=200, 季數=2, 時限分鐘=30):
+    """公開資訊觀測站個別資產負債表 → fundamental/contract.csv（code、quarter、cl_cur 流動、cl_noncur 非流動，千元；
+    src=mops 觀測站、finmind 歷史補的只有流動）。彙總表 balance.csv 已經有某季、但這裡還沒有的公司才去抓，
+    觀測站一家要 10～15 秒，每天最多 每次 家、時限分鐘 分鐘（財報季約兩週補完）；
+    沒有合約負債這行的公司也記一列（金額空白），不會一直重抓。"""
+    檔 = 資料夾 / "fundamental" / "contract.csv"
+    舊 = pd.read_csv(檔, dtype={"code": str}) if 檔.exists() else pd.DataFrame(columns=合約負債欄)
+    資 = pd.read_csv(資料夾 / "fundamental" / "balance.csv", dtype={"code": str})
+    季們 = sorted(資["quarter"].unique())[-季數:]
+    已抓 = set(zip(舊.loc[舊["src"] == "mops", "code"], 舊.loc[舊["src"] == "mops", "quarter"]))
+    待 = [(c, q) for q in reversed(季們) for c in sorted(資.loc[資["quarter"] == q, "code"].unique())
+         if re.fullmatch(r"[1-9]\d{3}", c) and (c, q) not in 已抓][:每次]
+    if not 待:
+        print("合約負債：都是最新的")
+        return
+    新們, 失敗, 開始 = [], 0, time.time()
+    for c, q in 待:
+        if time.time() - 開始 > 時限分鐘 * 60:
+            print("合約負債：到時限，下次接著抓")
+            break
+        time.sleep(3)
+        文字 = ""
+        try:
+            r = requests.post("https://mopsov.twse.com.tw/mops/web/ajax_t164sb03", headers=標頭, timeout=60,
+                              data={"encodeURIComponent": 1, "step": 1, "firstin": 1, "off": 1, "queryName": "co_id",
+                                    "inpuType": "co_id", "TYPEK": "all", "isnew": "false", "co_id": c,
+                                    "year": str(int(q[:4]) - 1911), "season": f"{int(q[-1]):02d}"})
+            文字 = r.text
+            結果 = _解析合約負債(文字)
+        except requests.RequestException:
+            結果 = None
+        if 結果 is None:
+            失敗 += 1
+            if "過量" in 文字 or 失敗 >= 15:
+                print("合約負債：觀測站擋查詢或連續失敗，下次再補")
+                break
+            continue
+        失敗 = 0
+        新們.append({"code": c, "quarter": q, "cl_cur": None, "cl_noncur": None, "src": "mops"})
+        for 季度, (流動, 非流動) in 結果.items():
+            if 季度 == q or 季度[-1] == q[-1]:  # 當季與去年同期（去年底那欄不要，季底不同）
+                新們.append({"code": c, "quarter": 季度, "cl_cur": 流動, "cl_noncur": 非流動, "src": "mops"})
+    if not 新們:
+        print("合約負債：這次都沒抓到")
+        return
+    新 = pd.DataFrame(新們)
+    新["有"] = 新[["cl_cur", "cl_noncur"]].notna().sum(axis=1)
+    新 = 新.sort_values("有", kind="stable").drop_duplicates(["code", "quarter"], keep="last").drop(columns="有")
+    表 = pd.concat([舊, 新])
+    表["順"] = (表["src"] == "mops").astype(int)
+    表 = 表.sort_values(["順"], kind="stable").drop_duplicates(["code", "quarter"], keep="last").drop(columns="順")
+    表.sort_values(["code", "quarter"]).to_csv(檔, index=False)
+    print(f"合約負債完成：這次抓到 {新['code'].nunique()} 家，共 {表['code'].nunique()} 家、{len(表)} 列")
+
+
+def 抓合約負債歷史(每次=250, 間隔秒=1.2):
+    """FinMind 資產負債表補合約負債歷史（只有流動部分，免費版每小時 300 次）→ 寫進 contract.csv（src=finmind），
+    觀測站抓到的同一季會蓋過去。已補過的公司記在 fundamental/contract_finmind.txt。
+    每天補 250 家（低於免費額度），約 8 天補完；一次補多家時把 間隔秒 調成 13（每小時不超過 280 次）。"""
+    檔 = 資料夾 / "fundamental" / "contract.csv"
+    完成檔 = 資料夾 / "fundamental" / "contract_finmind.txt"
+    完成 = set(完成檔.read_text().split()) if 完成檔.exists() else set()
+    股本 = pd.read_csv(資料夾 / "fundamental" / "capital.csv", dtype={"code": str})
+    代號們 = sorted(c for c in 股本["code"].astype(str).str.strip() if re.fullmatch(r"[1-9]\d{3}", c))
+    待 = [c for c in 代號們 if c not in 完成][:每次]
+    if not 待:
+        print("合約負債歷史：都補完了")
+        return
+    def 存檔(列們, 好了):
+        舊 = pd.read_csv(檔, dtype={"code": str}) if 檔.exists() else pd.DataFrame(columns=合約負債欄)
+        表 = pd.concat([舊, pd.DataFrame(列們, columns=合約負債欄)])
+        表["順"] = (表["src"] == "mops").astype(int)
+        表 = 表.sort_values("順", kind="stable").drop_duplicates(["code", "quarter"], keep="last").drop(columns="順")
+        表.sort_values(["code", "quarter"]).to_csv(檔, index=False)
+        完成.update(好了)
+        完成檔.write_text("\n".join(sorted(完成)) + "\n")
+
+    列們, 好了, 合計, 有資料 = [], [], 0, set()
+    for c in 待:
+        time.sleep(間隔秒)
+        try:
+            r = requests.get("https://api.finmindtrade.com/api/v4/data", timeout=60,
+                             params={"dataset": "TaiwanStockBalanceSheet", "data_id": c, "start_date": "2020-01-01"})
+            j = r.json()
+        except Exception:
+            continue
+        if j.get("status") != 200:
+            print(f"合約負債歷史：FinMind 回 {j.get('status')} {str(j.get('msg'))[:60]}，下次再補")
+            break
+        好了.append(c)
+        d = pd.DataFrame(j.get("data") or [])
+        if len(d):
+            for _, x in d[d["type"] == "CurrentContractLiabilities"].iterrows():
+                季 = pd.Timestamp(x["date"])
+                列們.append({"code": c, "quarter": f"{季.year}Q{(季.month - 1) // 3 + 1}", "cl_cur": x["value"] / 1000,
+                            "cl_noncur": None, "src": "finmind"})
+                有資料.add(c)
+        if len(好了) >= 100:  # 每 100 家存一次，中途被中斷也不會白抓
+            存檔(列們, 好了)
+            合計 += len(好了)
+            列們, 好了 = [], []
+    if 好了:
+        存檔(列們, 好了)
+        合計 += len(好了)
+    print(f"合約負債歷史：這次補 {合計} 家（有合約負債 {len(有資料)} 家）")
+
+
 def 抓庫藏股(天數=400):
     """公開資訊觀測站「買回自己公司股份彙總統計表」（上市＋上櫃，董事會決議日在近 天數 天內）→ data/buyback.csv。"""
     今天 = dt.datetime.now(台北時區).date()
@@ -1660,7 +1799,7 @@ def main():
 
     if not 參數.skip_latest:
         for 工作 in (抓分時, 抓興櫃, 抓基本面, 抓匯率, 抓處置注意, 抓借券, 抓法說會, 抓融資金額, 抓期貨未平倉, 抓小台散戶,
-                     抓美股日線, 抓經濟行事曆, 抓美股財報, 抓指數K線, 抓選擇權, 抓新股申購, 抓外資持股, 抓當沖, 抓庫藏股, 抓可轉債, 抓公司簡介,
+                     抓美股日線, 抓經濟行事曆, 抓美股財報, 抓指數K線, 抓選擇權, 抓新股申購, 抓外資持股, 抓當沖, 抓庫藏股, 抓可轉債, 抓公司簡介, 抓合約負債, 抓合約負債歷史,
                      抓內部人轉讓, 抓興櫃推薦券商, 抓重大訊息, 抓美國數據, 抓美股資本支出, 抓費半長線, 抓夜盤法人, 抓台指期價差, 抓期貨保證金, 抓0050成分):  # 這些出問題不影響主資料庫
             try:
                 工作()

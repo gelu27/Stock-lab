@@ -716,6 +716,9 @@ def 選股(當日, 條件):
     for 鍵, 欄 in (("當沖比率上限", "當沖比率"), ("負債比上限", "負債比")):
         if c.get(鍵) is not None and 欄 in 結果.columns:
             結果 = 結果[結果[欄] <= c[鍵]]
+    for 鍵, 欄 in (("合約負債年增下限", "合約負債年增"), ("能見度月下限", "能見度月")):
+        if c.get(鍵) is not None and 欄 in 結果.columns:
+            結果 = 結果[結果[欄] >= c[鍵]]
     if c.get("自由現金流為正") and "近四季自由現金流億" in 結果.columns:
         結果 = 結果[結果["近四季自由現金流億"] > 0]
     for 鍵, 欄 in (("外資連買下限", "外資連買"), ("投信連買下限", "投信連買"), ("法人5日買超下限", "法人5日買超"),
@@ -2277,6 +2280,11 @@ def _有(d, 欄):
     ("基本", -20, lambda d: _有(d, "近三季EPS") < 0, lambda r: f"近三季 EPS 虧損 {r['近三季EPS']:.2f} 元"),
     ("基本", 5, lambda d: _有(d, "毛利率年增") >= 1, lambda r: f"毛利率較去年同季增 {r['毛利率年增']:.1f} 個百分點"),
     ("基本", -5, lambda d: _有(d, "毛利率年增") <= -1, lambda r: f"毛利率較去年同季減 {abs(r['毛利率年增']):.1f} 個百分點"),
+    # 2026-11 加：合約負債（預收款）年增，全市場驗證財報後 60 日高組贏低組 6.3%（t≈2.4），只看預收款夠大的公司
+    ("基本", 10, lambda d: (_有(d, "合約負債年增") >= 30) & (_有(d, "合約負債營收比") >= 5),
+     lambda r: f"合約負債（預收款）年增 {r['合約負債年增']:.0f}%"),
+    ("基本", -5, lambda d: (_有(d, "合約負債年增") <= -20) & (_有(d, "合約負債營收比") >= 5),
+     lambda r: f"合約負債（預收款）年減 {abs(r['合約負債年增']):.0f}%"),
     ("基本", 5, lambda d: (d["本益比"] > 0) & (d["本益比"] <= 15), lambda r: f"本益比 {r['本益比']:.1f} 偏低"),
     ("基本", -5, lambda d: d["本益比"] >= 40, lambda r: f"本益比 {r['本益比']:.1f} 偏高"),
     ("基本", 5, lambda d: d["殖利率"] >= 5, lambda r: f"殖利率 {r['殖利率']:.1f}%"),
@@ -2311,6 +2319,7 @@ def _有(d, 欄):
     ("基本", "+10", "月營收創歷史新高（要有 13 個月以上資料）"),
     ("基本", "+5／−20", "近三季 EPS 合計為正／虧損"),
     ("基本", "+5／−5", "單季毛利率比去年同季增加／減少 1 個百分點以上"),
+    ("基本", "+10／−5", "合約負債（預收款）年增 ≥ 30%／≤ −20%（只算合約負債至少是近四季營收 5% 的公司）"),
     ("基本", "+5／−5", "本益比 15 倍以下／40 倍以上"),
     ("基本", "+5", "殖利率 5% 以上"),
     ("市場", "+10／−10", "大盤分數 ≥ 60／≤ 40（指數均線、漲跌家數、外資買賣超）"),
@@ -2573,7 +2582,7 @@ def 變化摘要(歷史, 週轉, 大):
 
 
 # ========== 14. 評分回測：分數高的股票之後真的比較會漲嗎？ ==========
-def 評分回測(持有天數=20, 最少量=500):
+def 評分回測(持有天數=20, 最少量=500, 含合約負債=True):
     """每月最後一個交易日用「當時看得到的資料」打分數，比較之後 N 個交易日的報酬。
     營收用當時已公布的月份（假設次月 10 日前公布）；EPS、毛利率用當時已過公布期限的季報
     （Q1 5/15、Q2 8/14、Q3 11/14、Q4 隔年 3/31），損益表歷史約 5 年。
@@ -2594,6 +2603,7 @@ def 評分回測(持有天數=20, 最少量=500):
         年, 季 = int(季度[:4]), int(季度[-1])
         return pd.Timestamp(f"{年 + 1}-03-31") if 季 == 4 else pd.Timestamp(f"{年}-{(5, 8, 11)[季 - 1]:02d}-{(15, 14, 14)[季 - 1]}")
     季期限 = {q: 公布期限(q) for q in set(累計EPS["quarter"]) | set(單季.get("quarter", []))}
+    合約 = 讀取合約負債() if 含合約負債 else None
 
     def 當時財報(日):
         可 = {q for q, d in 季期限.items() if d <= 日}
@@ -2604,6 +2614,10 @@ def 評分回測(持有天數=20, 最少量=500):
         最新["近三季EPS"] = _近三季EPS(e).reindex(最新.index).fillna(最新["EPS"]) if len(e) else np.nan
         if len(單季):
             最新 = 最新.join(毛利率表(單季[單季["quarter"].isin(可)]), how="outer")
+        if 合約 is not None:
+            c = 合約[合約["quarter"].map(lambda q: 公布期限(q) <= 日)].dropna(subset=["合約負債"])
+            if len(c):
+                最新 = 最新.join(c.groupby("code").tail(1).set_index("code")[["合約負債年增", "合約負債營收比"]], how="outer")
         return 最新
     日們 = pd.DatetimeIndex(sorted(指["date"].unique()))
     期 = 日們.to_period("M")
@@ -5561,6 +5575,7 @@ def 定期定額(歷史, 每月, 扣款日=6, 開始=None, 結束=None, 折扣=1
     "外資持股比": "外資持有的股數 ÷ 公司發行股數。持續上升代表外資長線布局，比單日買賣超更能看出趨勢。",
     "當沖比率": "當天買進又賣出（當日沖銷）的成交量 ÷ 總成交量。比率很高代表短線客多，股價容易暴漲暴跌。",
     "自由現金流": "公司本業賺進的現金（營業現金流）扣掉投資支出後剩下的錢，可以拿來配息、還債。網站用「營業＋投資現金流」簡單估算。",
+    "合約負債": "公司已經收款、還沒交貨的預收款（舊稱預收款項），交貨後才轉成營收，常當成未來一兩季營收的領先指標。網站看年增率與「能見度」（合約負債 ÷ 近四季營收 × 12，約等於幾個月營收）。台積電、鴻海等很多公司沒有單獨列這行。",
     "負債比": "總負債 ÷ 總資產。一般產業超過 60～70% 要留意；銀行、保險本來就很高，不能直接比。",
     "庫藏股": "公司拿錢從市場買回自家股票，通常代表公司認為股價偏低，也有護盤效果。",
     "可轉債": "可以轉換成股票的公司債。股價高於轉換價時債券持有人會轉成股票，股本會被稀釋。",
@@ -5764,6 +5779,178 @@ def 財報體質表():
         結果["近四季營業現金流億"] = 和["cfo"].round(1)
         結果["近四季自由現金流億"] = 和["fcf"].round(1)
     return 結果
+
+
+def 讀取合約負債(代號=None):
+    """各季合約負債（預收款，千元）＋同季營收：code、quarter、cl_cur、cl_noncur、src、合約負債、近四季營收、
+    合約負債年增（%）、合約負債營收比（÷近四季營收，%）、能見度月（約等於幾個月營收）。
+    年增：兩季都是觀測站資料就用流動＋非流動，否則只比流動（FinMind 歷史只有流動）；兩季都不到 1 億不算，避免小金額亂跳。"""
+    t = _讀("fundamental/contract.csv", dtype={"code": str})
+    if t is None or not len(t):
+        return None
+    if 代號 is not None:
+        t = t[t["code"] == str(代號)]
+        if not len(t):
+            return None
+    t = t.sort_values(["code", "quarter"]).copy()
+    t["合約負債"] = t[["cl_cur", "cl_noncur"]].sum(axis=1, min_count=1)
+    t["序"] = t["quarter"].str[:4].astype(int) * 4 + t["quarter"].str[-1].astype(int)
+    去年 = t.set_index(["code", "序"])
+    鍵 = list(zip(t["code"], t["序"] - 4))
+    前總, 前流, 前源 = (去年[k].reindex(鍵).values for k in ("合約負債", "cl_cur", "src"))
+    同源 = (t["src"].values == "mops") & (前源 == "mops")
+    今 = np.where(同源, t["合約負債"], t["cl_cur"])
+    前 = np.where(同源, 前總, 前流)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        年增 = (今 / 前 - 1) * 100
+    t["合約負債年增"] = np.where((前 > 0) & (np.fmax(今, 前) >= 1e5), 年增, np.nan).round(1)
+    單 = 單季損益(代號)
+    if len(單):
+        單 = 單[["code", "quarter", "revenue_q"]].copy()
+        單["近四季營收"] = 單.groupby("code")["revenue_q"].transform(lambda s: s.rolling(4).sum())
+        t = t.merge(單[["code", "quarter", "revenue_q", "近四季營收"]].rename(columns={"revenue_q": "單季營收"}),
+                    on=["code", "quarter"], how="left")
+    else:
+        t["單季營收"] = t["近四季營收"] = np.nan
+    有營收 = t["近四季營收"] > 0
+    t["合約負債營收比"] = (t["合約負債"] / t["近四季營收"] * 100).where(有營收).round(1)
+    t["能見度月"] = (t["合約負債"] / t["近四季營收"] * 12).where(有營收).round(1)
+    return t.drop(columns="序").reset_index(drop=True)
+
+
+def 合約負債摘要(代號, 季數=6):
+    """給 AI 分析用的一段文字：近幾季合約負債、年增率、能見度。沒資料回傳空字串。"""
+    t = 讀取合約負債(代號)
+    if t is None:
+        return ""
+    if t["src"].eq("mops").any() and t["合約負債"].isna().all():
+        return "- 合約負債：財報沒有單獨列報（無法用預收款判斷營收能見度）"
+    t = t.dropna(subset=["合約負債"]).tail(季數)
+    if not len(t):
+        return ""
+    fmt = lambda v, f, 尾="": "—" if pd.isna(v) else f.format(v) + 尾
+    各季 = "、".join(f"{x['quarter']} {x['合約負債'] / 1e5:,.1f} 億（年增 {fmt(x['合約負債年增'], '{:+.0f}', '%')}）"
+                    for _, x in t.iterrows())
+    最 = t.iloc[-1]
+    return (f"- 合約負債（預收款，未來營收領先指標）近 {len(t)} 季：{各季}；最新能見度約 {fmt(最['能見度月'], '{:.1f}')} 個月營收"
+            f"（合約負債 ÷ 近四季營收 {fmt(最['合約負債營收比'], '{:.0f}', '%')}）")
+
+
+def 合約負債表():
+    """每檔最新一季合約負債：合約負債億、合約負債季度、合約負債年增、合約負債營收比、能見度月、合約負債佔股本（%）。以代號為索引。"""
+    t = 讀取合約負債()
+    if t is None:
+        return None
+    最新 = t.dropna(subset=["合約負債"]).groupby("code").tail(1).set_index("code")
+    結果 = pd.DataFrame({"合約負債億": (最新["合約負債"] / 1e5).round(2), "合約負債季度": 最新["quarter"],
+                         "合約負債年增": 最新["合約負債年增"], "合約負債營收比": 最新["合約負債營收比"],
+                         "能見度月": 最新["能見度月"]})
+    股本 = _讀("fundamental/capital.csv", dtype={"code": str})
+    if 股本 is not None:
+        股 = 股本.drop_duplicates("code", keep="last").set_index("code")["capital"]
+        結果["合約負債佔股本"] = (最新["合約負債"] * 1000 / 股.reindex(最新.index) * 100).round(1)
+    結果.index.name = "代號"
+    return 結果
+
+
+def 合約負債驗證(價=None, 天數=60, 最少成交值=2e7):
+    """全市場驗證合約負債：每季財報公告後（季底＋45 天，第四季＋90 天）持有 天數 個交易日的超額報酬，
+    依合約負債年增率／能見度／近兩季營收年增各分三組，比較高組減低組；也看合約負債年增能不能預告未來兩季營收。
+    價＝寬表（日期 × 代號，還原價），測試用；不給就從資料庫算。結果存 data/contract_backtest.json（Actions 算）。"""
+    t = 讀取合約負債()
+    if t is None:
+        return None
+    t = t[t["code"].str.fullmatch(r"[1-9]\d{3}")].copy()
+    均額 = None
+    if 價 is None:
+        指 = 計算指標(讀取資料庫())
+        指 = 指[指["代號"].isin(set(t["code"]))]
+        價 = 指.pivot(index="date", columns="代號", values="還原價").sort_index()
+        均額 = 指.pivot(index="date", columns="代號", values="value").sort_index().rolling(20).mean()
+        del 指
+        釋放記憶體()
+    日 = 價.index
+    季底 = pd.PeriodIndex(t["quarter"].str.replace("Q", "-Q"), freq="Q").end_time.normalize()
+    公告 = 季底 + pd.to_timedelta(np.where(季底.month == 12, 90, 45), "D")
+    t["進"] = 日.searchsorted(公告.values, side="right")
+    可 = (t["進"] + 天數 < len(日)) & t["code"].isin(價.columns)
+    t = t[可].copy()
+    欄位 = 價.columns.get_indexer(t["code"])
+    進價, 出價 = 價.values[t["進"], 欄位], 價.values[t["進"] + 天數, 欄位]
+    t["報酬"] = 出價 / 進價 - 1
+    if 均額 is not None:
+        t = t[均額.values[t["進"] - 1, 均額.columns.get_indexer(t["code"])] >= 最少成交值]
+    # 近兩季營收年增（已公布）與未來兩季營收年增
+    單 = 單季損益()[["code", "quarter", "revenue_q"]]
+    單["序"] = 單["quarter"].str[:4].astype(int) * 4 + 單["quarter"].str[-1].astype(int)
+    營 = 單.set_index(["code", "序"])["revenue_q"]
+    t["序"] = t["quarter"].str[:4].astype(int) * 4 + t["quarter"].str[-1].astype(int)
+    取 = lambda d: 營.reindex(list(zip(t["code"], t["序"] + d))).values
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t["近兩季營收年增"] = ((取(0) + 取(-1)) / (取(-4) + 取(-5)) - 1) * 100
+        t["未來兩季營收年增"] = ((取(1) + 取(2)) / (取(-3) + 取(-2)) - 1) * 100
+    t = t.replace([np.inf, -np.inf], np.nan).dropna(subset=["報酬"])
+    t["超額"] = t["報酬"] - t.groupby("quarter")["報酬"].transform("mean")
+    有意義 = t["合約負債營收比"] >= 5  # 合約負債至少是近四季營收的 5%，太小的公司不看
+
+    def 分組(欄, 遮=None):
+        d = t[有意義 if 遮 is None else 遮].dropna(subset=[欄])
+        d = d[d.groupby("quarter")[欄].transform("count") >= 15]
+        if not len(d):
+            return None
+        秩 = d.groupby("quarter")[欄].rank(pct=True)
+        差 = (d[秩 > 2 / 3].groupby("quarter")["超額"].mean() - d[秩 <= 1 / 3].groupby("quarter")["超額"].mean()).dropna()
+        if len(差) < 4:
+            return None
+        return {"高減低%": round(差.mean() * 100, 2), "t值": round(差.mean() / 差.std() * np.sqrt(len(差)), 2),
+                "勝率%": round((差 > 0).mean() * 100), "季數": int(len(差)), "筆數": int(len(d)),
+                "高組平均%": round(d[秩 > 2 / 3]["超額"].mean() * 100, 2), "低組平均%": round(d[秩 <= 1 / 3]["超額"].mean() * 100, 2),
+                "每季": {k: round(v * 100, 2) for k, v in 差.items()}}
+
+    列們 = []
+    for 名, 欄, 遮 in (("合約負債年增率", "合約負債年增", None), ("能見度（合約負債 ÷ 營收）", "能見度月", None),
+                    ("對照：近兩季營收年增", "近兩季營收年增", None),
+                    ("合約負債年增率（只看能見度 ≥ 3 個月的公司）", "合約負債年增", t["能見度月"] >= 3)):
+        r = 分組(欄, 遮)
+        if r:
+            列們.append({"指標": 名, **r})
+    d = t[有意義].dropna(subset=["合約負債年增", "近兩季營收年增", "未來兩季營收年增"])
+    d = d[d[["合約負債年增", "近兩季營收年增", "未來兩季營收年增"]].abs().lt(1000).all(axis=1)]
+    預告 = {}
+    if len(d) >= 100:
+        c = d[["合約負債年增", "近兩季營收年增", "未來兩季營收年增"]].rank().corr()
+        a, b, r_ = c.loc["未來兩季營收年增", "合約負債年增"], c.loc["未來兩季營收年增", "近兩季營收年增"], c.loc["合約負債年增", "近兩季營收年增"]
+        組 = pd.qcut(d["合約負債年增"].rank(method="first"), 3, labels=["低", "中", "高"])
+        預告 = {"筆數": int(len(d)), "相關": round(a, 3),
+                "偏相關": round((a - b * r_) / np.sqrt((1 - b ** 2) * (1 - r_ ** 2)), 3),
+                "各組未來兩季營收年增中位數%": d.groupby(組, observed=True)["未來兩季營收年增"].median().round(1).to_dict()}
+    主 = next((r for r in 列們 if r["指標"] == "合約負債年增率"), None)
+    結論 = "資料不足"
+    if 主:
+        結論 = ("成立" if 主["t值"] >= 2 and 主["高減低%"] > 0 else "偏弱" if 主["高減低%"] > 0 else "不成立")
+    return {"計算日": pd.Timestamp.now().strftime("%Y-%m-%d"), "天數": 天數, "家數": int(t[有意義]["code"].nunique()),
+            "起": t["quarter"].min(), "迄": t["quarter"].max(), "結果": 列們, "營收預告": 預告, "結論": 結論}
+
+
+def 更新合約負債驗證(強制=False, 間隔天數=25):
+    """GitHub Actions 每天呼叫；距離上次超過 間隔天數 才重算。"""
+    import json
+    檔 = 資料夾 / "contract_backtest.json"
+    if 檔.exists() and not 強制:
+        舊 = json.loads(檔.read_text())
+        if (pd.Timestamp.now() - pd.Timestamp(舊.get("計算日", "2000-01-01"))).days < 間隔天數:
+            print("合約負債驗證：還不用重算")
+            return
+    結果 = 合約負債驗證()
+    if 結果:
+        檔.write_text(json.dumps(結果, ensure_ascii=False, indent=1, default=float))
+        print(f"合約負債驗證：{結果['結論']}，{結果['家數']} 家")
+
+
+def 讀取合約負債驗證():
+    import json
+    檔 = 資料夾 / "contract_backtest.json"
+    return json.loads(檔.read_text()) if 檔.exists() else None
 
 
 def 讀取選擇權():

@@ -138,6 +138,44 @@ def 毛利圖(損益, 寬=9.2, 高=3.6):
     return _存圖(plt, 圖)
 
 
+def 合約負債圖(合約, 寬=9.2, 高=3.6):
+    if 合約 is None or 合約["合約負債"].notna().sum() < 2:
+        return None
+    t = 合約.dropna(subset=["合約負債"]).tail(8)
+    plt = _畫布()
+    圖, 軸 = plt.subplots(figsize=(寬, 高))
+    q = t["quarter"].str[2:]
+    軸.set_axisbelow(True)
+    軸.bar(q, t["合約負債"] / 1e5, color=青, width=0.6, label="合約負債（億）")
+    if t["單季營收"].notna().any():
+        軸.plot(q, t["單季營收"] / 1e5, color=黃, marker="o", linewidth=1.8, label="單季營收（億）")
+    軸.set_ylabel("億元")
+    軸.legend(loc="upper left", frameon=False, ncol=2)
+    return _存圖(plt, 圖)
+
+
+def 合約負債解讀(合約):
+    if 合約 is None:
+        return None
+    t = 合約.dropna(subset=["合約負債"])
+    if not len(t):
+        return None
+    最 = t.iloc[-1]
+    年增, 月 = 最["合約負債年增"], 最["能見度月"]
+    if pd.notna(年增) and 年增 >= 30:
+        標題 = "預收款大增，未來營收能見度提高"
+    elif pd.notna(年增) and 年增 <= -20:
+        標題 = "預收款減少，後續營收動能要留意"
+    else:
+        標題 = "預收款大致持平"
+    重點 = [f"{最['quarter'][:4]} Q{最['quarter'][-1]} 合約負債 **{最['合約負債'] / 1e5:,.1f} 億**"
+            + (f"，較去年同季 **{年增:+.1f}%**。" if pd.notna(年增) else "（金額小或去年沒資料，不算年增率）。")]
+    if pd.notna(月):
+        重點.append(f"約等於 **{月:.1f} 個月**的營收（合約負債 ÷ 近四季營收 × 12）。")
+    重點.append("合約負債是已收款、還沒交貨的預收款，交貨後才轉成營收；季增率容易被單筆大額預付款影響，看年增率較穩。")
+    return 標題, 重點
+
+
 def 法人圖(歷史, 寬=9.2, 高=3.6):
     if "外資買超" not in 歷史.columns:
         return None
@@ -525,6 +563,8 @@ def 產生PDF(代號, 名稱, 資料):
     圖高 = 72
     左圖右文("Revenue", "月營收：生意做得怎麼樣", 營收圖(資料.get("營收"), 高=3.3), 營收解讀(資料.get("營收")), 圖高 + 14)
     左圖右文("Margin", "毛利率：賺錢的效率", 毛利圖(資料.get("損益"), 高=3.3), 毛利解讀(資料.get("損益")), 圖高 + 14)
+    左圖右文("Backlog", "合約負債：預收款與營收能見度", 合約負債圖(資料.get("合約負債"), 高=3.3),
+             合約負債解讀(資料.get("合約負債")), 圖高 + 14)
     左圖右文("Institutional", "法人動向：大戶在買還是賣", 法人圖(資料["歷史"], 高=3.3), 法人解讀(資料["歷史"]), 圖高 + 14)
     變化 = 資料.get("變化")
     if 變化:

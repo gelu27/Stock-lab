@@ -354,10 +354,12 @@ with b.popover("🔄 更新"):
 
 @st.cache_data(ttl=3600, show_spinner=False, max_entries=1)
 def 補充欄位(版本鍵):
-    """外資持股比、當沖比率、投信 60 日買超佔股本、負債比、流動比、近四季現金流（每天更新一次）。"""
+    """外資持股比、當沖比率、投信 60 日買超佔股本、負債比、流動比、近四季現金流、合約負債（每天更新一次）。"""
     表 = engine.籌碼補充表(指標)
-    體質 = engine.財報體質表()
-    return 表 if 體質 is None else 表.join(體質, how="outer")
+    for 補 in (engine.財報體質表(), engine.合約負債表()):
+        if 補 is not None:
+            表 = 表.join(補, how="outer")
+    return 表
 
 
 @st.cache_data(max_entries=2, show_spinner=False)
@@ -451,7 +453,13 @@ def 選股條件區():
                 條件["負債比上限"] = st.number_input("負債比(%) ≤", value=50.0, step=5.0, key="條_負債比(%) ≤")
             if st.checkbox("近四季自由現金流為正", key="條_近四季自由現金流為正"):
                 條件["自由現金流為正"] = True
-            st.caption("月營收、EPS、負債比、現金流只有最新一期，組合回測時不會套用。")
+            if st.checkbox("合約負債年增率下限", key="條_合約負債年增率下限",
+                           help="合約負債＝已收款、還沒交貨的預收款，常是未來一兩季營收的領先指標。金額不到 1 億的公司不算年增率。"):
+                條件["合約負債年增下限"] = st.number_input("合約負債年增率(%) ≥", value=30.0, step=10.0, key="條_合約負債年增率(%) ≥")
+            if st.checkbox("合約負債能見度下限", key="條_合約負債能見度下限",
+                           help="合約負債 ÷ 近四季營收 × 12，約等於手上預收款夠做幾個月營收。"):
+                條件["能見度月下限"] = st.number_input("能見度(月) ≥", value=3.0, step=0.5, key="條_能見度(月) ≥")
+            st.caption("月營收、EPS、負債比、現金流、合約負債只有最新一期，組合回測時不會套用。")
         with 格[1].container(border=True):
             st.markdown("**籌碼面**")
             if st.checkbox("外資連續買超", key="條_外資連續買超"):
