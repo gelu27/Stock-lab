@@ -1061,7 +1061,8 @@ def 抓費半長線():
     for 符號 in ("^SOX", "^GSPC"):
         try:
             r = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{requests.utils.quote(符號)}"
-                             "?range=max&interval=1d", headers={"User-Agent": "Mozilla/5.0"}, timeout=60)
+                             f"?period1=757382400&period2={int(time.time())}&interval=1d",  # 1994-01-01 起；range=max 會變成月線
+                             headers={"User-Agent": "Mozilla/5.0"}, timeout=60)
             結果 = r.json()["chart"]["result"][0]
             時區 = 結果["meta"].get("gmtoffset", 0)
             列們 += [{"date": dt.datetime.utcfromtimestamp(時 + 時區).strftime("%Y-%m-%d"), "symbol": 符號, "close": round(收, 2)}
@@ -1140,6 +1141,8 @@ def 抓夜盤法人(天數=12):
         return
     表 = pd.concat([舊, pd.DataFrame(列們)]).drop_duplicates(["date", "product", "who"], keep="last").sort_values(["date", "product", "who"])
     表 = 表[表["date"].astype(str) >= (今天 - dt.timedelta(days=400)).isoformat()]
+    數欄 = ["long", "short", "net", "net_amt"]
+    表[數欄] = 表[數欄].astype("int64")
     表.to_csv(檔, index=False)
     print(f"夜盤法人完成：最新 {表['date'].max()}，共 {表['date'].nunique()} 天")
 
