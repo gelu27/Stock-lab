@@ -104,3 +104,4 @@ jobs:
           UPDATE_OUTCOME: ${{ steps.update.outcome }}
           LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 記下哪些網站錯誤已通知過，避免每天重複推播

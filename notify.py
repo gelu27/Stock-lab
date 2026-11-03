@@ -860,14 +860,18 @@ def 網站錯誤():
         return []
     狀態, sha = 讀設定("alert_state.json")
     已通知 = 狀態.get("網站錯誤已通知", {})
-    新 = [(k, v) for k, v in 紀錄.items() if v.get("次數", 0) > 已通知.get(k, 0)]
+    # 只看最近 4 天內還有發生的錯誤（涵蓋週末）：已經修好、不再發生的舊錯誤，
+    # 就算通知紀錄沒存成功（例如沒有 GITHUB_TOKEN），也不會每天重複推播
+    界線 = (dt.datetime.now(台北) - dt.timedelta(days=4)).strftime("%Y-%m-%d %H:%M")
+    新 = [(k, v) for k, v in 紀錄.items()
+         if v.get("次數", 0) > 已通知.get(k, 0) and str(v.get("最近", "")) >= 界線]
     if not 新:
         return []
     狀態["網站錯誤已通知"] = {**已通知, **{k: v["次數"] for k, v in 新}}
     try:
         寫設定("alert_state.json", 狀態, sha)
     except Exception as e:
-        print("提醒狀態存檔失敗：", repr(e))
+        print("⚠️ 網站錯誤的通知紀錄存檔失敗，下次可能重複通知：", repr(e))
     return [f"{v['頁面']}：{v['類型']} {v['訊息'][:80]}（{v.get('位置', '')}，共 {v['次數']} 次，最近 {v['最近']}）" for _, v in 新]
 
 

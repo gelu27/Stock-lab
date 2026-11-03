@@ -21,6 +21,8 @@ jobs:
         run: python tests/test_reload.py
       - name: 每個頁面都打開看看有沒有錯誤
         run: python tests/test_pages.py
+      - name: 網站錯誤通知不重複推播
+        run: python tests/test_error_notify.py
       - name: 融資成本估算
         run: python tests/test_margin.py
       - name: 面額分割換算
