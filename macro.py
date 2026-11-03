@@ -410,7 +410,7 @@ def 費半回撤(長, 門檻=-20.0, 重置=-5.0, 往後=(20, 60)):
     if 長 is None or "^SOX" not in 長:
         return None
     s = 長["^SOX"].dropna()
-    if len(s) < 300:
+    if len(s) < 300 or s.index.to_series().diff().dt.days.tail(60).median() > 5:  # 不是日線（例如舊的月線檔）就不算
         return None
     撤 = (s / s.cummax() - 1) * 100
     列們, 可觸發 = [], True
