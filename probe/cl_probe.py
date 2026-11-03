@@ -1,4 +1,6 @@
 """暫時探測：合約負債資料來源（跑完就刪）"""
+import sys, os
+sys.stdout = open("probe/result.txt", "w", buffering=1)
 import re, time, json, io, requests, pandas as pd
 H = {"User-Agent": "Mozilla/5.0"}
 strip = lambda t: re.sub(r"<[^>]+>|&nbsp;|\s", "", t)
@@ -50,12 +52,14 @@ for i, c in enumerate(codes):
             print("2330 types 合約:", d[d["origin_name"].str.contains("合約|預收", na=False)][["type","origin_name"]].drop_duplicates().values.tolist())
             print("剩餘次數 header:", {k:v for k,v in r.headers.items() if "limit" in k.lower() or "remain" in k.lower()})
         if len(d):
-            s = d[d["type"].isin(["ContractLiabilitiesCurrent","ContractLiabilitiesNonCurrent","TotalAssets","CapitalStock"]) | d["origin_name"].isin(["合約負債－流動","合約負債－非流動","合約負債-流動","合約負債-非流動"])]
-            s = s[~s["type"].str.endswith("_per")]
-            out.append(s.assign(code=c)[["code","date","type","value"]])
+            s = d[(d["type"].isin(["TotalAssets","CapitalStock"]) | d["origin_name"].str.contains("合約負債", na=False)) & ~d["type"].str.endswith("_per")]
+            out.append(s.assign(code=c)[["code","date","type","origin_name","value"]])
         else:
             print(c, "空", r.text[:200])
     except Exception as e: print(c, "失敗", e)
     time.sleep(1.5)
 t = pd.concat(out)
-print("CSVSTART"); print(t.to_csv(index=False)); print("CSVEND")
+print("合約相關 type:", t[t["origin_name"].str.contains("合約")][["type","origin_name"]].drop_duplicates().values.tolist())
+t["k"] = t["type"].where(~t["origin_name"].str.contains("合約"), "CL_" + t["origin_name"])
+w = t.pivot_table(index=["code","date"], columns="k", values="value", aggfunc="first").reset_index()
+w.to_csv("probe/result.csv", index=False)
