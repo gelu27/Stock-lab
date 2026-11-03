@@ -473,6 +473,7 @@ def 資金面區():
         st.caption("「到警戒線加權約幾點」假設融資股跟著大盤同比例跌；融資股通常跌得比大盤重，實際會更早碰到。"
                    "165% 是網紅常說的警戒區，130% 是券商追繳線。")
     融資洗盤區(洗)
+    恐慌日區(洗)
     日 = 每日.index.strftime("%m/%d")
     圖 = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.06,
                        subplot_titles=("上漲家數 − 下跌家數", "上市融資維持率（%）", "外資台指期淨未平倉（口）"))
@@ -510,6 +511,39 @@ def 融資洗盤區(洗):
                    f"資料 {洗.get('起')}～{洗.get('迄')}，最大單日減 {洗.get('最大單日減%')}%；同一段 14 天內只算第一次。"
                    "網紅常說「融資單日大減 200 億以上才是洗盤」，但 5 年內只有 2 天達到，所以改用百分比。"
                    "這 5 年大多是多頭，結果偏樂觀，只是參考。")
+
+
+def 恐慌日區(洗):
+    """大盤恐慌日（跌超過 2%、收在最低點附近）＋融資有沒有洗出來：data/margin_flush.json 的「恐慌日」。"""
+    K = 指數K線("TAIEX", _版本)
+    if K is None or len(K) < 2 or "low" not in K:
+        return
+    今 = engine.恐慌日判斷(K).iloc[-1]
+    恐 = (洗 or {}).get("恐慌日")
+    標題 = "😱 大盤恐慌日：一路殺到底、沒有下影線之後，大盤怎麼走？"
+    if bool(今["恐慌日"]):
+        標題 = f"😱 今天是恐慌日（加權 {今['漲跌%']:+.2f}%、下影線只有 {今['下影線%']:.2f}%）：之後大盤怎麼走？"
+    with st.expander(標題, expanded=bool(今["恐慌日"])):
+        st.markdown(f"今天加權 {今['漲跌%']:+.2f}%，下影線 {今['下影線%']:.2f}%（收盤離當天最低點多遠）。"
+                    + ("**符合恐慌日**：跌超過 2%，而且收在最低點附近。接下來看今晚和明晚的融資有沒有一起大減。"
+                       if bool(今["恐慌日"]) else "不是恐慌日（恐慌日＝跌超過 2%、下影線 0.3% 以內）。"))
+        if not 恐:
+            st.caption("回測資料還沒算好（GitHub Actions 每天更新時會補上）。")
+            return
+        列們 = []
+        for 名, 鍵 in (("全部恐慌日", "全部"), ("融資兩日減 ≥ 1.5%", "融資有洗"), ("融資沒洗", "融資沒洗")):
+            for r, b in zip(恐.get(鍵, []), 恐.get("基準", [])):
+                列們.append({"情況": 名, "天數": f"{r['天數']} 日後", "次數": r["次數"], "上漲機率%": r["上漲機率%"],
+                           "平均%": r["平均%"], "一般日子上漲機率%": b["上漲機率%"], "一般日子平均%": b["平均%"]})
+        表格(pd.DataFrame(列們), hide_index=True, width="stretch",
+             column_config={c: st.column_config.NumberColumn(format="%+.2f") for c in ("平均%", "一般日子平均%")})
+        事 = pd.DataFrame(恐.get("事件", []))
+        if len(事):
+            表格(事.iloc[::-1].rename(columns={"date": "日期", "漲跌%": "當天漲跌%", "融資兩日%": "當天＋隔天融資%"}),
+                 hide_index=True, width="stretch")
+        st.caption("通勤族 11/03 的看法：前幾天開低會拉出下影線，真正恐慌是一路殺到底、幾乎沒有下影線；"
+                   "恐慌之後融資也大減（洗出來），才開始觀察止跌。融資要隔天晚上才知道，所以報酬從恐慌日「隔天收盤」算起。"
+                   "同一段 10 天內只算第一次；樣本少，只是參考。")
 
 
 def 跌深區():
@@ -740,6 +774,7 @@ def 關鍵價位區():
         st.markdown(燈號卡(技術), unsafe_allow_html=True)
     if 代號 == "TAIEX":
         殺估值區()
+        光通訊區()
         估值週線區(K)
     天數 = st.segmented_control("圖表區間", [20, 60, 120, 250], default=120,
                               format_func=lambda d: {20: "1 個月", 60: "3 個月", 120: "半年", 250: "1 年"}[d],
@@ -828,6 +863,25 @@ def 估值週線區(K):
 @st.cache_data(ttl=3600, show_spinner=False)
 def 殺估值資料(版本鍵):
     return engine.殺估值觀察組(指標, 讀檔("讀取美股", _版本))
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def 光通訊資料(版本鍵):
+    return engine.光通訊美台對照(指標, 讀檔("讀取美股", _版本))
+
+
+def 光通訊區():
+    t, 美 = 光通訊資料(_版本)
+    if t.empty:
+        return
+    美字 = "、".join(f"{名} {v:+.1f}%（{d:%m/%d}）" for 名, (d, v) in 美.items())
+    with st.expander(f"🔦 光通訊：昨晚美股 {美字} → 台股光通訊"):
+        欄 = {c: st.column_config.NumberColumn(format="%+.2f") for c in t.columns if c.endswith("%")}
+        表格(t, hide_index=True, width="stretch", column_config=欄)
+        st.caption("相關＝近 120 個交易日，台股當天漲跌跟「前一晚」美股的相關係數（1＝完全同向）。"
+                   "Lumentum 漲 1% 跟漲%＝前一晚 Lumentum 漲 1%，台股隔天平均漲幾 %。"
+                   "11/03 Lumentum 前一晚跌 18.6%（被邁威爾換股收購），聯亞、全新、穩懋全部跌停。"
+                   "推估只看單一美股，實際還有大盤與題材影響，只是參考。")
 
 
 def 殺估值區():

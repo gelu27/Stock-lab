@@ -154,6 +154,7 @@ def 網紅說法總覽():
     價們 = {c: 個股價格(c) for c in 代們}
     網紅熱度區(影片們)
     網紅條件區(影片們, 價們)
+    漲跌停查核區(影片們)
     網紅價位區(影片們)
     明細, 彙 = engine.網紅對答案(影片們, {k: v for k, v in 價們.items() if v is not None}, 指數K線("TAIEX", _版本))
     段落("SCORE // 誰說得準（20 個交易日後，扣掉大盤漲跌）")
@@ -220,6 +221,24 @@ def 網紅條件區(影片們, 價們):
          column_config={"影片日": st.column_config.DateColumn(format="MM/DD")})
     st.caption(f"{len(清單)} 個條件裡有 {len(列們)} 個網站能自動判斷，只看條件的前半段（例如「站回 20 週線」）現在是不是真的。"
                "條件成立不代表後半段（就會漲）一定發生。")
+
+
+def 漲跌停查核區(影片們):
+    起 = 最新日 - pd.Timedelta(days=45)
+    日表 = 指標[指標["date"] >= 起][["date", "代號", "日報酬"]].copy()
+    日表["名稱"] = 日表["代號"].map(市場名稱).fillna("")
+    t = engine.漲跌停查核(影片們, 日表, 天數=30)
+    if t.empty:
+        return
+    段落("LIMIT // 網紅說「漲停／跌停」，真的有嗎（近 30 天影片）")
+    t = t.sort_values("影片日", ascending=False)
+    表格(t, hide_index=True, width="stretch",
+         column_config={"影片日": st.column_config.DateColumn(format="MM/DD"),
+                        "交易日": st.column_config.DateColumn(format="MM/DD"),
+                        "實際漲跌%": st.column_config.NumberColumn(format="%+.2f")})
+    錯 = int((t["結果"] == "❌ 不符").sum())
+    st.caption(f"{len(t)} 則漲跌停說法有 {錯} 則對不上。對不上時，從當天真的漲停（跌停）的股票裡找名字念起來最像的，列在「可能是」；"
+               "例如汪海華 11/02 說「萬泰科漲停」，字幕其實是「忘久」，當天漲停的是旺玖（6233）。漲跌幅 9.5% 以上算漲停。")
 
 
 def 網紅價位區(影片們):
