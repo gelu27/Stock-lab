@@ -8,21 +8,18 @@ permissions:
 jobs:
   backfill:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
       - run: pip install pandas requests
-      - name: 觀測站實測 40 家
-        run: python -c "import update_data as u; u.抓合約負債(每次=40)" | tee data/fundamental/contract_mops_test.txt
-      - name: 先存一次
-        run: |
-          git config user.name "stock-bot"; git config user.email "stock-bot@users.noreply.github.com"
-          git add data/fundamental/contract*; git commit -m "合約負債觀測站實測"; git push
-      - name: FinMind 補歷史（每 13 秒一次，每小時約 277 次）
-        timeout-minutes: 320
-        run: python -c "import update_data as u; u.抓合約負債歷史(每次=1450, 間隔秒=13)"
+      - name: 先等 25 分鐘（上一輪剛用掉部分 FinMind 每小時額度）
+        run: sleep 1500
+      - name: FinMind 補歷史（每 13 秒一次，每小時約 270 次；每 100 家存一次）
+        timeout-minutes: 310
+        run: python -c "import update_data as u; u.抓合約負債歷史(每次=1300, 間隔秒=13)"
       - if: always()
         run: |
+          git config user.name "stock-bot"; git config user.email "stock-bot@users.noreply.github.com"
           git add data/fundamental/contract*; git commit -m "合約負債歷史補齊" || true; git pull --rebase origin claude/project-thread-18bnbn; git push
