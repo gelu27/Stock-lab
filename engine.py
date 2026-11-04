@@ -1518,6 +1518,7 @@ P. 「看錯條件」要用網站能自動對答案的數字（月營收年增�
 - 使用者提供的股價、基本面、籌碼、技術面、支撐壓力數據是正確的，以它為準；價位名稱（月線、季線、共振區等）只用數據摘要裡的。
 - 用網路搜尋近六個月的新聞、月營收與財報、法說會、券商或投顧報告與目標價（多半只能看到新聞摘要）、產業動態。
   優先採用鉅亨網、經濟日報、工商時報、MoneyDJ、公開資訊觀測站，並注意日期，舊聞不要當新聞。
+- 新聞標題標「舊聞」或「舊聞重提」的，要寫出第一次公告的日期，並判斷是否已反映在股價；不要把舊事重提當成新的利多或利空。
 - 沒有來源支持的數字不要寫；傳聞要標「傳聞／待證實」；關聯不要寫成因果。
 - 券商報告幾乎都是買進評等，目標價也常在大漲後才上修：引用時要說明是哪家、哪天，並提醒分歧（最高與最低目標價）。
 
@@ -7091,3 +7092,208 @@ def 讀取大盤融資洗盤():
     import json
     檔 = 資料夾 / "margin_flush.json"
     return json.loads(檔.read_text()) if 檔.exists() else None
+
+
+# ========== 21. 新聞事件工具：舊聞提醒、全部重訊、事件反應、消息先走、金額換算、海外布局、業外損益 ==========
+def _字組(文字):
+    """標題的「兩字一組」集合，用來比對兩則新聞是不是講同一件事。"""
+    字 = re.sub(r"[\s\W_]+", "", str(文字))
+    return {字[i:i + 2] for i in range(len(字) - 1)}
+
+
+def 新聞舊聞標記(新聞, 今天=None, 門檻天數=30, 相似度=0.5):
+    """新聞表加三欄：天數（發布至今幾天）、舊聞（超過 門檻天數）、首見日（同一件事最早出現的日期，
+    比 門檻天數 更早才填，代表這則是「舊聞重提」）。"""
+    if 新聞 is None or not len(新聞):
+        return 新聞
+    t = 新聞.copy()
+    今天 = pd.Timestamp(今天 or pd.Timestamp.now(tz="Asia/Taipei").tz_localize(None)).normalize()
+    t["天數"] = (今天 - t["日期"].dt.normalize()).dt.days.clip(lower=0)
+    t["舊聞"] = t["天數"] > 門檻天數
+    組 = [_字組(x) for x in t["標題"]]
+    首見 = []
+    for i, (日, a) in enumerate(zip(t["日期"], 組)):
+        最早 = pd.NaT
+        for j, (日2, b) in enumerate(zip(t["日期"], 組)):
+            if j == i or not a or not b or 日2 >= 日 - pd.Timedelta(days=門檻天數):
+                continue
+            if len(a & b) / min(len(a), len(b)) >= 相似度 and (pd.isna(最早) or 日2 < 最早):
+                最早 = 日2
+        首見.append(最早)
+    t["首見日"] = 首見
+    return t
+
+
+def 新聞日期標籤(x, 格式="%m/%d"):
+    """新聞清單、AI 提示用的日期標籤：近 30 天只寫日期；更早的加「N 天前」；舊聞重提註明首見日。"""
+    字 = x["日期"].strftime(格式)
+    if x.get("舊聞"):
+        字 += f"（{x['天數']} 天前・舊聞）"
+    if pd.notna(x.get("首見日")):
+        字 += f"（舊聞重提，{x['首見日']:%Y/%m/%d} 已報導過）"
+    return 字
+
+
+def 讀取全部重訊(代號=None, 天數=120):
+    """data/material_news/YYYY-MM.csv.gz：公開資訊觀測站每天全部重大訊息（date, time, code, name, subject）；
+    另外合併舊的 material_news.csv（只有承銷、掛牌等關鍵字的）。新到舊排序。"""
+    起 = pd.Timestamp.now().normalize() - pd.Timedelta(days=天數)
+    檔們 = [f for f in sorted((資料夾 / "material_news").glob("*.csv.gz")) if f.name[:7] >= f"{起:%Y-%m}"]
+    表們 = [pd.read_csv(f, dtype={"code": str}, parse_dates=["date"]) for f in 檔們]
+    舊 = 讀取重大訊息()
+    if 舊 is not None:
+        表們.append(舊)
+    if not 表們:
+        return None
+    t = pd.concat(表們, ignore_index=True)
+    t = t[t["date"] >= 起]
+    if 代號 is not None:
+        t = t[t["code"] == str(代號)]
+    t = t.drop_duplicates(["date", "code", "subject"])
+    return t.sort_values(["date", "time"], ascending=False).reset_index(drop=True) if len(t) else None
+
+
+def 事件反應(價, 指數, 代號們, 事件日, 前置日=None, 天數們=(1, 5, 20)):
+    """事件前後的漲跌幅（%）與減掉大盤後的超額（%）。
+    價：讀取資料庫() 的表（date, code, name, close, change）；指數：讀取指數K線() 的表（date, close）。
+    事件日＝正式公告「之後第一個能反應的交易日」（盤後公告就填隔天）；前置日＝媒體先報導的那天（可省略）。
+    回傳 DataFrame：代號、名稱、前置日漲跌、事件日漲跌、事件後 N 日漲跌（從事件日收盤起算）、各自的超額。"""
+    事件日 = pd.Timestamp(事件日)
+    前置日 = pd.Timestamp(前置日) if 前置日 is not None and pd.notna(前置日) else None
+    指 = 指數.set_index("date")["close"].sort_index()
+    指報酬 = 指.pct_change()
+
+    def 第一個交易日(序列索引, 日):
+        後 = 序列索引[序列索引 >= 日]
+        return 後[0] if len(後) else None
+
+    列們 = []
+    for c in 代號們:
+        p = 價[價["code"] == str(c)].sort_values("date").set_index("date")
+        if p.empty:
+            continue
+        前收 = p["close"] - p["change"]
+        日報 = (p["change"] / 前收).where(前收 > 0).fillna(p["close"].pct_change()).clip(-0.105, 0.105)
+        還原 = (1 + 日報.fillna(0)).cumprod()
+        列 = {"代號": str(c), "名稱": p["name"].iloc[-1]}
+        d0 = 第一個交易日(p.index, 事件日)
+        if d0 is None:
+            continue
+        列["事件日"] = d0
+        if 前置日 is not None:
+            d = 第一個交易日(p.index, 前置日)
+            if d is not None and d < d0:
+                列["前置日漲跌%"] = 日報.get(d, np.nan) * 100
+                列["前置日超額%"] = 列["前置日漲跌%"] - 指報酬.get(d, np.nan) * 100
+        列["事件日漲跌%"] = 日報.get(d0, np.nan) * 100
+        列["事件日超額%"] = 列["事件日漲跌%"] - 指報酬.get(d0, np.nan) * 100
+        位 = p.index.get_loc(d0)
+        for n in 天數們:
+            if 位 + n < len(p):
+                d = p.index[位 + n]
+                漲 = (還原.iloc[位 + n] / 還原.iloc[位] - 1) * 100
+                列[f"後{n}日漲跌%"] = 漲
+                if d0 in 指.index and d in 指.index:
+                    列[f"後{n}日超額%"] = 漲 - (指[d] / 指[d0] - 1) * 100
+        列們.append(列)
+    return pd.DataFrame(列們)
+
+
+事件範本 = [
+    {"名稱": "台積電、Sony 熊本合資影像感測器廠", "代號": "2330,3374,6789,6271,3530",
+     "前置日": "2026-08-10", "事件日": "2026-08-12",
+     "說明": "8/10 媒體先報導，8/11 盤後董事會通過並發新聞稿（台積電新聞 3333），所以反應日是 8/12。"},
+]
+
+
+def 消息先走統計(結果們):
+    """多個事件的 事件反應() 結果合併後，看「媒體先報那天」跟「正式公告之後」哪個反應大。
+    結果們：[(事件名稱, DataFrame), …]。回傳 (每個事件的平均表, 總結 dict)。"""
+    列們 = []
+    for 名, t in 結果們:
+        if t is None or not len(t):
+            continue
+        列 = {"事件": 名, "檔數": len(t)}
+        for 欄 in ("前置日超額%", "事件日超額%", "後5日超額%", "後20日超額%"):
+            if 欄 in t.columns and t[欄].notna().any():
+                列[欄] = float(t[欄].mean())
+        列們.append(列)
+    表 = pd.DataFrame(列們)
+    if 表.empty:
+        return 表, {}
+    總 = {"事件數": len(表)}
+    for 欄 in ("前置日超額%", "事件日超額%", "後5日超額%", "後20日超額%"):
+        if 欄 in 表.columns and 表[欄].notna().any():
+            總[欄] = float(表[欄].mean())
+    if "後20日超額%" in 表.columns and 表["後20日超額%"].notna().any():
+        總["利多出盡比例%"] = float((表["後20日超額%"].dropna() < 0).mean() * 100)
+    if "前置日超額%" in 表.columns and 表["前置日超額%"].notna().any():
+        有 = 表.dropna(subset=["前置日超額%", "事件日超額%"])
+        總["先走事件數"] = int((有["前置日超額%"].abs() > 有["事件日超額%"].abs()).sum())
+        總["有前置日事件數"] = len(有)
+    return 表, 總
+
+
+def 財務規模(代號):
+    """換算投資金額用的分母（台幣億元）：近四季營收、近四季投資現金流（資本支出的近似）、淨值、期末現金。"""
+    結果 = {}
+    營 = _讀("fundamental/revenue_history.csv", dtype={"code": str})
+    if 營 is not None:
+        近 = 營[營["code"] == str(代號)].sort_values("month").tail(12)
+        if len(近) == 12:
+            結果["近四季營收"] = float(近["revenue"].sum()) / 1e5
+    財 = 讀取財報(代號)
+    if 財 is not None and len(財):
+        財 = 財.sort_values("quarter")
+        if "cfi" in 財 and 財["cfi"].tail(4).notna().sum() == 4:
+            結果["近四季投資支出"] = float(-財["cfi"].tail(4).sum()) / 1e5
+        if "equity" in 財 and 財["equity"].notna().any():
+            結果["淨值"] = float(財["equity"].dropna().iloc[-1]) / 1e5
+        if "cash_end" in 財 and 財["cash_end"].notna().any():
+            結果["期末現金"] = float(財["cash_end"].dropna().iloc[-1]) / 1e5
+    return 結果
+
+
+def 投資金額換算(金額, 匯率, 規模, 市值億=None):
+    """金額（外幣，單位：億）× 匯率 → 台幣億元，再換算成占公司各項規模的比例。回傳 (台幣億, DataFrame)。"""
+    台幣 = float(金額) * float(匯率)
+    分母 = dict(規模)
+    if 市值億:
+        分母["市值"] = float(市值億)
+    名稱 = {"近四季營收": "近四季營收", "近四季投資支出": "近四季投資支出（資本支出近似）", "淨值": "淨值（股東權益）",
+          "期末現金": "期末現金", "市值": "市值"}
+    列們 = [{"比較對象": 名稱[k], "金額(億)": v, "占比%": 台幣 / v * 100 if v and v > 0 else np.nan}
+           for k, v in 分母.items() if k in 名稱]
+    return 台幣, pd.DataFrame(列們)
+
+
+def 讀取海外布局(代號=None):
+    """data/overseas.csv：自己整理的海外廠、合資與轉投資（code, item, region, kind, stake, invest, timeline, status, note, source）。"""
+    t = _讀("overseas.csv", dtype={"code": str})
+    if t is None:
+        return None
+    if 代號 is not None:
+        t = t[t["code"] == str(代號)]
+    return t.reset_index(drop=True) if len(t) else None
+
+
+def 業外損益(代號):
+    """各季單季的營業利益、業外收支、稅前淨利（億元）與業外占稅前比例；採權益法的投資損益（合資、轉投資）就在業外裡。
+    income.csv 是今年累計數，這裡相減成單季。沒有 nonop 欄（舊資料）就回傳 None。"""
+    t = _讀("fundamental/income.csv", dtype={"code": str})
+    if t is None or "nonop" not in t.columns:
+        return None
+    t = t[t["code"] == str(代號)].sort_values("quarter").copy()
+    if t["nonop"].notna().sum() == 0:
+        return None
+    年, 季 = t["quarter"].str[:4], t["quarter"].str[-1].astype(int)
+    前季 = 季.groupby(年).shift()
+    for 欄 in ("opinc", "nonop", "pretax", "netinc"):
+        if 欄 not in t.columns:
+            t[欄] = np.nan
+        前 = t[欄].groupby(年).shift()
+        t[欄] = np.where(季 == 1, t[欄], np.where(前季 == 季 - 1, t[欄] - 前, np.nan))
+    結果 = pd.DataFrame({"季度": t["quarter"], "營業利益(億)": t["opinc"] / 1e5, "業外收支(億)": t["nonop"] / 1e5,
+                       "稅前淨利(億)": t["pretax"] / 1e5, "稅後淨利(億)": t["netinc"] / 1e5})
+    結果["業外占稅前%"] = (結果["業外收支(億)"] / 結果["稅前淨利(億)"] * 100).where(結果["稅前淨利(億)"] > 0)
+    return 結果.dropna(subset=["業外收支(億)"]).reset_index(drop=True)

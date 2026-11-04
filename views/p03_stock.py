@@ -458,6 +458,85 @@ def 個股事件(代號):
     return t[t["日期"] >= pd.Timestamp.now() - pd.Timedelta(days=400)]
 
 
+def 個股重大訊息(代號):
+    """總覽分頁：這檔近 120 天的重大訊息（公開資訊觀測站）。"""
+    try:
+        訊 = 讀檔("讀取全部重訊", _版本, 代號)
+    except Exception:
+        訊 = None
+    段落("MOPS // 重大訊息（公開資訊觀測站，近 120 天）")
+    if 訊 is None:
+        st.caption("目前沒有這檔的重大訊息紀錄（每天收盤後更新時累積，剛開始只有最近幾天的）。")
+        return
+    顯示 = 訊.assign(日期=訊["date"].dt.strftime("%Y/%m/%d"), 時間=訊["time"].astype(str).str[:5])[["日期", "時間", "subject"]]
+    表格(顯示.rename(columns={"subject": "主旨"}).head(30), hide_index=True, width="stretch",
+         column_config={"主旨": st.column_config.TextColumn(width="large")})
+    st.caption("公司自己發的正式公告，比新聞早也比新聞準；完整內容到公開資訊觀測站用代號查詢。"
+               "加入自選股後，有新的重大訊息會在每天收盤 LINE 通知。")
+
+
+def 海外布局區(代號):
+    """基本面分頁：data/overseas.csv 有整理的公司（目前是台積電）才顯示海外廠、合資與轉投資。"""
+    t = 讀檔("讀取海外布局", _版本, 代號)
+    if t is None:
+        return
+    段落("GLOBAL // 海外布局、合資與轉投資")
+    顯示 = t.rename(columns={"item": "項目", "region": "地區", "kind": "性質", "stake": "持股", "invest": "投資金額",
+                            "timeline": "時程", "status": "狀態", "note": "說明", "source": "來源"})
+    表格(顯示.drop(columns="code"), hide_index=True, width="stretch",
+         column_config={"說明": st.column_config.TextColumn(width="large")})
+    st.caption("自己整理的資料（data/overseas.csv，可直接在 GitHub 上修改或增加其他公司）。台積電沒有控制權的合資公司"
+               "（例如與 Sony 合資的熊本影像感測器廠）不會併入營收，只會在「業外」認列投資損益；持股比例以公司年報為準。")
+
+
+def 業外損益區(代號):
+    """基本面分頁：各季業外收支（含採權益法認列的合資、轉投資損益）與占稅前淨利比例。"""
+    t = 讀檔("業外損益", _版本, 代號)
+    if t is None or not len(t):
+        return
+    段落("NON-OP // 業外損益：合資、轉投資賺多少")
+    近 = t.tail(8)
+    最 = 近.iloc[-1]
+    卡片格([
+        卡片("最新一季業外", 數(最["業外收支(億)"], "{:+,.1f}", " 億"), 最["季度"], 漲跌色(最["業外收支(億)"] or 0)),
+        卡片("業外占稅前", 數(最["業外占稅前%"], "{:.1f}", "%"), "超過 30% 代表獲利很靠本業以外",
+             "#FFC24B" if abs(最["業外占稅前%"] or 0) >= 30 else "#EDEDED"),
+        卡片("近四季業外", 數(近["業外收支(億)"].tail(4).sum(), "{:+,.1f}", " 億"), "", 漲跌色(近["業外收支(億)"].tail(4).sum())),
+    ])
+    圖 = go.Figure([go.Bar(x=近["季度"], y=近["營業利益(億)"], name="營業利益（億）", marker_color=青),
+                    go.Bar(x=近["季度"], y=近["業外收支(億)"], name="業外收支（億）", marker_color="#FFB020")])
+    圖.update_layout(barmode="relative", legend=dict(orientation="h", y=1.12))
+    st.plotly_chart(圖表外觀(圖, 240), width="stretch")
+    st.caption("業外收支＝稅前淨利 − 營業利益，包含採權益法認列的合資、轉投資損益，也包含利息、匯兌、處分資產等。"
+               "合資公司剛成立、還沒量產時常常是虧損，會先拖累業外；業外比重很高時，EPS 比較不能代表本業實力。"
+               "資料：公開資訊觀測站綜合損益表彙總（單季由今年累計數相減）。")
+
+
+def 投資金額換算區(代號, r):
+    """基本面分頁：新聞裡的投資金額（外幣）換成台幣，再看占營收、資本支出、淨值、市值多少。"""
+    with st.expander("🧮 新聞裡的投資金額有多大？（換算成占公司營收、資本支出的比例）"):
+        美元 = None
+        try:
+            fx = engine.讀取匯率()
+            美元 = float(fx["usdtwd"].dropna().iloc[-1]) if fx is not None and len(fx) else None
+        except Exception:
+            pass
+        預設匯率 = {"台幣": 1.0, "美元": round(美元 or 32.0, 2), "日圓": 0.21, "歐元": 35.0, "人民幣": 4.4}
+        a, b, c = st.columns([2, 1, 1])
+        金額 = a.number_input("金額（單位：億）", 0.0, 1e7, 2820.0, step=10.0, key="換算金額")
+        幣 = b.selectbox("幣別", list(預設匯率), index=2, key="換算幣別")
+        匯率 = c.number_input("匯率（1 單位外幣＝幾元台幣）", 0.0001, 1000.0, 預設匯率[幣], step=0.01, format="%.4f",
+                            key=f"換算匯率_{幣}")
+        規模 = engine.財務規模(代號)
+        台幣, 表 = engine.投資金額換算(金額, 匯率, 規模, r.get("市值億"))
+        st.markdown(f"**{金額:,.0f} 億{幣} ≈ 台幣 {台幣:,.0f} 億元**")
+        if len(表):
+            表格(表.style.format({"金額(億)": "{:,.0f}", "占比%": "{:.1f}"}, na_rep="—"), hide_index=True, width="stretch")
+        st.caption("預設是台積電與 Sony 合資的 2,820 億日圓，換成其他新聞的數字就能比較。美元匯率用資料庫最新一天，"
+                   "其他幣別是約略值，請自己改成當天匯率。資本支出用「近四季投資現金流」近似，會包含買賣金融資產。"
+                   "占比不到 5% 通常對公司財務影響不大；分好幾年投入的話，影響還要再除以年數。")
+
+
 def AI設定():
     """回傳 (引擎, 金鑰, 模型, 可執行)：有 Gemini 金鑰用 Gemini，否則用 Claude；有密碼時要先解鎖才能用。"""
     設定 = _設定()
@@ -783,16 +862,24 @@ with 分頁[0]:
     elif 新聞.empty:
         st.caption("近半年沒有找到相關新聞。")
     else:
+        新聞 = engine.新聞舊聞標記(新聞)
         新聞["情緒"] = 新聞["標題"].map(engine.新聞情緒)
         計 = 新聞["情緒"].value_counts()
-        st.caption(f"共 {len(新聞)} 則：標題偏多 {計.get('利多', 0)}、偏空 {計.get('利空', 0)}、中性 {計.get('中性', 0)}"
+        近月 = int((~新聞["舊聞"]).sum())
+        重提 = int(新聞["首見日"].notna().sum())
+        st.caption(f"共 {len(新聞)} 則（近 30 天 {近月} 則" + (f"，其中 {重提} 則是舊聞重提" if 重提 else "") + "）："
+                   f"標題偏多 {計.get('利多', 0)}、偏空 {計.get('利空', 0)}、中性 {計.get('中性', 0)}"
                    "（依標題關鍵字粗略判斷，請點開原文確認）")
         圖示 = {"利多": "🔴", "利空": "🟢", "中性": "⚪"}
-        列 = lambda x: f"- `{x['日期']:%m/%d}` {圖示[x['情緒']]} [{x['標題']}]({x['連結']}) · {x['來源']}"
+        列 = lambda x: (f"- `{engine.新聞日期標籤(x)}` {圖示[x['情緒']]} [{x['標題']}]({x['連結']}) · {x['來源']}")
         st.markdown("\n".join(列(x) for _, x in 新聞.head(15).iterrows()))
         if len(新聞) > 15:
             with st.expander(f"更多新聞（{len(新聞) - 15}）"):
                 st.markdown("\n".join(列(x) for _, x in 新聞.iloc[15:].iterrows()))
+        st.caption("超過 30 天的新聞會標「舊聞」；標題跟 30 天以前的新聞很像的會標「舊聞重提」，"
+                   "代表同一件事之前就報導過，股價多半已經反應，不要當成新消息追。")
+
+    個股重大訊息(代號)
 
 with 分頁[1]:
     if not 有籌碼:
@@ -1051,6 +1138,10 @@ with 分頁[2]:
         st.caption("庫藏股（公司買回自家股票）通常代表公司認為股價偏低；可轉債、現金增資會增加股數（稀釋），"
                    "但募到的錢若用在擴產也可能是利多。資料：公開資訊觀測站、櫃買中心、證交所。")
 
+    海外布局區(代號)
+    業外損益區(代號)
+    投資金額換算區(代號, r)
+
     同業 = engine.同族群(今日, 代號)
     if 同業 is not None and len(同業) > 1:
         段落(f"PEERS // 同族群比較（{r.get('產業')}，市值前 {len(同業)} 大）")
@@ -1279,7 +1370,10 @@ with 分頁[4]:
             pass
         if 新聞 is not None and not 新聞.empty:
             摘要 += "\n\n近半年新聞標題（新到舊）：\n" + "\n".join(
-                f"- {x['日期']:%Y-%m-%d} {x['標題']}（{x['來源']}）" for _, x in 新聞.head(60).iterrows())
+                f"- {engine.新聞日期標籤(x, '%Y-%m-%d')} {x['標題']}（{x['來源']}）"
+                for _, x in 新聞.head(60).iterrows())
+            if "舊聞" in 新聞.columns:
+                摘要 += "\n（標「舊聞」的是 30 天以前的消息；「舊聞重提」代表同一件事之前就報導過，判斷時要當成已知消息、可能已反映在股價。）"
 
         try:
             紀錄們 = AI紀錄快取(代號, 設定.get("GITHUB_TOKEN", ""))

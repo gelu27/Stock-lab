@@ -260,3 +260,106 @@ else:
                f"（季底後 45 天、第四季 90 天）隔天買進、持有 {_約['天數']} 個交易日，超額＝減掉同一季所有樣本平均。"
                f"每季依指標分三組，比較高組減低組。t 值 2 以上才算穩定（目前結論：{_約['結論']}，{_約['計算日']} 計算）。"
                "較早的季度只有流動部分的合約負債（FinMind），沒有扣手續費，也不代表未來。")
+
+
+段落("EVENT // 事件反應表：消息出來後股價怎麼走")
+事件存檔 = "events.json"
+
+
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=30)
+def 事件計算(代號們, 前置日, 事件日, 版本鍵):
+    起 = pd.Timestamp(min(d for d in (前置日, 事件日) if d)) - pd.Timedelta(days=15)
+    價 = engine.讀取資料庫(代號=list(代號們), 起日=起)
+    指 = engine.讀取指數K線("TAIEX")
+    if 價 is None or 指 is None:
+        return pd.DataFrame()
+    return engine.事件反應(價, 指, 代號們, 事件日, 前置日)
+
+
+def 事件清單():
+    if "事件清單" not in st.session_state:
+        try:
+            st.session_state["事件清單"] = engine.讀取設定檔(_設定(), 事件存檔) or {}
+        except Exception:
+            st.session_state["事件清單"] = {}
+    已存 = st.session_state["事件清單"]
+    return {**{x["名稱"]: x for x in engine.事件範本}, **已存}
+
+
+def 百分比上色(表):
+    欄 = [c for c in 表.columns if str(c).endswith("%")]
+    return 表.style.map(lambda v: f"color:{漲跌色(v)}" if pd.notna(v) else "", subset=欄).format(
+        {c: "{:+.2f}" for c in 欄}, na_rep="—")
+
+
+def 拆代號(文字):
+    return tuple(dict.fromkeys(c for c in re.split(r"[\s,、，]+", str(文字)) if c))
+
+
+_事件們 = 事件清單()
+_選 = st.selectbox("事件", ["（自己輸入）"] + list(_事件們), index=1 if _事件們 else 0, key="事件選")
+_預 = _事件們.get(_選, {})
+a, b = st.columns([2, 3])
+_名 = a.text_input("事件名稱", _預.get("名稱", ""), key=f"事件名_{_選}")
+_碼 = b.text_input("股票代號（用逗號分開）", _預.get("代號", "2330"), key=f"事件碼_{_選}")
+a, b, c = st.columns(3)
+_有前置 = c.checkbox("媒體有先報導", bool(_預.get("前置日")), key=f"事件有前置_{_選}")
+_事件日 = a.date_input("反應日（盤後公告填隔天）", pd.Timestamp(_預.get("事件日", 最新日)).date(),
+                      min_value=engine.資料起訖()[0].date(), max_value=最新日.date(), key=f"事件日_{_選}")
+_前置日 = b.date_input("媒體先報導日", pd.Timestamp(_預.get("前置日") or _事件日).date(),
+                      min_value=engine.資料起訖()[0].date(), max_value=最新日.date(), key=f"事件前置_{_選}",
+                      disabled=not _有前置)
+if _預.get("說明"):
+    st.caption(_預["說明"])
+_代們 = 拆代號(_碼)
+if _代們:
+    _結 = 事件計算(_代們, _前置日.isoformat() if _有前置 else None, _事件日.isoformat(), _版本)
+    if _結.empty:
+        st.caption("這些代號在資料庫裡找不到那段期間的股價。")
+    else:
+        _欄 = [c for c in ["代號", "名稱", "前置日漲跌%", "前置日超額%", "事件日漲跌%", "事件日超額%", "後1日漲跌%",
+                          "後5日漲跌%", "後5日超額%", "後20日漲跌%", "後20日超額%"] if c in _結.columns]
+        表格(百分比上色(_結[_欄]), hide_index=True, width="stretch")
+        st.caption("漲跌＝那一天（或之後 N 個交易日）的漲跌幅；超額＝再減掉加權指數同期漲跌，正的才是真的比大盤強。"
+                   "「後 N 日」從反應日收盤起算，所以不含反應日當天；已還原除權息。資料不夠 N 天的留空。")
+    if 可編輯() and _名 and st.button("💾 存成事件（下面的統計會一起算）", key="事件存"):
+        新 = {**st.session_state.get("事件清單", {}),
+             _名: {"名稱": _名, "代號": ",".join(_代們), "前置日": _前置日.isoformat() if _有前置 else "",
+                  "事件日": _事件日.isoformat()}}
+        try:
+            engine.儲存設定檔(_設定(), 事件存檔, 新, "更新事件反應清單")
+            st.session_state["事件清單"] = 新
+            st.toast("已儲存")
+            st.rerun()
+        except Exception as e:
+            st.error(f"存檔失敗：{e}")
+    elif not 可編輯():
+        st.caption("存新事件需要先在「02 / 我的股票」輸入密碼解鎖。")
+
+段落("LEAK // 消息先走？媒體先報 vs 正式公告 vs 利多出盡")
+_結們 = []
+for _n, _x in _事件們.items():
+    _c = 拆代號(_x.get("代號", ""))
+    if _c and _x.get("事件日"):
+        try:
+            _結們.append((_n, 事件計算(_c, _x.get("前置日") or None, _x["事件日"], _版本)))
+        except Exception:
+            pass
+_統, _總 = engine.消息先走統計(_結們)
+if _統.empty:
+    st.caption("還沒有可以統計的事件，先在上面存幾個事件。")
+else:
+    _卡 = [卡片("事件數", f"{_總['事件數']}")]
+    if "前置日超額%" in _總:
+        _卡.append(卡片("媒體先報那天", f"{_總['前置日超額%']:+.2f}%", "平均超額", 漲跌色(_總["前置日超額%"])))
+    _卡.append(卡片("正式公告反應日", f"{_總.get('事件日超額%', np.nan):+.2f}%", "平均超額", 漲跌色(_總.get("事件日超額%", 0))))
+    if "後20日超額%" in _總:
+        _卡.append(卡片("公告後 20 日", f"{_總['後20日超額%']:+.2f}%", "平均超額", 漲跌色(_總["後20日超額%"])))
+    if "利多出盡比例%" in _總:
+        _卡.append(卡片("利多出盡比例", f"{_總['利多出盡比例%']:.0f}%", "公告後 20 日輸給大盤的事件比例"))
+    卡片格(_卡)
+    表格(百分比上色(_統), hide_index=True, width="stretch")
+    _先 = (f"有媒體先報的 {_總['有前置日事件數']} 個事件中，{_總['先走事件數']} 個在媒體先報那天的反應比正式公告還大。"
+          if _總.get("有前置日事件數") else "")
+    st.caption(_先 + "每個事件是裡面所有股票的平均超額。事件太少時只能當參考，至少累積 10 個以上再看比例比較有意義；"
+               "台積電與 Sony 合資是內建範例（8/10 媒體先報、8/11 盤後公告）。")
