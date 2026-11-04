@@ -360,6 +360,10 @@ def 提醒事項(代號們):
     except Exception as e:
         print("興櫃承銷失敗：", repr(e))
     try:
+        行們 += 自選重訊提醒(代號們, 狀態)
+    except Exception as e:
+        print("自選重訊失敗：", repr(e))
+    try:
         行們 += 跌深融資提醒(狀態)
     except Exception as e:
         print("跌深融資提醒失敗：", repr(e))
@@ -608,6 +612,29 @@ def 興櫃承銷提醒(代號們, 狀態):
                 狀態[鍵] = 1
                 行們.append(f"{x['code']} {x['name']}：{str(x['subject'])[:50]}")
     return ["", "🌱 興櫃推薦券商／掛牌消息"] + 行們 if 行們 else []
+
+
+def 自選重訊提醒(代號們, 狀態, 上限=10):
+    """庫存、自選股近 3 天的重大訊息（公開資訊觀測站全部重訊，同一則只通知一次）。"""
+    import engine
+    訊 = engine.讀取全部重訊(天數=5)
+    if 訊 is None or not 代號們:
+        return []
+    近 = 訊[(訊["date"] >= 訊["date"].max() - pd.Timedelta(days=3)) & 訊["code"].isin(set(代號們))]
+    期限 = f"{pd.Timestamp.now() - pd.Timedelta(days=30):%Y%m%d}"
+    for k in [k for k in 狀態 if k.startswith("自選重訊_") and k.split("_")[2] < 期限]:
+        del 狀態[k]   # 一個月前的不用記了，免得狀態檔越來越大
+    行們 = []
+    for _, x in 近.sort_values(["date", "time"]).iterrows():
+        鍵 = f"自選重訊_{x['code']}_{x['date']:%Y%m%d}_{str(x['subject'])[:12]}"
+        if 狀態.get(鍵):
+            continue
+        狀態[鍵] = 1
+        行們.append(f"{x['code']} {x['name']}（{x['date']:%m/%d}）：{str(x['subject'])[:50]}")
+    if not 行們:
+        return []
+    多 = len(行們) - 上限
+    return ["", "📢 自選股重大訊息"] + 行們[:上限] + ([f"…還有 {多} 則，到網站個股頁看"] if 多 > 0 else [])
 
 
 def ETF共識提醒(代號們, 狀態, 門檻=3):

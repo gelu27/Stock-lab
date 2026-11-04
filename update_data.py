@@ -33,6 +33,7 @@
 #   data/us_daily.csv                     美股指數、VIX、台股供應鏈龍頭每日收盤（Yahoo，近 2 年）
 #   data/econ_calendar.csv                國際經濟數據、央行會議（ForexFactory 本週與下週，逐週累積）
 #   data/us_earnings.csv                  美股龍頭財報日（Nasdaq 財報行事曆，未來 5 週）
+#   data/material_news/2026-11.csv.gz     公開資訊觀測站每天全部重大訊息（個股頁、自選股 LINE，留 400 天）
 
 import argparse
 import datetime as dt
@@ -800,6 +801,11 @@ def _解析損益(html):
                                         "基本每股盈餘（元）") if k in 標題}
         if 淨利欄:
             位["淨利"] = 標題.index(淨利欄)
+        # 業外收支、稅前淨利（採權益法認列的合資、轉投資損益在業外裡）；金融業的表欄名不同，抓不到就留空
+        for 鍵, 開頭 in (("業外", "營業外收入及支出"), ("稅前", "稅前淨利")):
+            欄 = next((k for k in 標題 if k.startswith(開頭)), None)
+            if 欄:
+                位[鍵] = 標題.index(欄)
         for 列 in re.findall(r"<tr[^>]*>(.*?)</tr>", 表, re.S):
             格 = [去標籤(t) for t in re.findall(r"<td[^>]*>(.*?)</td>", 列, re.S)]
             if len(格) != len(標題):
@@ -807,7 +813,8 @@ def _解析損益(html):
             取 = lambda k: 轉數字(格[位[k]]) if k in 位 else None
             列們.append({"code": 格[位["公司代號"]], "revenue": 取("營業收入"),
                         "gross": 取("營業毛利（毛損）淨額"), "opinc": 取("營業利益（損失）"),
-                        "netinc": 取("淨利"), "eps": 取("基本每股盈餘（元）")})
+                        "netinc": 取("淨利"), "eps": 取("基本每股盈餘（元）"),
+                        "nonop": 取("業外"), "pretax": 取("稅前")})
     return pd.DataFrame(列們)
 
 
@@ -815,8 +822,8 @@ def 抓損益表(季數=22):  # 約 5 年，評分回測要用當時的 EPS、�
     """各季綜合損益表（今年累計數），用來算毛利率；已經有的季度不重抓（最近 2 季會重抓）。"""
     檔案 = 資料夾 / "fundamental" / "income.csv"
     舊 = pd.read_csv(檔案, dtype={"code": str}) if 檔案.exists() else pd.DataFrame(
-        columns=["code", "quarter", "revenue", "gross", "opinc", "netinc", "eps"])
-    已有 = set(舊["quarter"]) if "eps" in 舊.columns else set()  # 舊檔沒有 EPS 欄位就全部重抓
+        columns=["code", "quarter", "revenue", "gross", "opinc", "netinc", "eps", "nonop", "pretax"])
+    已有 = set(舊["quarter"]) if {"eps", "nonop"} <= set(舊.columns) else set()  # 舊檔沒有 EPS／業外欄位就全部重抓
     今天 = dt.date.today()
     年, 季 = 今天.year, (今天.month - 1) // 3 + 1
     新們 = []
@@ -1994,15 +2001,29 @@ def 抓興櫃推薦券商():
 
 
 def 抓重大訊息():
+    """公開資訊觀測站今天的重大訊息：全部存到 data/material_news/YYYY-MM.csv.gz（個股頁、自選股 LINE 用，留 400 天）；
+    承銷、推薦券商、掛牌相關的另外存 material_news.csv（興櫃頁用）。"""
     r = requests.post("https://mopsov.twse.com.tw/mops/web/ajax_t05sr01_1", headers=標頭, timeout=60,
                       data={"encodeURIComponent": 1, "step": 0, "TYPEK": "all"})
     r.encoding = "utf-8"
-    列們 = []
+    全部 = []
     for 列 in re.findall(r"<tr class='(?:even|odd)'>(.*?)</tr>", r.text, re.S):
         格 = [re.sub(r"<[^>]+>", "", x).strip() for x in re.findall(r"<td[^>]*>(.*?)</td>", 列, re.S)]
-        if len(格) >= 5 and any(k in 格[4] for k in 重訊關鍵字):
-            列們.append({"date": 民國轉西元(格[2].replace("/", "")), "time": 格[3], "code": 格[0], "name": 格[1],
+        if len(格) >= 5 and 格[0]:
+            全部.append({"date": 民國轉西元(格[2].replace("/", "")), "time": 格[3], "code": 格[0], "name": 格[1],
                        "subject": re.sub(r"\s+", "", 格[4])[:200]})
+    if 全部:
+        月夾 = 資料夾 / "material_news"
+        月夾.mkdir(exist_ok=True)
+        今天們 = pd.DataFrame(全部)
+        for 月, 群 in 今天們.groupby(今天們["date"].str[:7]):
+            檔 = 月夾 / f"{月}.csv.gz"
+            表 = pd.concat([pd.read_csv(檔, dtype={"code": str}), 群]) if 檔.exists() else 群
+            表.drop_duplicates(["date", "code", "subject"]).sort_values(["date", "time"]).to_csv(檔, index=False)
+        for 舊檔 in 月夾.glob("*.csv.gz"):
+            if 舊檔.name[:7] < (dt.date.today() - dt.timedelta(days=400)).strftime("%Y-%m"):
+                舊檔.unlink()
+    列們 = [x for x in 全部 if any(k in x["subject"] for k in 重訊關鍵字)]
     檔 = 資料夾 / "material_news.csv"
     表 = pd.DataFrame(列們)
     if 檔.exists():
@@ -2011,7 +2032,7 @@ def 抓重大訊息():
         return
     表 = 表.drop_duplicates(["date", "code", "subject"]).sort_values(["date", "time"])
     表[表["date"] >= (dt.date.today() - dt.timedelta(days=400)).isoformat()].to_csv(檔, index=False)
-    print(f"重大訊息（承銷／推薦／掛牌）：今天 {len(列們)} 筆")
+    print(f"重大訊息：今天全部 {len(全部)} 筆，承銷／推薦／掛牌 {len(列們)} 筆")
 
 
 if __name__ == "__main__":
