@@ -810,9 +810,16 @@ def 健康檢查():
         return pd.read_csv(f, usecols=[欄])[欄].astype(str).max() if f.exists() else None
 
     太舊("集保股權分散（每週）", _最新檔日("tdcc"), 10)
+    # 借券賣出（TWT93U、櫃買 sbl）和融資一樣約 21:00 後才公布，18:17 更新時只會有前一個交易日，
+    # 22:23「補融資融券」會補當天的；所以落後一個交易日是正常，落後兩個交易日以上才算抓取失敗
     借 = _最新檔日("sbl")
-    if 價 and 借 and 借 < 價:
-        問題.append(f"借券賣出資料落後（最新 {借:%m/%d}，股價 {價:%m/%d}）")
+    交易日們 = sorted({pd.Timestamp(f.name[:8]).date() for f in (資料夾 / "prices").glob("*/*.csv.gz")})
+    前一交易日 = 交易日們[-2] if len(交易日們) >= 2 else 價
+    if 價 and 借 is None:
+        問題.append("沒有借券賣出資料")
+    elif 價 and 借 < 前一交易日:
+        問題.append(f"借券賣出資料落後（最新 {借:%m/%d}，股價 {價:%m/%d}；晚上 22:23 補抓也沒補到，"
+                    "可到 Actions 手動跑「補融資融券」）")
     for 名稱, 檔 in (("融資金額（融資維持率用）", "margin_total.csv"), ("外資台指期未平倉", "futures_oi.csv"),
                      ("外資持股比", "qfii.csv.gz"), ("上市個股當沖", "daytrade.csv.gz"), ("選擇權籌碼", "options_pc.csv")):
         最新 = 讀(檔, "date")
