@@ -38,5 +38,10 @@ jobs:
           git add -A data
           git diff --cached --quiet && exit 0
           git commit -m "補融資融券 $(date +%F)"
-          git pull --rebase origin main
-          git push
+          # GitHub 偶爾回 500 Internal Server Error，失敗就等一下重試，免得整天的資料白抓
+          for i in 1 2 3 4 5; do
+            git pull --rebase origin main && git push && exit 0
+            echo "推送失敗，第 $i 次，$((i * 15)) 秒後重試"
+            sleep $((i * 15))
+          done
+          exit 1
