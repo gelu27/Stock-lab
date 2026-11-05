@@ -206,7 +206,23 @@ def AI報告(代號, r, 全, 設定):
     return 內文, 建議 or {}, 時間, True
 
 
-def AI結論(內文, 建議):
+def _價(v):
+    """100 元以下留兩位小數（不然 16.76、16.95 都會變成 17）。"""
+    return f"{v:,.2f}" if abs(v) < 100 else f"{v:,.0f}"
+
+
+def 目標價提醒(建議, r, 全):
+    """用現價、目前本益比、近三年最高收盤檢查 AI 目標價（engine.檢查AI目標價）。"""
+    try:
+        近 = 全[全["date"] >= 全["date"].max() - pd.Timedelta(days=3 * 365)]
+        本益比 = float(r["本益比"]) if pd.notna(r.get("本益比")) and r["本益比"] > 0 else None
+        return engine.檢查AI目標價(建議, float(r["收盤"]), 本益比, float(近["收盤"].max()))
+    except Exception as e:
+        print("目標價檢查失敗：", repr(e))
+        return []
+
+
+def AI結論(內文, 建議, 提醒=None):
     """LINE 上顯示的 AI 重點：看法、一句話、目標價、支撐壓力停損、看錯條件（完整內容看 PDF）。"""
     import re
     行們 = []
@@ -215,7 +231,7 @@ def AI結論(內文, 建議):
                                               if 建議.get("短線") and 建議.get("中期") else ""))
     if 建議.get("一句話"):
         行們.append(f"💬 {建議['一句話']}")
-    價 = [f"{名} {建議[k]:,.0f}" for k, 名 in (("目標價保守", "保守"), ("目標價合理", "合理"), ("目標價樂觀", "樂觀"))
+    價 = [f"{名} {_價(建議[k])}" for k, 名 in (("目標價保守", "保守"), ("目標價合理", "合理"), ("目標價樂觀", "樂觀"))
          if isinstance(建議.get(k), (int, float))]
     if 價:
         行們.append("🎯 目標價 " + "／".join(價))
@@ -224,6 +240,8 @@ def AI結論(內文, 建議):
         行們.append("📐 " + "、".join(位))
     if 建議.get("看錯條件"):
         行們.append(f"⚠️ 看錯條件：{建議['看錯條件']}")
+    if 提醒:
+        行們.append("🔎 數字檢查：\n" + "\n".join("・" + 句 for 句 in 提醒))
     if len(行們) <= 1 and 內文:
         純 = re.sub(r"[#*>`|]", "", 內文)
         純 = re.sub(r"\n\s*\n", "\n", 純).strip()
@@ -245,7 +263,7 @@ def 產生PDF(代號, r, 全, 建議, 內文, 時間):
     有籌碼 = "外資買超" in r
     卡們 = [
         ("收盤 " + 最新日.strftime("%m/%d"), 數(r["收盤"]), f"{r['漲跌幅']:+.2f}%", r["漲跌"]),
-        ("AI 合理目標價", 數(合理, "{:,.0f}") if isinstance(合理, (int, float)) else "—",
+        ("AI 合理目標價", _價(合理) if isinstance(合理, (int, float)) else "—",
          f"距現價 {空間:+.1f}%" if pd.notna(空間) else "", 空間),
         ("本益比", 數(r["本益比"], "{:.1f}"), f"預估 {數(建議.get('預估本益比'), '{:.1f}')} 倍"
          if isinstance(建議.get("預估本益比"), (int, float)) else "", None),
@@ -368,7 +386,7 @@ def 完整報告(代號, r, 全, 設定):
     訊息 = []
     if 內文 or 建議:
         訊息.append({"type": "text", "text": (f"🧠 {代號} {r['名稱']} AI 分析（{時間}{'，新產生' if 新寫 else '，沿用今天的報告'}）\n"
-                                             + AI結論(內文, 建議))[:4900]})
+                                             + AI結論(內文, 建議, 目標價提醒(建議, r, 全)))[:4900]})
     pdf = 產生PDF(代號, r, 全, 建議, 內文, 時間)
     權杖 = engine.清理金鑰(設定.get("GITHUB_TOKEN"))
     if not 權杖:

@@ -1432,7 +1432,12 @@ with 分頁[4]:
                 if st.form_submit_button("💾 存成這檔的 AI 報告", type="primary"):
                     if len(內容.strip()) < 50:
                         st.warning("內容太短，請貼上完整的報告。")
+                    elif not engine.拆解AI建議(內容)[0].strip() and not st.session_state.get("只貼json確認"):
+                        st.session_state["只貼json確認"] = True
+                        st.warning("這段只有最後的 json 卡片資料，沒有完整報告內文。建議回 Gemini 複製整份回答再貼；"
+                                   "真的只要存卡片，再按一次存檔。")
                     else:
+                        st.session_state.pop("只貼json確認", None)
                         新 = {"時間": pd.Timestamp.now(tz="Asia/Taipei").strftime("%Y-%m-%d %H:%M"),
                              "資料日期": 今天, "收盤": float(r["收盤"]), "引擎": 來源, "模型": "手動貼上",
                              "內容": 內容.strip(), "來源": []}
@@ -1531,8 +1536,19 @@ with 分頁[4]:
                     st.caption(f"目標價怎麼算：{建議['評價方法']}")
                 if 建議.get("一句話"):
                     st.markdown(f"**AI 結論：** {建議['一句話']}")
-            with st.expander("完整 AI 報告", expanded=not 建議):
-                st.markdown(內文)
+                try:
+                    全史 = 個股全史(代號, _版本)
+                    近 = 全史[全史["date"] >= 全史["date"].max() - pd.Timedelta(days=3 * 365)]
+                    提醒 = engine.檢查AI目標價(建議, r["收盤"], r["本益比"] if r["本益比"] > 0 else None, 近["收盤"].max())
+                except Exception:
+                    提醒 = engine.檢查AI目標價(建議, r["收盤"])
+                if 提醒:
+                    st.warning("🔎 數字檢查（網站自動比對，AI 的數字未修改）\n\n" + "\n".join(f"- {句}" for 句 in 提醒))
+            if 內文.strip():
+                with st.expander("完整 AI 報告", expanded=not 建議):
+                    st.markdown(內文)
+            else:
+                st.caption("這份只有卡片資料（json），沒有完整報告內文。")
             if 上次.get("來源"):
                 with st.expander(f"參考來源（{len(上次['來源'])}）"):
                     st.markdown("\n".join(f"- [{標題}]({網址})" for 網址, 標題 in 上次["來源"]))
