@@ -32,11 +32,13 @@ import etf_data
 import etf_analysis
 import etf_perf
 import macro
+import momentum
 
 importlib.reload(engine)
 importlib.reload(etf_data)  # 程式更新後確保用的是最新版的計算規則
 importlib.reload(etf_analysis)
 importlib.reload(etf_perf)
+importlib.reload(momentum)  # 順勢做多選股引擎
 importlib.reload(macro)  # 01 首頁總經／資金用；沒重新載入時，部署新版後會沿用舊版 macro 而找不到新函式
 
 _圖示 = Path(__file__).parent / "static" / "icon-192.png"
@@ -879,6 +881,33 @@ def AI紀錄快取(代號, _權杖):
 def 評分資料(版本鍵):
     return engine.今昨評分(指標[指標["date"] >= 指標["date"].max() - pd.Timedelta(days=20)],
                          基本面資料(版本鍵), 加權)
+
+
+# ---------- 順勢做多（RS、均線多頭、VCP 突破、法人連買、交易計畫）：全市場最新一天，所有人共用 ----------
+@st.cache_resource(max_entries=1, show_spinner="計算順勢做多訊號中…")
+def 動能資料(版本鍵):
+    欄 = ["date", "代號", "名稱", "市場", "open", "high", "low", "收盤", "還原價", "volume", "成交值億", "漲跌幅",
+         "MA10", "MA20", "外資連買", "投信連買", "法人5日買超", "產業"]
+    t = momentum.加上動能欄位(指標[[c for c in 欄 if c in 指標.columns]])
+    今, 遮 = momentum.今日訊號(t, 最新日, 加權)
+    del t
+    for k, v in 遮.items():
+        今[k] = v
+    計畫們 = [momentum.交易計畫(列) for _, 列 in 今.iterrows()]
+    for 欄名 in ("買點", "停損", "停損%", "目標1", "目標2", "已突破"):
+        今[欄名] = [c.get(欄名) if c else None for c in 計畫們]
+    engine.釋放記憶體()
+    return 今.set_index("代號")
+
+
+def 訊號回測表(實測):
+    """momentum_backtest.json → 顯示用表格（含全部樣本當基準）。"""
+    if not 實測:
+        return None
+    列們 = [dict(實測["基準"], 訊號="（基準）全部股票")] + 實測["訊號"]
+    表 = pd.DataFrame(列們)
+    表["說明"] = 表["訊號"].map(momentum.訊號說明).fillna("同期間所有股票隨便買的平均")
+    return 表[["訊號", "次數", "5日勝率%", "5日平均%", "20日勝率%", "20日平均%", "20日超額%", "20日內平均最大回撤%", "說明"]]
 
 
 def ETF版本():

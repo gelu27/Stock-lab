@@ -64,6 +64,9 @@ jobs:
       - name: 講義規則實測（約每月重算一次）
         continue-on-error: true
         run: python -c "import engine; engine.更新規則實測()"
+      - name: 順勢做多訊號回測（約每月重算一次）
+        continue-on-error: true
+        run: python -c "import momentum; momentum.更新全市場回測()"
       - name: 合約負債全市場驗證（約每月重算一次）
         continue-on-error: true
         run: python -c "import engine; engine.更新合約負債驗證()"
