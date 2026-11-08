@@ -27,6 +27,8 @@ jobs:
         run: python tests/test_margin.py
       - name: 面額分割換算
         run: python tests/test_split.py
+      - name: 個股報告盤中即時價
+        run: python tests/test_realtime.py
       - name: 新聞事件工具（舊聞、事件反應、金額換算、業外）
         run: python tests/test_news_tools.py
       - name: AI 報告 json 拆解與目標價檢查

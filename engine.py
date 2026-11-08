@@ -1422,6 +1422,46 @@ def 即時報價(代號們, 市場對照):
     return pd.DataFrame(結果)
 
 
+def 套用即時價(r, 代號, 資料日, 現在=None, 抓報價=None):
+    """個股報告用：資料庫最新一天之後有成交（盤中，或收盤後到晚上更新資料庫前），就用證交所即時價
+    更新現價、漲跌、本益比、殖利率、淨值比、成交量；法人、融資、營收、均線等還是資料庫最近一天的。
+    r 是個股那一列（pd.Series，要有 收盤、市場），資料日是資料庫最新日期。
+    回傳 (新的 r, 說明文字)；不需要或抓不到回傳 (原本的 r, None)。說明例如「盤中 11/09 10:35 即時價」。
+    抓報價：函式 (代號, 市場) → 即時報價() 格式的 DataFrame（網站用來加快取、測試用來不上網），預設直接抓證交所。"""
+    現在 = 現在 or pd.Timestamp.now(tz="Asia/Taipei").tz_localize(None)
+    資料日 = pd.Timestamp(資料日).normalize()
+    if 現在.weekday() >= 5 or 現在.hour < 9 or 現在.normalize() <= 資料日 or str(r.get("市場")) not in ("上市", "上櫃"):
+        return r, None
+    try:
+        市場 = str(r.get("市場"))
+        t = 抓報價(代號, 市場) if 抓報價 else 即時報價([代號], {代號: 市場})
+        x = t[t["code"] == 代號].iloc[0]
+    except Exception:
+        return r, None
+    新, 舊 = float(x["close"]), float(r["收盤"])
+    if pd.isna(新) or 新 <= 0 or not 舊 or pd.isna(x["date"]) or pd.Timestamp(x["date"]).normalize() <= 資料日:
+        return r, None
+    倍 = 新 / 舊
+    r = r.copy()
+    昨收 = 新 - float(x["change"])
+    r["收盤"], r["漲跌"] = 新, float(x["change"])
+    r["漲跌幅"] = r["漲跌"] / 昨收 * 100 if 昨收 > 0 else np.nan
+    for 欄 in ("本益比", "淨值比", "還原價"):   # 還原價跟著調，均線換回原始股價的比例才不會變
+        if 欄 in r and pd.notna(r[欄]):
+            r[欄] = r[欄] * 倍
+    if "殖利率" in r and pd.notna(r["殖利率"]):
+        r["殖利率"] = r["殖利率"] / 倍
+    if pd.notna(x.get("volume")) and "成交張數" in r:
+        r["成交張數"] = float(x["volume"])
+        if "volume" in r:
+            r["volume"] = float(x["volume"]) * 1000
+    時 = str(x.get("time") or "")[:5]
+    盤中 = 現在.strftime("%H:%M") < "13:30" and (not 時 or 時 < "13:30")
+    說明 = f"{'盤中' if 盤中 else '今日收盤'} {pd.Timestamp(x['date']):%m/%d} {時} 即時價".replace("  ", " ")
+    r["即時說明"] = 說明
+    return r, 說明
+
+
 def _數(值):
     try:
         return float(值)
