@@ -363,3 +363,42 @@ else:
           if _總.get("有前置日事件數") else "")
     st.caption(_先 + "每個事件是裡面所有股票的平均超額。事件太少時只能當參考，至少累積 10 個以上再看比例比較有意義；"
                "台積電與 Sony 合資是內建範例（8/10 媒體先報、8/11 盤後公告）。")
+
+
+段落("CRASH // 加權單日大跌之後：多久收復？（緯來吳采妮 2026-11）")
+_K大 = 指數K線("TAIEX", _版本)
+_大 = engine.大跌日收復表(_K大) if _K大 is not None else pd.DataFrame()
+if not len(_大):
+    st.caption("指數資料還不夠。")
+else:
+    _統大 = engine.大跌日統計(_大)
+    _卡 = [卡片("單日跌 3% 以上", f"{_統大['次數']} 次", f"已收復 {_統大['已收復']} 次"),
+          卡片("收復天數中位數", f"{_統大['收復天數中位數']:.0f} 個交易日" if _統大["收復天數中位數"] else "—", "收盤回到大跌前一天")]
+    for _n in (20, 60):
+        _s = _統大.get(f"{_n}日", {})
+        if _s.get("次數"):
+            _卡.append(卡片(f"{_n} 日後", f"{_s['平均%']:+.1f}%", f"上漲 {_s['上漲機率%']}%（{_s['次數']} 次）", 漲跌色(_s["平均%"])))
+    卡片格(_卡)
+    表格(_大.assign(日期=_大["日期"].dt.strftime("%Y/%m/%d")), hide_index=True, width="stretch",
+         column_config={**{c: st.column_config.NumberColumn(format="%+.2f") for c in ("跌點", "跌幅%", "之後最深%", "5日後%", "20日後%", "60日後%")},
+                        "收盤": st.column_config.NumberColumn(format="%,.2f"), "收復天數": st.column_config.NumberColumn(format="%d")})
+    st.caption("大跌＝加權收盤比前一天跌 3% 以上（指數 4 萬點時約 1,200 點）。收復天數＝之後第幾個交易日收盤回到大跌前一天的收盤，"
+               "空白代表還沒收復；之後最深＝收復前（或到今天）最多再跌多少。連續大跌的日子會各算一次，所以樣本不是獨立的。"
+               "吳采妮說「情緒造成的下跌多半幾週內收復」，資料從 2021-11 起，碰到 2022 年那種空頭時收復要十幾到二十幾天，過去不代表下次一樣。")
+
+段落("LIMIT DOWN // 權值股碰跌停之後：跌停打開是好訊號嗎？（關我什麼事 2026-11）")
+_事, _基 = 讀檔("讀取跌停打開事件", _版本)
+if not len(_事):
+    st.caption("價格資料還不夠。")
+else:
+    表格(engine.跌停打開統計(_事, _基), hide_index=True, width="stretch",
+         column_config={**{c: st.column_config.NumberColumn(format="%+.2f") for c in ("5日後平均%", "20日後平均%", "60日後平均%")},
+                        "次數": st.column_config.NumberColumn(format="%d"), "不同日期": st.column_config.NumberColumn(format="%d")})
+    _查 = st.text_input("只看某一檔（代號）", placeholder="如 2330", key="跌停打開查詢").strip()
+    _列 = _事[_事["代號"] == _查] if _查 else _事
+    表格(_列.assign(日期=_列["日期"].dt.strftime("%Y/%m/%d")).head(200), hide_index=True, width="stretch",
+         column_config={c: st.column_config.NumberColumn(format="%+.2f") for c in ("當天%", "從低點拉回%", "5日後%", "20日後%", "60日後%")})
+    st.caption("範圍：0050 成分股，2021-11 起。碰跌停＝當天最低價 ≤ 前一天收盤 × 0.905；打開＝收盤從最低價拉回 5% 以上，"
+               "沒打開＝收在跌停附近。之後報酬從當天收盤算起，「任何一天買進」是同一批股票每天買的平均。"
+               "很多事件集中在同幾天（例如 2025/4 關稅、2024/8 日圓平倉），要看「不同日期」那欄，實際獨立的機會沒有次數那麼多。"
+               "台積電 2024/8/5、2025/4/7 都是收在跌停沒打開，之後 60 日都漲超過 27%；2026/11/6 是第一次碰跌停又打開。")

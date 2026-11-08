@@ -7297,3 +7297,92 @@ def 業外損益(代號):
                        "稅前淨利(億)": t["pretax"] / 1e5, "稅後淨利(億)": t["netinc"] / 1e5})
     結果["業外占稅前%"] = (結果["業外收支(億)"] / 結果["稅前淨利(億)"] * 100).where(結果["稅前淨利(億)"] > 0)
     return 結果.dropna(subset=["業外收支(億)"]).reset_index(drop=True)
+
+
+# ========== 33. 網紅摘要 11/07 建議 5、6：加權大跌日收復表、權值股跌停打開回測 ==========
+def 大跌日收復表(K, 跌幅門檻=-3.0, 天數=(5, 20, 60)):
+    """加權單日跌幅 ≤ 跌幅門檻% 的日子：之後 N 日漲跌、幾個交易日收復大跌前一天收盤、之後最深再跌多少。
+    K：讀取指數K線() 的 DataFrame（date, close…）。回傳 DataFrame，新的在上面。"""
+    if K is None or len(K) < 2:
+        return pd.DataFrame()
+    k = K[["date", "close"]].dropna().reset_index(drop=True)
+    收 = k["close"].to_numpy(dtype="float64")
+    列們 = []
+    for i in range(1, len(k)):
+        前, 今 = 收[i - 1], 收[i]
+        跌點, 跌幅 = 今 - 前, (今 / 前 - 1) * 100
+        if 跌幅 > 跌幅門檻:
+            continue
+        後 = 收[i + 1:]
+        回 = np.nonzero(後 >= 前)[0]
+        列 = {"日期": k.at[i, "date"], "收盤": round(今, 2), "跌點": round(跌點, 2), "跌幅%": round(跌幅, 2),
+              "收復天數": int(回[0]) + 1 if len(回) else None,
+              "之後最深%": round(min(0.0, (後[: 回[0] + 1 if len(回) else len(後)].min() / 今 - 1) * 100), 2) if len(後) else None}
+        for n in 天數:
+            列[f"{n}日後%"] = round((收[i + n] / 今 - 1) * 100, 2) if i + n < len(收) else None
+        列們.append(列)
+    return pd.DataFrame(列們).iloc[::-1].reset_index(drop=True)
+
+
+def 大跌日統計(表, 天數=(5, 20, 60)):
+    """大跌日收復表() 的平均：次數、已收復次數、收復天數中位數、N 日後平均與上漲機率。"""
+    if 表 is None or not len(表):
+        return {}
+    統 = {"次數": len(表), "已收復": int(表["收復天數"].notna().sum()),
+          "收復天數中位數": float(表["收復天數"].median()) if 表["收復天數"].notna().any() else None}
+    for n in 天數:
+        s = 表[f"{n}日後%"].dropna()
+        統[f"{n}日"] = {"次數": len(s), "平均%": round(float(s.mean()), 2) if len(s) else None,
+                        "上漲機率%": round(float((s > 0).mean() * 100)) if len(s) else None}
+    return 統
+
+
+def 跌停打開事件(價, 拉回門檻=5.0, 天數=(5, 20, 60)):
+    """個股當天最低價碰到跌停（≤ 前收 × 0.905）的日子，分成「打開」（收盤從最低拉回 ≥ 拉回門檻%）與「沒打開」，之後 N 日報酬。
+    同時算這些股票「任何一天買進」的 N 日平均當基準。價：code、date、low、close（可多檔）。
+    回傳 (事件 DataFrame, 基準 dict{n: 平均%})。"""
+    if 價 is None or not len(價):
+        return pd.DataFrame(), {}
+    t = 價[["code", "date", "low", "close"]].dropna().sort_values(["code", "date"]).reset_index(drop=True)
+    t[["low", "close"]] = t[["low", "close"]].astype("float64")
+    g = t.groupby("code")["close"]
+    t["前收"] = g.shift(1)
+    for n in 天數:
+        t[f"{n}日後%"] = (g.shift(-n) / t["close"] - 1) * 100
+    事 = t[t["low"] <= t["前收"] * 0.905].copy()
+    事["當天%"] = (事["close"] / 事["前收"] - 1) * 100
+    事["從低點拉回%"] = (事["close"] / 事["low"] - 1) * 100
+    事["類型"] = np.where(事["從低點拉回%"] >= 拉回門檻, "打開", "沒打開")
+    基準 = {n: round(float(t[f"{n}日後%"].mean()), 2) for n in 天數}
+    數欄 = ["前收", "low", "close", "當天%", "從低點拉回%"] + [f"{n}日後%" for n in 天數]
+    事[數欄] = 事[數欄].round(2)
+    事 = 事[["date", "code", "類型"] + 數欄].rename(columns={"date": "日期", "code": "代號", "low": "最低", "close": "收盤"})
+    return 事.sort_values("日期", ascending=False).reset_index(drop=True), 基準
+
+
+def 跌停打開統計(事, 基準, 天數=(5, 20, 60)):
+    """跌停打開事件() 依「打開／沒打開」分組：次數、N 日後平均與上漲機率，和任何一天買進比。"""
+    列們 = []
+    for 類, g in ([("全部", 事)] + list(事.groupby("類型"))) if len(事) else []:
+        列 = {"類型": 類, "次數": len(g), "不同日期": g["日期"].nunique()}
+        for n in 天數:
+            s = g[f"{n}日後%"].dropna()
+            列[f"{n}日後平均%"] = round(float(s.mean()), 2) if len(s) else None
+            列[f"{n}日上漲機率%"] = round(float((s > 0).mean() * 100)) if len(s) else None
+        列們.append(列)
+    if 列們:
+        列們.append({"類型": "任何一天買進", "次數": None, "不同日期": None, **{f"{n}日後平均%": 基準.get(n) for n in 天數}})
+    return pd.DataFrame(列們)
+
+
+def 讀取跌停打開事件(代號們=None, 拉回門檻=5.0):
+    """0050 成分股（沒有名單就只看台積電）近 5 年的跌停打開事件，名稱一起帶上。"""
+    代號們 = 代號們 or 讀取0050成分() or ["2330"]
+    價 = _讀每日檔("prices", 代號=代號們, 起日=pd.Timestamp.today() - pd.Timedelta(days=365 * 5 + 30))
+    if 價 is None or not len(價):
+        return pd.DataFrame(), {}
+    事, 基準 = 跌停打開事件(價, 拉回門檻)
+    名 = 價.drop_duplicates("code", keep="last").set_index("code")["name"] if "name" in 價 else None
+    if 名 is not None and len(事):
+        事.insert(2, "名稱", 事["代號"].map(名))
+    return 事, 基準

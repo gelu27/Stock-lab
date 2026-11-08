@@ -29,3 +29,5 @@ jobs:
         run: python tests/test_split.py
       - name: 新聞事件工具（舊聞、事件反應、金額換算、業外）
         run: python tests/test_news_tools.py
+      - name: 大跌日收復表、跌停打開回測
+        run: python tests/test_crash_tools.py
