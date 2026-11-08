@@ -243,7 +243,7 @@ def 公布後表現(變化, 行情, 類型們=("新增", "加碼")):
 
 # ---------- 9 費用 ----------
 def 讀費用():
-    """data/etf/fees.csv（手動維護，來源：各投信公開說明書）：etf, 經理費, 保管費, 總費用率, 來源, 更新日。"""
+    """data/etf/fees.csv（etf_data.更新費用 自動從 MoneyDJ 補，也可手動改）：etf, 經理費, 保管費, 總費用率, 來源, 更新日。"""
     f = 資料夾 / "etf" / "fees.csv"
     if not f.exists():
         return pd.DataFrame(columns=["etf", "經理費", "保管費", "總費用率", "來源", "更新日"])

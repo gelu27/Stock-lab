@@ -445,9 +445,12 @@ def main():
     參數 = argparse.ArgumentParser()
     參數.add_argument("--days", type=int, default=7, help="官網有歷史的 ETF 回補幾天")
     參數.add_argument("--health", action="store_true", help="只做健康檢查：超過 2 個交易日沒更新就 LINE 通知")
+    參數.add_argument("--fees", action="store_true", help="只更新 data/etf/fees.csv 的經理費、保管費（空白或自動抓超過 30 天的）")
     選項 = 參數.parse_args()
     if 選項.health:
         return 通知斷線()
+    if 選項.fees:
+        return 更新費用()
     天數 = 選項.days
     今天 = dt.datetime.now(台北時區).date()
     日們 = [今天 + dt.timedelta(days=1 - i) for i in range(天數 + 2)]
@@ -689,6 +692,79 @@ def 每日變化(持股, 資訊):
     變["adj_amount"] = 變["adj_delta"] * 變["price"]
     return 變
 
+
+
+# ---------- 費用（經理費、保管費）：MoneyDJ ETF 基本資料頁，每月自動補一次 ----------
+費用檔 = 資料夾 / "fees.csv"
+費用欄 = ["etf", "經理費", "保管費", "總費用率", "來源", "更新日"]
+自動來源 = "MoneyDJ"
+
+
+def 解析費用(文字):
+    """從網頁文字找經理費（管理費）、保管費（年率 %）。級距式的取第一個數字（規模最小那一級）。找不到回 None。"""
+    import re
+    文字 = re.sub(r"<[^>]+>", " ", 文字)
+    文字 = re.sub(r"\s+", " ", 文字)
+    def 找(標籤們, 上限):
+        for 標 in 標籤們:
+            for m in re.finditer(標 + r"[^0-9]{0,40}?([0-9]+(?:\.[0-9]+)?)\s*%", 文字):
+                v = float(m.group(1))
+                if 0 < v < 上限:
+                    return v
+        return None
+    return 找(["經理費", "管理費"], 3.0), 找(["保管費"], 0.5)
+
+
+def 抓費用一檔(代號):
+    r = requests.get(f"https://www.moneydj.com/ETF/X/Basic/Basic0004.xdjhtm?etfid={代號}.TW", headers=標頭, timeout=30)
+    r.raise_for_status()
+    r.encoding = r.apparent_encoding or "utf-8"
+    return 解析費用(r.text)
+
+
+def 更新費用(代號們=None, 間隔天數=30, 抓=None):
+    """fees.csv 裡「空白」或「上次自動抓超過 間隔天數」的列，自動補經理費、保管費；
+    來源不是 MoneyDJ 的列（手動填的）一律不動。回傳 (更新筆數, 失敗代號們)。"""
+    抓 = 抓 or 抓費用一檔
+    表 = pd.read_csv(費用檔, dtype={"etf": str}) if 費用檔.exists() else pd.DataFrame(columns=費用欄)
+    for c in 費用欄:
+        if c not in 表.columns:
+            表[c] = ""
+    代號們 = 代號們 or sorted(set(主動式清單()) | {"0050", "00631L"})
+    for c in 代號們:
+        if c not in set(表["etf"]):
+            表.loc[len(表)] = {"etf": c, "來源": "待填（公開說明書）"}
+    今天 = dt.datetime.now(台北時區).date()
+    更新, 失敗 = 0, []
+    for i, 列 in 表.iterrows():
+        if 列["etf"] not in 代號們:
+            continue
+        空白 = pd.isna(pd.to_numeric(列["經理費"], errors="coerce"))
+        自動 = str(列["來源"]).startswith(自動來源)
+        if not 空白 and not 自動:
+            continue      # 手動填的不動
+        if 自動 and not 空白:
+            try:
+                if (今天 - pd.Timestamp(列["更新日"]).date()).days < 間隔天數:
+                    continue
+            except Exception:
+                pass
+        try:
+            經理, 保管 = 抓(列["etf"])
+        except Exception as e:
+            失敗.append(列["etf"])
+            print(f"{列['etf']} 費用：{type(e).__name__} {str(e)[:100]}")
+            continue
+        if 經理 is None:
+            失敗.append(列["etf"])
+            continue
+        表.at[i, "經理費"], 表.at[i, "保管費"] = 經理, ("" if 保管 is None else 保管)
+        表.at[i, "來源"], 表.at[i, "更新日"] = f"{自動來源}（自動，級距取第一級）", 今天.isoformat()
+        更新 += 1
+        time.sleep(0.5)
+    表[費用欄].to_csv(費用檔, index=False)
+    print(f"費用：更新 {更新} 檔，抓不到 {len(失敗)} 檔{('：' + '、'.join(失敗)) if 失敗 else ''}")
+    return 更新, 失敗
 
 if __name__ == "__main__":
     main()
