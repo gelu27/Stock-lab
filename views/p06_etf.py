@@ -202,9 +202,10 @@ with ETF頁[0]:
                     AI紀錄快取.clear()
                 except Exception as 錯:
                     st.error(f"AI 解讀失敗：{錯}")
-    if b.button("📋 複製 AI 指令", key="ETF指令", width="stretch"):
+    手動 = (not 金鑰) or st.toggle("手動模式（複製指令到 Gemini／Claude App）", key="手動模式ETF")
+    if 手動 and b.button("📋 複製 AI 指令", key="ETF指令", width="stretch"):
         st.session_state["ETF顯示指令"] = not st.session_state.get("ETF顯示指令", False)
-    if c.button("📥 貼上 AI 結果", key="ETF貼上", width="stretch", disabled=not 可寫,
+    if 手動 and c.button("📥 貼上 AI 結果", key="ETF貼上", width="stretch", disabled=not 可寫,
                 help=None if 可寫 else "請先在 01 市場總覽輸入庫存密碼解鎖"):
         st.session_state["ETF顯示貼上"] = not st.session_state.get("ETF顯示貼上", False)
     if st.session_state.get("ETF顯示指令"):

@@ -1073,6 +1073,10 @@ def 大盤解讀(模式):
     print(摘要)
     內容, 模型 = engine.AI大盤解讀(摘要, 模式, 設定)
     try:
+        engine.AI用量紀錄(設定, "大盤解讀")
+    except Exception as e:
+        print("用量紀錄失敗：", repr(e))
+    try:
         engine.儲存大盤解讀(設定, 模式, 內容, 模型)
     except Exception as e:
         print("存檔失敗：", repr(e))

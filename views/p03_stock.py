@@ -1791,10 +1791,11 @@ with 分頁[4], 區塊防護("AI 分析"):
                 st.caption(f"使用 {引擎}。AI 會彙整近半年新聞、法人觀點與網站數據，給出目標價、預估本益比與短中期看法，約需 1 分鐘。")
 
             可寫 = not (密碼 and not st.session_state.get("已解鎖"))
+            手動 = (not 金鑰) or st.toggle("手動模式（複製指令到 Gemini／Claude App，再貼回來）", key="手動模式個股")
             a, b = st.columns(2)
-            if a.button("📋 複製分析指令（Gemini／Claude App）", key="複製指令", width="stretch"):
+            if 手動 and a.button("📋 複製分析指令（Gemini／Claude App）", key="複製指令", width="stretch"):
                 st.session_state["顯示指令"] = not st.session_state.get("顯示指令", False)
-            if b.button("📥 貼上 AI 報告", key="貼上報告", width="stretch", disabled=not 可寫,
+            if 手動 and b.button("📥 貼上 AI 報告", key="貼上報告", width="stretch", disabled=not 可寫,
                         help=None if 可寫 else "請先在 01 市場總覽輸入庫存密碼解鎖"):
                 st.session_state["顯示貼上"] = not st.session_state.get("顯示貼上", False)
             if st.session_state.get("顯示指令"):
