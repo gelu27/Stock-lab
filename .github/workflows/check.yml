@@ -35,3 +35,5 @@ jobs:
         run: python tests/test_ai_card.py
       - name: 止跌與抄底工具
         run: python tests/test_dip_tools.py
+      - name: 主動式 ETF 績效體檢、除權息日報酬
+        run: python tests/test_etf_perf.py

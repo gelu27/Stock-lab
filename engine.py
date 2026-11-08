@@ -484,6 +484,22 @@ def _連續天數(條件, 代號):
     return 條件.astype(int).groupby([代號, 斷點]).cumsum()
 
 
+@lru_cache(maxsize=2)
+def _讀參考價(_更新時間):
+    t = pd.read_csv(資料夾 / "fundamental" / "dividend.csv", dtype={"code": str}, usecols=["code", "date", "ref"])
+    t["date"] = pd.to_datetime(t["date"])
+    t["ref"] = pd.to_numeric(t["ref"], errors="coerce")
+    return t.dropna().drop_duplicates(["code", "date"], keep="last")
+
+
+def 除權息參考價():
+    """除權息（含面額分割）當天的參考價：code、date、ref。"""
+    f = 資料夾 / "fundamental" / "dividend.csv"
+    if not f.exists():
+        return pd.DataFrame(columns=["code", "date", "ref"])
+    return _讀參考價(f.stat().st_mtime)
+
+
 def 計算指標(原始):
     表 = 原始.rename(columns={
         "name": "名稱", "close": "收盤", "change": "漲跌", "pe": "本益比",
@@ -495,11 +511,20 @@ def 計算指標(原始):
     # 日報酬：交易所的「漲跌」是跟參考價比，除權息當天不會誤算成大跌
     前一天 = 表["收盤"] - 表["漲跌"]
     表["日報酬"] = (表["漲跌"] / 前一天).where(前一天 > 0)
+    # 除權息當天交易所的漲跌欄是「X」（讀進來是空值），以前會改用收盤價推算，股利就沒補回去；
+    # 改用除權息表的參考價：日報酬 ＝ 收盤 ÷ 參考價 − 1（2026-11-08 修正，0050 今年少算約 3 個百分點）
+    參考 = 除權息參考價()
+    if len(參考):
+        參考價 = 表[["code", "date"]].merge(參考, on=["code", "date"], how="left")["ref"].to_numpy()
+        補 = 表["日報酬"].isna() & (參考價 > 0)
+        表.loc[補, "日報酬"] = (表.loc[補, "收盤"].to_numpy() / 參考價[補.to_numpy()] - 1).astype(表["日報酬"].dtype)
     # 沒有漲跌資料（例如減資、暫停交易後恢復）時才用收盤價推算；
     # 超過 10% 漲跌停限制的變動通常是減資等公司行動，不算成真正的漲跌
+    # 槓桿型 ETF（代號結尾 L，例如 00631L 正2）漲跌幅限制是倍數 × 10%，不能截在 10.5%，否則還原價會失真
+    上限 = pd.Series(np.where(表["code"].astype(str).str.fullmatch(r"00\d{3,4}L"), 0.21, 0.105), index=表.index)
     推算 = 群["收盤"].pct_change()
-    推算 = 推算.where(推算.abs() <= 0.105, 0)
-    表["日報酬"] = 表["日報酬"].fillna(推算).fillna(0).clip(-0.105, 0.105)
+    推算 = 推算.where(推算.abs() <= 上限, 0)
+    表["日報酬"] = 表["日報酬"].fillna(推算).fillna(0).clip(-上限, 上限)
     # 還原股價：把除權息的影響補回去，回測才準
     表["還原價"] = np.exp(np.log1p(表["日報酬"]).groupby(表["code"]).cumsum())
 

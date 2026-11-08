@@ -23,11 +23,13 @@ import importlib
 import engine
 import etf_data
 import etf_analysis
+import etf_perf
 import macro
 
 importlib.reload(engine)
 importlib.reload(etf_data)  # 程式更新後確保用的是最新版的計算規則
 importlib.reload(etf_analysis)
+importlib.reload(etf_perf)
 importlib.reload(macro)  # 01 首頁總經／資金用；沒重新載入時，部署新版後會沿用舊版 macro 而找不到新函式
 
 _圖示 = Path(__file__).parent / "static" / "icon-192.png"
