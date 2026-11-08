@@ -51,6 +51,7 @@ def test_影片收件流程(monkeypatch):
     回.json.return_value = {"candidates": [{"content": {"parts": [{"text": 整理}]}}]}
     monkeypatch.setattr(engine, "Gemini呼叫", lambda *a, **k: (回, "m"))
     monkeypatch.setattr(auto_intake, "_通知", lambda t: None)
+    monkeypatch.setattr(auto_intake, "取字幕", lambda v: None)
     monkeypatch.setattr(auto_intake, "_額度夠", lambda s, f: True)
     新, 敗 = auto_intake.收影片({"GEMINI_API_KEY": "k"})
     assert (新, 敗) == (1, 0)

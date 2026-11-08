@@ -28,7 +28,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install pandas numpy requests pyarrow pypinyin
+      - run: pip install pandas numpy requests pyarrow pypinyin youtube-transcript-api
       - run: python -u auto_intake.py ${{ github.event.inputs.mode || 'all' }}
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}

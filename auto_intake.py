@@ -96,6 +96,18 @@ def 影片清單(設, 已看影片, 天數=3):
     return [v for v in 結果.values() if 要處理(v)]
 
 
+def 取字幕(vid):
+    """用 youtube-transcript-api 抓字幕（文字比影片便宜很多）。抓不到（被 YouTube 擋、沒字幕）回傳 None。"""
+    try:
+        from youtube_transcript_api import YouTubeTranscriptApi
+        段 = YouTubeTranscriptApi().fetch(vid, languages=["zh-TW", "zh-Hant", "zh", "zh-Hans", "en"])
+        文 = " ".join(x.text for x in 段).strip()
+        return 文 if len(文) > 200 else None
+    except Exception as e:
+        print(f"  字幕抓不到（{type(e).__name__}），改請 Gemini 直接看影片", flush=True)
+        return None
+
+
 def 收影片(設):
     金鑰 = engine.清理金鑰(設.get("GEMINI_API_KEY"))
     if not 金鑰:
@@ -111,7 +123,7 @@ def 收影片(設):
     名稱表 = dict(zip(今["name"], 今["code"]))
     名表 = dict(zip(今["code"], 今["name"]))
     模型 = 設.get("GEMINI_MODEL") or "gemini-flash-latest"
-    新, 失敗, 開始 = [], 0, time.time()
+    新, 失敗, 開始, 待人工 = [], 0, time.time(), []
     for vid, 網址, 標題, 日期 in 待:
         if time.time() - 開始 > 影片時限秒:
             print("已超過時間上限，剩下的影片下次再處理")
@@ -121,7 +133,14 @@ def 收影片(設):
         t0 = time.time()
         print(f"處理 {網址} {標題}", flush=True)
         try:
-            內容 = {"contents": [{"role": "user", "parts": [{"file_data": {"file_uri": 網址}}, {"text": 網紅指令}]}],
+            字幕 = 取字幕(vid)
+            if 字幕:
+                print(f"  用字幕（{len(字幕)} 字）", flush=True)
+                素材 = {"text": "以下是這支影片的逐字稿（YouTube 自動字幕，可能有同音錯字，請依上下文修正股票與公司名稱；沒有畫面資訊，第六點請寫「無」）：\n"
+                               + 字幕[:200000] + f"\n\n影片標題：{標題}\n影片網址：{網址}"}
+            else:
+                素材 = {"file_data": {"file_uri": 網址}}
+            內容 = {"contents": [{"role": "user", "parts": [素材, {"text": 網紅指令}]}],
                   "generationConfig": {"temperature": 0.2, "maxOutputTokens": 12000,
                                      "mediaResolution": "MEDIA_RESOLUTION_LOW"}}   # 低解析度：影片用的字數約少 2/3，省額度
             # 影片很長：不換模型；遇到 429（每分鐘上限）等 65 秒再試一次
@@ -145,10 +164,12 @@ def 收影片(設):
         except Exception as e:
             失敗 += 1
             print(f"  失敗（{time.time() - t0:.0f} 秒）：{e!r}", flush=True)
+            待人工.append(f"{標題[:30]} {網址}")
     if 新 or 失敗:
         旗 = [f"{v['頻道']} {v['日期']}：" + "；".join(v["查核"]) for v in 新 if v["查核"]]
         _通知(f"🎬 自動收到 {len(新)} 支網紅影片摘要" + (f"（{失敗} 支失敗）" if 失敗 else "")
-            + ("\n🚩 初步查核：\n" + "\n".join(旗) if 旗 else ""))
+            + ("\n🚩 初步查核：\n" + "\n".join(旗) if 旗 else "")
+            + ("\n\n✋ 這些沒整理成功，可貼連結到 Gemini 手動整理（指令在網站 04 選股 → 網紅收件匣）：\n" + "\n".join(待人工[:8]) if 待人工 else ""))
     return len(新), 失敗
 
 
