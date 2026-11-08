@@ -66,18 +66,23 @@ def 鎖死資訊(表):
 
 
 @st.cache_data(ttl=20, show_spinner=False)
+def _大盤即時():
+    表 = engine.即時報價(["t00", "o00"], {"o00": "上櫃"})
+    表 = 表.dropna(subset=["close"]).set_index("code") if not 表.empty else 表
+    if 表.empty:
+        raise ValueError("沒有即時報價")  # 失敗不快取
+    return 表
+
+
 def 大盤即時():
-    """加權（t00）、櫃買（o00）盤中即時點數，所有人共用 20 秒快取。抓不到回傳 None。"""
-    try:
-        表 = engine.即時報價(["t00", "o00"], {"o00": "上櫃"})
-        return 表.dropna(subset=["close"]).set_index("code") if not 表.empty else None
-    except Exception:
-        return None
+    """加權（t00）、櫃買（o00）盤中即時點數，所有人共用 20 秒快取；抓不到先用上一筆，都沒有才回傳 None。"""
+    return 抓取留底(("大盤即時",), _大盤即時, 冷卻秒=30)
 
 
-@st.fragment(run_every=30 if engine.盤中時間() else None)
+@st.fragment(run_every=刷新秒(30))
 def 盤中即時條():
     """首頁最上方的盤中即時橫條，只在 9:00～13:35 顯示，每 30 秒更新。"""
+    輪詢檢查()  # 開盤／收盤時切換自動更新頻率
     if not engine.盤中時間():
         return
     表 = 大盤即時()
@@ -101,8 +106,9 @@ def 盤中即時條():
                    "成交金額、漲跌家數、排行與法人是收盤後的資料。")
 
 
-@st.fragment(run_every=30 if engine.盤中時間() else None)
+@st.fragment(run_every=刷新秒(30))
 def 加權圖():
+    輪詢檢查()  # 開盤／收盤時切換自動更新頻率
     段落("TAIEX // 加權指數走勢")
     區間 = st.segmented_control("區間", ["當日", "5日", "1月", "1季", "半年", "1年", "3年", "5年"],
                               default="當日", key="加權區間", label_visibility="collapsed") or "當日"
@@ -118,6 +124,7 @@ def 加權圖():
     if 區間 in ("當日", "5日"):
         # 先用 Yahoo 的分鐘線（盤中也會更新），抓不到再用每天收盤後存下來的分時資料
         線 = 分鐘線("t00", "", "1m" if 區間 == "當日" else "5m", "5d")
+        過期提示(線)
         if 線 is not None and len(線):
             線 = 線.assign(day=線["datetime"].dt.normalize())
             天們 = sorted(線["day"].unique())[-1:] if 區間 == "當日" else sorted(線["day"].unique())[-5:]
@@ -256,7 +263,8 @@ def 輪動氣泡圖(族群, 期間):
 def 族群樹圖(族群, 個股, 界, 大小):
     名們 = list(族群.index)
     圖 = go.Figure(go.Treemap(
-        ids=名們 + (個股["產業"] + "/" + 個股["名稱"]).tolist(),
+        # 個股方塊的 id 以代號結尾（產業/2330），點一下就會切到那檔的個股查詢
+        ids=名們 + (個股["產業"] + "/" + 個股["代號"].fillna("").astype(str).where(個股["代號"].notna() & (個股["代號"] != ""), 個股["名稱"])).tolist(),
         labels=名們 + 個股["名稱"].tolist(),
         parents=[""] * len(名們) + 個股["產業"].tolist(),
         values=[0] * len(名們) + 個股["權重"].tolist(),
@@ -273,7 +281,7 @@ def 族群樹圖(族群, 個股, 界, 大小):
     圖.update_layout(height=560, margin=dict(l=0, r=0, t=24, b=0), paper_bgcolor="rgba(0,0,0,0)")
     st.plotly_chart(圖, width="stretch", config={"displayModeBar": False})
     st.caption(f"方塊越大代表{大小}越大；紅漲綠跌，顏色越深漲跌越多（±{界}% 以上最深）。"
-               "點一下族群可放大看裡面的股票，點上方路徑可返回。族群漲跌是依" + 大小 + "加權平均。")
+               "點一下族群可放大看裡面的股票，再點個股方塊就會切到那檔的個股查詢；點上方路徑可返回。族群漲跌是依" + 大小 + "加權平均。")
 
 
 @st.cache_data(ttl=43200, max_entries=1, show_spinner=False)
@@ -340,8 +348,9 @@ def 市場每日(版本鍵):
     return 表
 
 
-@st.fragment(run_every=60 if engine.盤中時間() else None)
+@st.fragment(run_every=刷新秒(60))
 def 市場卡片():
+    輪詢檢查()  # 開盤／收盤時切換自動更新頻率
     段落("MARKET // 市場")
     上漲 = (今日["漲跌"] > 0).sum()
     下跌 = (今日["漲跌"] < 0).sum()
@@ -1186,8 +1195,9 @@ def 盤中權值來源():
     return 來源, 加, r["time"]
 
 
-@st.fragment(run_every=60 if engine.盤中時間() else None)
+@st.fragment(run_every=刷新秒(60))
 def 權值區():
+    輪詢檢查()  # 開盤／收盤時切換自動更新頻率
     段落("WEIGHT // 權值股：今天誰撐盤、誰拖盤")
     期間 = st.segmented_control("貢獻期間", list(engine.族群期間), default="今日", key="權值期間",
                               label_visibility="collapsed") or "今日"
