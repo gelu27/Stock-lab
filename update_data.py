@@ -1062,6 +1062,28 @@ def 抓美股日線(範圍="2y"):
     print(f"美股日線完成：{表['symbol'].nunique()} 檔，最新 {表['date'].max()}")
 
 
+def 抓VIX長線():
+    """VIX 從 1990 年起的每日收盤 → data/vix_long.csv（股癌 EP712：VIX 跳升之後美股、台股怎麼走）。約 150KB。"""
+    try:
+        r = requests.get("https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX"
+                         f"?period1=631152000&period2={int(time.time())}&interval=1d",  # 1990-01-01 起
+                         headers={"User-Agent": "Mozilla/5.0"}, timeout=60)
+        結果 = r.json()["chart"]["result"][0]
+        時區 = 結果["meta"].get("gmtoffset", 0)
+        新 = pd.DataFrame([{"date": dt.datetime.utcfromtimestamp(時 + 時區).strftime("%Y-%m-%d"), "close": round(收, 2)}
+                          for 時, 收 in zip(結果["timestamp"], 結果["indicators"]["quote"][0]["close"]) if 收])
+    except Exception as 錯誤:
+        print(f"VIX 長線失敗：{錯誤}")
+        return
+    檔 = 資料夾 / "vix_long.csv"
+    舊 = pd.read_csv(檔, dtype={"date": str}) if 檔.exists() else pd.DataFrame(columns=["date", "close"])
+    if len(新) < 0.9 * len(舊):  # Yahoo 偶爾只回一段，別把舊資料蓋掉
+        新 = pd.concat([舊, 新])
+    表 = 新.drop_duplicates("date", keep="last").sort_values("date")
+    表.to_csv(檔, index=False)
+    print(f"VIX 長線完成：{len(表)} 筆（{表['date'].min()}～{表['date'].max()}）")
+
+
 def 抓費半長線():
     """費半、S&P 500 從 1994 年起的每日收盤 → data/sox_long.csv（算費半距歷史高點的回撤、歷年大跌後表現）。
     us_daily.csv 只留 2 年，這個檔只放兩個指數，約 300KB。"""
@@ -1807,7 +1829,7 @@ def main():
     if not 參數.skip_latest:
         for 工作 in (抓分時, 抓興櫃, 抓基本面, 抓匯率, 抓處置注意, 抓借券, 抓法說會, 抓融資金額, 抓期貨未平倉, 抓小台散戶,
                      抓美股日線, 抓經濟行事曆, 抓美股財報, 抓指數K線, 抓選擇權, 抓新股申購, 抓外資持股, 抓當沖, 抓庫藏股, 抓可轉債, 抓公司簡介, 抓合約負債, 抓合約負債歷史,
-                     抓內部人轉讓, 抓興櫃推薦券商, 抓重大訊息, 抓美國數據, 抓美股資本支出, 抓費半長線, 抓夜盤法人, 抓台指期價差, 抓期貨保證金, 抓0050成分):  # 這些出問題不影響主資料庫
+                     抓內部人轉讓, 抓興櫃推薦券商, 抓重大訊息, 抓美國數據, 抓美股資本支出, 抓費半長線, 抓VIX長線, 抓夜盤法人, 抓台指期價差, 抓期貨保證金, 抓0050成分):  # 這些出問題不影響主資料庫
             try:
                 工作()
             except Exception as 錯誤:

@@ -629,6 +629,7 @@ def 跌深區():
             "**個股融資維持率是估算的**：用每天融資餘額變化推平均成本，上市 ÷ 60%、上櫃 ÷ 50%；"
             "跟大盤實際值比對可能偏高 2～15 個百分點，看級距就好。"
             + ("\n\n**最新實測（每月自動更新）**：\n" + "\n".join(f"- {x}" for x in 句) if 句 else ""))
+    籌碼不安定區()
 
 
 def 槓桿趨勢():
@@ -1255,6 +1256,7 @@ def 恐慌溫度計區():
 def 情緒區():
     段落("SENTIMENT // 市場情緒：法人 × 散戶 × 國際 × 資金")
     恐慌溫度計區()
+    VIX跳升區()
     情 = 情緒資料(_版本)
     if 情.empty or 情[["散戶", "法人", "資金溫度", "全球"]].dropna(how="all").empty:
         st.info("情緒指數資料累積中。")
@@ -1984,6 +1986,7 @@ def 總經區():
                                "期間漲跌從區間開始前一天收盤算到區間最後一天。玄學或節日說法都可以貼日期進來驗證。")
                 elif 文字.strip():
                     st.caption("看不懂日期或區間內交易日太少，請用「2026-10-24~2026-11-13」這種格式，每行一段。")
+    供應鏈政策區()
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -2072,7 +2075,193 @@ def 止跌訊號區():
                        "高於前低很多的通常是這一段本來就大漲的股票，可搭配「收盤距近期低%」看是不是已經從低點拉回來。點一列看個股。")
 
 
-首頁區塊 = ["30秒", "市場", "狀態", "價位", "AI解讀", "焦點", "國際", "總經", "連動", "加權指數", "權值", "資金", "跌深", "止跌", "選擇權", "情緒", "族群", "行事曆", "事件", "排行"]
+# ---------- 股癌 EP712（2026-11-08）：國安基金、季線保衛戰、季線乖離、VIX 跳升、籌碼不安定、Permit、砍單長鞭 ----------
+@st.cache_data(ttl=3600, show_spinner=False)
+def 標普長線(版本鍵):
+    f = engine.資料夾 / "sox_long.csv"
+    if not f.exists():
+        return None
+    t = pd.read_csv(f, parse_dates=["date"])
+    return t[t["symbol"] == "^GSPC"].set_index("date")["close"].sort_index()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def 護盤資料(版本鍵):
+    K = 指數K線("TAIEX", 版本鍵)
+    表, 本次 = engine.國安基金統計(K)
+    狀 = engine.季線狀態(K)
+    乖 = engine.季線乖離位置(K)
+    標 = 標普長線(版本鍵)
+    統台 = engine.季線站上統計(engine.季線站上事件(K.set_index("date")["close"])) if K is not None else pd.DataFrame()
+    統美 = engine.季線站上統計(engine.季線站上事件(標)) if 標 is not None and len(標) > 300 else pd.DataFrame()
+    return 表, 本次, 狀, 乖, 統台, 統美
+
+
+def 護盤區():
+    """股癌 EP712 建議 1、2、5：國安基金護盤追蹤、季線保衛戰燈號、季線乖離位置。"""
+    段落("RESCUE // 護盤與季線保衛戰：國安基金之後怎麼走、季線站不站得穩")
+    表, 本次, 狀, 乖, 統台, 統美 = 護盤資料(_版本)
+    卡們 = []
+    if 狀:
+        卡們.append(卡片("季線保衛戰", f"{狀['燈']} {狀['狀態']}", f"季線 {狀['季線']:,.0f}　乖離 {狀['乖離%']:+.1f}%",
+                      {"🟢": 紅, "🟡": "#FFC24B", "🟠": "#FF8A3D", "🔴": 綠}.get(狀["燈"], "#EDEDED")))
+    if 乖:
+        卡們.append(卡片("季線乖離位置", f"{乖['乖離%']:+.1f}%", f"比 {乖['起']:%Y/%m} 以來 {100 - 乖['百分位']:.1f}% 的日子還低",
+                      綠 if 乖["乖離%"] <= -10 else "#EDEDED"))
+    if 本次 and not 本次["已過交易日"]:
+        前 = 表[表["次"].isin([x["次"] for x in 本次["前幾次"]])] if 表 is not None and "20日%" in 表 else pd.DataFrame()
+        卡們.append(卡片(f"國安基金第 {本次['次']} 次", "剛決議", f"{本次['決議日']} 盤後決議，從當天收盤起算；前幾次 20 日 "
+                      + "、".join(f"{r['20日%']:+.1f}%" for _, r in 前.iterrows() if pd.notna(r["20日%"])), "#EDEDED"))
+    elif 本次:
+        比 = "、".join(f"第 {x['次']} 次 {x['同天數%']:+.1f}%" for x in 本次["前幾次"])
+        卡們.append(卡片(f"國安基金第 {本次['次']} 次", f"{本次['目前%']:+.1f}%",
+                      f"{本次['決議日']} 決議後第 {本次['已過交易日']} 個交易日" + (f"；前幾次同一天 {比}" if 本次["已過交易日"] and 比 else ""),
+                      漲跌色(本次["目前%"])))
+    if 卡們:
+        卡片格(卡們)
+    if 狀:
+        st.markdown(f"**{狀['燈']} {狀['狀態']}**：{狀['說明']}")
+    with st.expander("ℹ️ 站上季線又跌破＝大頭部？回測結果"):
+        st.markdown("**股癌 EP712 說法**：跌深反彈先看季線，站上去要守住再往上；站上又掉下來可能是很大的頭部，要把現金拉高。\n\n"
+                    "**網站規則**：加權離一年高點跌超過 10% 又在季線下 → 🔴 等站上季線；第一次收盤站上 → 🟡 觀察 10 個交易日；"
+                    "10 天都沒跌回去 → 🟢 站穩；10 天內跌回去 → 🟠 又跌破。報酬從第 10 天收盤算起（已經知道結果的時候）。")
+        for 名, 統 in (("S&P 500（1994 年起）", 統美), ("加權（網站資料期間）", 統台)):
+            if len(統):
+                st.markdown(f"**{名}**")
+                表格(統, hide_index=True, width="stretch",
+                     column_config={c: st.column_config.NumberColumn(format="%+.1f") for c in ("60日平均%", "120日平均%", "250日平均%")})
+        st.caption("美股 30 年裡跌深後站上季線，七成會在 10 天內又跌回去，跌破組之後一年平均反而沒有比較差；"
+                   "差別是之後 120 天內再跌 10% 的機率比較高。所以「又跌破」適合當「先別加碼」的訊號，不是「要大跌」。"
+                   "台股只有 5 年資料、樣本很少，方向支持「站穩再加碼」。")
+    if 乖 is not None and len(乖["段落"]):
+        with st.expander(f"📏 季線乖離 ≤ −10% 的歷史段落（{len(乖['段落'])} 段）"):
+            段 = 乖["段落"].sort_values("開始日", ascending=False).assign(開始日=lambda d: d["開始日"].dt.strftime("%Y/%m/%d"))
+            表格(段, hide_index=True, width="stretch",
+                 column_config={c: st.column_config.NumberColumn(format="%+.1f") for c in ("當天乖離%", "最低乖離%", "5日%", "20日%", "60日%")})
+            st.caption("每一段從乖離第一次跌破 −10% 那天算（40 天內再跌破算同一段）。之後 20 日全部上漲，"
+                       "但 2022/07 那段 60 日又跌回去，乖離大是短線反彈的條件，不是見底保證。")
+    if 表 is not None and len(表):
+        with st.expander("🏦 國安基金歷次護盤"):
+            欄 = [c for c in ["次", "決議日", "事件", "退場日", "投入億", "獲利億", "收盤", "距一年高點%", "季線乖離%",
+                             "1日%", "5日%", "20日%", "60日%", "120日%", "之後最低再跌%"] if c in 表.columns]
+            顯 = 表[欄].iloc[::-1].reset_index(drop=True)
+            表格(顯, hide_index=True, width="stretch",
+                 column_config={**{c: st.column_config.NumberColumn(format="%+.1f") for c in 欄 if c.endswith("%")},
+                                "收盤": st.column_config.NumberColumn(format="%.2f")})
+            st.caption("報酬從決議日收盤算（多半是盤後決議，隔天才可能進場）。網站加權資料從 2021-11 開始，更早的只列事件；"
+                       "投入、獲利是媒體整理，口徑不一。新的護盤在 GitHub 的 data/stabilization_fund.csv 加一列就會出現。"
+                       "國安基金沒有法定進場點位，「跌到十年線才護盤」只是市場說法。")
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def VIX回測資料(版本鍵):
+    v = engine.讀取VIX長線()
+    標 = 標普長線(版本鍵)
+    K = 指數K線("TAIEX", 版本鍵)
+    美, _ = engine.VIX跳升統計(v, 標) if 標 is not None else (pd.DataFrame(), {})
+    台, _ = engine.VIX跳升統計(v, K.set_index("date")["close"], 隔天=True) if K is not None else (pd.DataFrame(), {})
+    return v, 美, 台, engine.VIX今日觸發(v)
+
+
+def VIX跳升區():
+    """股癌 EP712 建議 3：VIX 跳上去、大家極度害怕的時候是短線好買點？"""
+    v, 美, 台, 觸 = VIX回測資料(_版本)
+    if v is None or 美.empty:
+        return
+    標題 = "😨 VIX 跳升之後，美股和台股怎麼走？"
+    if 觸:
+        d, 名, 值, 變 = 觸[0]
+        標題 = f"😨 {d:%m/%d} {名}（VIX {值:.1f}、單日 {變:+.0f}%）：之後美股和台股怎麼走？"
+    with st.expander(標題, expanded=bool(觸)):
+        基 = 美.iloc[0]
+        分 = st.tabs(["S&P 500（1994 年起）", "加權（網站資料期間）"])
+        for 頁, 表 in zip(分, (美, 台)):
+            with 頁:
+                if len(表):
+                    表格(表, hide_index=True, width="stretch",
+                         column_config={c: st.column_config.NumberColumn(format="%+.1f") for c in 表.columns if c.endswith("平均%")})
+        st.caption(f"VIX 資料從 {v.index[0]:%Y} 年開始。同一個條件 20 個交易日內只算第一次；S&P 500 用當天收盤、加權用隔天收盤進場。"
+                   "次數包含還沒滿天數的最近一次。VIX 單日跳升 50% 以上非常少見，之後 20 日 S&P 500 每次都上漲，但抱一年跟平常差不多："
+                   "主委說的「先想清楚 Horizon」——做這一波反彈勝率高，看創新高就沒有優勢。"
+                   + f"任意一天之後 20 日平均 {基['20日平均%']:+.1f}%，可以拿來比較。")
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def 籌碼不安定資料(版本鍵):
+    return engine.籌碼不安定榜(今日, 指標[["date", "代號", "日報酬"]], 指數K線("TAIEX", 版本鍵))
+
+
+def 籌碼不安定區():
+    """股癌 EP712 建議 4：融資佔股本最高的股票＝籌碼不安定，殺盤重災區。"""
+    t = 籌碼不安定資料(_版本)
+    if t is None or t.empty:
+        return
+    with st.expander(f"🎲 籌碼不安定榜：融資佔股本最高的 {len(t)} 檔（殺盤時常是重災區）"):
+        欄 = [c for c in ["代號", "名稱", "產業", "收盤", "融資佔股本%", "融資餘額", "融資5日增減", "融資維持率", "beta",
+                         "5日漲幅", "20日漲幅", "距52週高點"] if c in t.columns]
+        點選表(t[欄], t[欄].style.format({"收盤": "{:,.2f}", "融資佔股本%": "{:.1f}", "融資餘額": "{:,.0f}",
+                                         "融資5日增減": "{:+.1f}", "融資維持率": "{:.0f}", "beta": "{:.2f}",
+                                         "5日漲幅": "{:+.1f}", "20日漲幅": "{:+.1f}", "距52週高點": "{:+.1f}"}, na_rep="—"),
+              key="籌碼不安定榜", height=min(35 * (len(t) + 1) + 3, 420),
+              column_config={"融資餘額": st.column_config.NumberColumn("融資(張)"),
+                             "融資維持率": st.column_config.NumberColumn("維持率%（估）")})
+        st.caption("融資佔股本＝融資餘額張數 × 1,000 ÷ 發行股數；只看普通股、融資 500 張以上、成交值 5,000 萬以上。"
+                   "2026-11 回測：加權 5 日跌超過 6% 的 9 次急跌裡，融資佔股本最高的 1/5 每次都跌得比最低的 1/5 深"
+                   "（平均 −10.5% 對 −4.9%），之後反彈也比較大；但同樣 beta（波動度）的股票比，只多跌 1～4 個百分點，"
+                   "所以這張表主要是在抓「高波動、題材股」。另外「週三融資大增的股票跌最慘」實測不成立。點一列看個股。")
+
+
+@st.cache_data(ttl=3 * 3600, show_spinner=False)
+def Permit新聞資料():
+    try:
+        return engine.Permit新聞()
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def 長鞭資料(版本鍵):
+    return engine.砍單長鞭()
+
+
+def 供應鏈政策區():
+    """股癌 EP712 建議 7、8：美國資料中心 Permit 有沒有被卡住、砍單有沒有從小料件開始往上傳。"""
+    a, b = st.columns(2)
+    with a:
+        追 = engine.讀取Permit追蹤()
+        燈 = 追["燈"].iloc[0] if len(追) else "⚪"
+        st.markdown(f"**🏗️ 美國資料中心 Permit**：{燈} " + ({"🔴": "卡住中", "🟡": "部分暫停／審查中", "🟢": "恢復發放"}.get(燈, "")
+                     + (f"（{追['日期'].iloc[0]:%m/%d} {追['地區'].iloc[0]}：{追['事件'].iloc[0].replace('（查到日）', '')}）" if len(追) else "還沒有紀錄")))
+        st.caption("股癌 EP712：「只要新的 Permit 沒有被卡住，政客嘴巴上要怎麼喊都隨便他」。卡住影響的是 2028～2029 年營收，"
+                   "但股價會提早反應。🔴 卡住擴大、🟡 部分暫停或審查中、🟢 恢復發放。")
+        with st.expander(f"📋 紀錄（{len(追)} 筆）與最新新聞"):
+            if len(追):
+                表格(追.assign(日期=追["日期"].dt.strftime("%Y/%m/%d")), hide_index=True, width="stretch",
+                     column_config={"來源": st.column_config.LinkColumn("來源", display_text="開啟")})
+            新 = Permit新聞資料()
+            if len(新):
+                st.markdown("**近兩週新聞**（Google 新聞英文搜尋 data center permit／moratorium／ERCOT）")
+                for _, r in 新.head(10).iterrows():
+                    st.markdown(f"- {r['日期']:%m/%d} {r['訊號']} [{r['標題']}]({r['連結']})　{r['來源']}")
+            st.caption("紀錄要手動加：在 GitHub 的 data/permit_watch.csv 加一列（日期, 地區, 事件, 燈, 來源），最新一列的燈就是目前燈號。")
+    with b:
+        表, 燈 = 長鞭資料(_版本)
+        if 燈:
+            st.markdown(f"**🪢 砍單長鞭燈**：{燈['燈']} {燈['說明']}（{燈['月份']:%Y/%m} 營收，小料件 {燈['小料件%']}%、上游 {燈['上游%']}% 公司年衰退）")
+            圖 = go.Figure()
+            色們 = {"被動元件": "#FF8A3D", "電子零組件": "#FFC24B", "電腦及週邊（組裝）": "#B388FF", "半導體": 青, "晶圓代工": "#4DD0E1"}
+            for c in 表.columns:
+                圖.add_trace(go.Scatter(x=表.index, y=表[c], mode="lines", name=c,
+                                        line=dict(color=色們.get(c, "#EDEDED"), width=2, dash="dot" if c in ("半導體", "晶圓代工") else None)))
+            圖.add_hline(y=50, line=dict(color=灰, width=1, dash="dot"))
+            圖.update_layout(legend=dict(orientation="h", y=-0.15, x=0), yaxis_title="年衰退公司%")
+            st.plotly_chart(圖表外觀(圖, 320), width="stretch", config={"displayModeBar": False})
+            st.caption("股癌 EP712：砍單通常先從違約代價低的小料件（機構件、沖壓件、被動元件）開始，再像甩長鞭一樣往上傳到台積電。"
+                       "線＝各族群「近 3 個月營收合計年減」的公司比例。2022～2023 那次：被動元件 2023/02 衰退比例到 100%，"
+                       "晶圓代工晚約 2 個月才到 100%。營收資料從 2021-10 開始，只看得到一次循環。")
+
+
+首頁區塊 = ["30秒", "市場", "狀態", "價位", "AI解讀", "焦點", "國際", "總經", "連動", "加權指數", "權值", "資金", "跌深", "止跌", "護盤", "選擇權", "情緒", "族群", "行事曆", "事件", "排行"]
 
 
 新手區塊 = ["30秒", "市場", "狀態", "AI解讀", "焦點", "排行"]
@@ -2117,7 +2306,7 @@ def _國際():
     except Exception:
         st.caption("國際行情暫時無法顯示。")
 區塊函式 = {"30秒": 三十秒卡, "市場": 市場卡片, "狀態": 狀態區, "價位": 關鍵價位區, "AI解讀": AI解讀區, "焦點": 焦點區, "國際": _國際, "總經": 總經區, "連動": 連動區,
-         "加權指數": 加權圖 if 加權 is not None and len(加權) > 1 else None, "權值": 權值區, "資金": 資金面區, "跌深": 跌深區, "止跌": 止跌訊號區, "選擇權": 選擇權區, "事件": 事件區,
+         "加權指數": 加權圖 if 加權 is not None and len(加權) > 1 else None, "權值": 權值區, "資金": 資金面區, "跌深": 跌深區, "止跌": 止跌訊號區, "護盤": 護盤區, "選擇權": 選擇權區, "事件": 事件區,
          "情緒": 情緒區, "族群": 族群熱力圖, "行事曆": 行事曆區, "排行": 排行區}
 要畫 = [x for x in 顯示 if 區塊函式.get(x)]
 if len(要畫) > 3:  # 首頁很長，上方放一排快速跳轉

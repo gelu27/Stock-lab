@@ -754,6 +754,8 @@ def 選股(當日, 條件):
         結果 = 結果[結果["融資洗完"].astype(bool)]
     if c.get("融資維持率上限") is not None and "融資維持率" in 結果.columns:
         結果 = 結果[結果["融資維持率"] <= c["融資維持率上限"]]
+    if c.get("融資佔股本排名上限") is not None and "融資佔股本排名%" in 結果.columns:
+        結果 = 結果[結果["融資佔股本排名%"].fillna(0) <= c["融資佔股本排名上限"]]
     if c.get("融資5日增減上限") is not None and "融資5日增減" in 結果.columns:
         結果 = 結果[結果["融資5日增減"] <= c["融資5日增減上限"]]
     # ----- 烏賊課程用到的條件 -----
@@ -8006,3 +8008,398 @@ def 漲跌停查核(影片們, 日表, 天數=30, 今天=None):
                        "交易日": d, "實際漲跌%": round(實值 * 100, 2) if pd.notna(實值) else np.nan,
                        "結果": "✅ 相符" if 對 else "❌ 不符", "可能是": 可能})
     return pd.DataFrame(列們)
+
+
+# ========== 股癌 EP712（2026-11-08）：國安基金、季線保衛戰、VIX 跳升、融資佔股本、Permit、砍單長鞭、說法查核 ==========
+def 讀取國安基金():
+    """data/stabilization_fund.csv：歷次國安基金進場（次, 決議日, 退場日, 事件, 投入億, 獲利億, 備註）。
+    決議日只寫到月份（例如 2000-03）的是網站資料以前的護盤，只列事件不算報酬。新的一次直接在 GitHub 加一列。"""
+    f = 資料夾 / "stabilization_fund.csv"
+    if not f.exists():
+        return pd.DataFrame(columns=["次", "決議日", "退場日", "事件", "投入億", "獲利億", "備註"])
+    return pd.read_csv(f, dtype=str).fillna("")
+
+
+def 國安基金統計(K, 紀錄=None, 天數=(1, 5, 20, 60, 120)):
+    """每次國安基金決議日（盤後決議，從當天收盤算）之後加權的表現，以及這次護盤到今天跟前幾次「同一天數」的比較。
+    回傳 (表, 本次)。表每列：次、決議日、事件、收盤、距一年高點%、季線乖離%、N日%、之後最低再跌%、最低日。"""
+    紀錄 = 讀取國安基金() if 紀錄 is None else 紀錄
+    if K is None or not len(K) or 紀錄.empty:
+        return pd.DataFrame(), None
+    k = K.set_index("date").sort_index()
+    c, 低 = k["close"], k["low"] if "low" in k else k["close"]
+    ma = c.rolling(60).mean()
+    高 = c.rolling(250, min_periods=120).max()
+    列們 = []
+    for _, r in 紀錄.iterrows():
+        日 = pd.to_datetime(r["決議日"], format="%Y-%m-%d", errors="coerce")
+        列 = {"次": r["次"], "決議日": r["決議日"], "事件": r["事件"], "退場日": r.get("退場日", ""),
+              "投入億": r.get("投入億", ""), "獲利億": r.get("獲利億", "")}
+        if pd.notna(日) and 日 >= c.index[0]:
+            前 = c.index[c.index <= 日]
+            if len(前):
+                i = c.index.get_loc(前[-1])
+                p = float(c.iloc[i])
+                列.update({"收盤": p, "距一年高點%": round((p / 高.iloc[i] - 1) * 100, 1) if pd.notna(高.iloc[i]) else np.nan,
+                          "季線乖離%": round((p / ma.iloc[i] - 1) * 100, 1) if pd.notna(ma.iloc[i]) else np.nan,
+                          "已過交易日": len(c) - 1 - i})
+                for n in 天數:
+                    列[f"{n}日%"] = round((c.iloc[i + n] / p - 1) * 100, 1) if i + n < len(c) else np.nan
+                後 = 低.iloc[i + 1:i + 121]
+                if len(後):
+                    列["之後最低再跌%"] = round((後.min() / p - 1) * 100, 1)
+                    列["最低日"] = 後.idxmin()
+        列們.append(列)
+    表 = pd.DataFrame(列們)
+    本次 = None
+    有 = 表[表.get("收盤", pd.Series(dtype=float)).notna()] if "收盤" in 表 else pd.DataFrame()
+    if len(有):
+        最後 = 有.iloc[-1]
+        if not str(最後.get("退場日") or "").strip():
+            n = int(最後["已過交易日"])
+            i0 = c.index.get_loc(c.index[c.index <= pd.Timestamp(最後["決議日"])][-1])
+            前幾次 = []
+            for _, r in 有.iloc[:-1].iterrows():
+                j = c.index.get_loc(c.index[c.index <= pd.Timestamp(r["決議日"])][-1])
+                if j + n < len(c):
+                    前幾次.append({"次": r["次"], "決議日": r["決議日"], "同天數%": round((c.iloc[j + n] / c.iloc[j] - 1) * 100, 1)})
+            本次 = {"次": 最後["次"], "決議日": 最後["決議日"], "已過交易日": n,
+                    "目前%": round((c.iloc[-1] / c.iloc[i0] - 1) * 100, 1), "最新日": c.index[-1], "前幾次": 前幾次}
+    return 表, 本次
+
+
+def 季線站上事件(收盤, 跌深=-10.0, 觀察=10):
+    """指數離一年高點跌超過 跌深% 之後，第一次收盤站上 60 日線；之後 觀察 個交易日內只要收盤跌回季線就算「又跌破」。
+    報酬從第 觀察 天收盤（已經知道站穩或跌破時）算起，避免偷看。回傳每次事件的表。"""
+    c = 收盤.dropna().astype(float)
+    ma = c.rolling(60).mean()
+    高 = c.rolling(250, min_periods=120).max()
+    列們, i, n, 待 = [], 61, len(c), False
+    while i < n - 1:
+        if c.iloc[i] / 高.iloc[i] - 1 <= 跌深 / 100 and c.iloc[i] < ma.iloc[i]:
+            待 = True
+        if 待 and c.iloc[i] > ma.iloc[i] and c.iloc[i - 1] <= ma.iloc[i - 1]:
+            j = i + 觀察
+            if j >= n:
+                break
+            破 = bool((c.iloc[i + 1:j + 1] < ma.iloc[i + 1:j + 1]).any())
+            後 = c.iloc[j + 1:j + 121]
+            f = lambda m: (c.iloc[j + m] / c.iloc[j] - 1) * 100 if j + m < n else np.nan
+            列們.append({"站上日": c.index[i], "又跌破": 破, "60日%": f(60), "120日%": f(120), "250日%": f(250),
+                       "再跌10%": (後.min() / c.iloc[j] - 1 <= -0.10) if len(後) >= 60 else np.nan})
+            待, i = False, j
+            continue
+        i += 1
+    return pd.DataFrame(列們, columns=["站上日", "又跌破", "60日%", "120日%", "250日%", "再跌10%"])
+
+
+def 季線站上統計(事件):
+    """季線站上事件 → 依「站穩／又跌破」分組的次數、平均報酬、上漲機率、之後 120 日內再跌 10% 的機率。"""
+    if 事件 is None or 事件.empty:
+        return pd.DataFrame()
+    列們 = []
+    for 破, g in 事件.groupby("又跌破"):
+        x = g["再跌10%"].dropna().astype(float)
+        六十 = g["60日%"].dropna()
+        列們.append({"分組": "又跌破" if 破 else "站穩", "次數": len(g),
+                   "60日平均%": round(六十.mean(), 1) if len(六十) else np.nan,
+                   "60日上漲機率%": round((六十 > 0).mean() * 100) if len(六十) else np.nan,
+                   "120日平均%": round(g["120日%"].mean(), 1), "250日平均%": round(g["250日%"].mean(), 1),
+                   "再跌10%機率": round(x.mean() * 100) if len(x) else np.nan})
+    return pd.DataFrame(列們).sort_values("分組", ascending=False).reset_index(drop=True)
+
+
+def 季線狀態(K, 跌深=-10.0, 觀察=10):
+    """加權現在在「季線保衛戰」的哪一段：
+    正常（離高點不到 跌深%）→ 等站上季線（跌深且在季線下）→ 站上第 N 天（觀察期）→ 站穩／又跌破。
+    回傳 dict：狀態、燈、說明、季線、收盤、乖離%、站上日、第幾天。"""
+    if K is None or len(K) < 80:
+        return None
+    k = K.set_index("date").sort_index()
+    c = k["close"].astype(float)
+    ma = c.rolling(60).mean()
+    高 = c.rolling(250, min_periods=120).max()
+    n = len(c)
+    深 = ((c / 高 - 1 <= 跌深 / 100) & (c < ma)).to_numpy()
+    基本 = {"季線": float(ma.iloc[-1]), "收盤": float(c.iloc[-1]), "乖離%": round((c.iloc[-1] / ma.iloc[-1] - 1) * 100, 1),
+            "距一年高點%": round((c.iloc[-1] / 高.iloc[-1] - 1) * 100, 1), "日期": c.index[-1]}
+    等 = {**基本, "狀態": "等站上季線", "燈": "🔴",
+          "說明": f"加權在季線（{ma.iloc[-1]:,.0f}）之下 {abs(基本['乖離%']):.1f}%，還沒彈回季線；別在還沒彈的時候急著加碼。"}
+    # 最近一次「跌深之後第一次站上季線」：跟 季線站上事件 同一套規則（跌深＋在季線下才「上膛」，站上一次就用掉）
+    上們, 待 = [], False
+    for j in range(61, n):
+        if 深[j]:
+            待 = True
+        elif 待 and c.iloc[j] > ma.iloc[j] and c.iloc[j - 1] <= ma.iloc[j - 1]:
+            上們.append(j)
+            待 = False
+    上們 = [j for j in 上們 if j >= n - 250]
+    if not 上們:
+        return 等 if 深[-1] else {**基本, "狀態": "正常", "燈": "⚪",
+                                  "說明": f"過去一年沒有跌離高點 {abs(跌深):.0f}% 以上又跌破季線，不在保衛戰。"}
+    j = 上們[-1]
+    第 = n - 1 - j
+    基本.update({"站上日": c.index[j], "第幾天": 第})
+    破們 = [k for k in range(j + 1, min(j + 1 + 觀察, n)) if c.iloc[k] < ma.iloc[k]]
+    if 破們:
+        k = 破們[0]
+        if c.iloc[-1] > ma.iloc[-1]:
+            return {**基本, "狀態": "重新站上季線", "燈": "🟡",
+                    "說明": f"{c.index[j]:%m/%d} 站上後 {c.index[k]:%m/%d} 跌回，現在又回到季線上，再觀察能不能守住。"}
+        if n - 1 - k > 20:
+            if 深[-1]:
+                return {**等, "說明": 等["說明"] + f"（上一次 {c.index[j]:%m/%d} 站上、{c.index[k]:%m/%d} 又跌破）"}
+            return {**基本, "狀態": "正常", "燈": "⚪", "說明": f"在季線下，但離一年高點不到 {abs(跌深):.0f}%，不在保衛戰。"}
+        return {**基本, "狀態": "又跌破", "燈": "🟠",
+                "說明": f"{c.index[j]:%m/%d} 站上季線，{c.index[k]:%m/%d} 又跌回去：風險偏高、先別加碼，"
+                        "但美股 30 年回測顯示這不等於大頭部。"}
+    if 第 < 觀察:
+        return {**基本, "狀態": f"站上第 {第} 天", "燈": "🟡",
+                "說明": f"{c.index[j]:%m/%d} 站上季線，觀察到第 {觀察} 天都沒跌回去才算站穩（還差 {觀察 - 第} 天）。"}
+    if 深[-1]:   # 站穩之後又跌深到季線下：新的一輪
+        return 等
+    if c.iloc[-1] < ma.iloc[-1]:
+        return {**基本, "狀態": "正常", "燈": "⚪", "說明": f"{c.index[j]:%m/%d} 那次站穩後，現在回到季線下但離高點不到 {abs(跌深):.0f}%。"}
+    return {**基本, "狀態": "站穩", "燈": "🟢",
+            "說明": f"{c.index[j]:%m/%d} 站上季線後 {觀察} 天都守住，主委說的「站穩再加碼」條件成立。"}
+
+
+def 季線乖離位置(K, 門檻=-10.0, 天數=(5, 20, 60)):
+    """目前季線乖離在資料期間排第幾（越低越超跌），以及過去乖離 ≤ 門檻% 每一段（間隔 40 天以上算新的一段）
+    第一次碰到門檻那天之後 N 日的加權表現。回傳 dict：乖離%、百分位、段落表。"""
+    if K is None or len(K) < 80:
+        return None
+    c = K.set_index("date").sort_index()["close"].astype(float)
+    乖 = (c / c.rolling(60).mean() - 1) * 100
+    x = 乖.dropna()
+    現 = float(x.iloc[-1])
+    列們, 上次 = [], None
+    for d in x[x <= 門檻].index:
+        if 上次 is not None and (d - 上次).days <= 40:
+            上次 = d
+            continue
+        上次 = d
+        i = c.index.get_loc(d)
+        段 = x.loc[d:d + pd.Timedelta(days=40)]
+        列 = {"開始日": d, "當天乖離%": round(float(x[d]), 1), "最低乖離%": round(float(段.min()), 1)}
+        for n in 天數:
+            列[f"{n}日%"] = round((c.iloc[i + n] / c.iloc[i] - 1) * 100, 1) if i + n < len(c) else np.nan
+        列們.append(列)
+    return {"乖離%": round(現, 1), "百分位": round(float((x < 現).mean() * 100), 1), "起": x.index[0],
+            "段落": pd.DataFrame(列們)}
+
+
+def 讀取VIX長線():
+    """data/vix_long.csv（date, close）：VIX 從 1990 年起的每日收盤。沒有這個檔時退回 us_daily.csv 的近兩年。"""
+    f = 資料夾 / "vix_long.csv"
+    if f.exists():
+        t = pd.read_csv(f, parse_dates=["date"])
+        s = t.set_index("date")["close"].sort_index()
+    else:
+        s = pd.Series(dtype=float)
+    美 = 讀取美股()
+    if 美 is not None and "VIX" in 美:
+        近 = 美["VIX"].dropna()
+        s = pd.concat([s, 近[近.index > (s.index.max() if len(s) else pd.Timestamp("1900-01-01"))]]).sort_index()
+    return s if len(s) else None
+
+
+VIX條件 = [  # 名稱, 函式(vix) → 布林序列
+    ("VIX 單日跳升 ≥ 50%", lambda v: v / v.shift(1) - 1 >= 0.5),
+    ("VIX 單日跳升 ≥ 30%", lambda v: v / v.shift(1) - 1 >= 0.3),
+    ("VIX 首次站上 30", lambda v: (v >= 30) & (v.shift(1) < 30)),
+    ("VIX 首次站上 40", lambda v: (v >= 40) & (v.shift(1) < 40)),
+]
+
+
+def VIX跳升統計(vix, 指數, 天數=(5, 20, 60, 250), 間隔=20, 隔天=False):
+    """VIX 條件出現之後 指數（S&P 500 或加權）N 日的平均報酬與上漲機率；同一個條件 間隔 個交易日內只算第一次。
+    S&P 500 用當天收盤進場；加權傳 隔天=True，用「美國那天之後的第一個台股交易日」收盤進場（美股收盤時台股已收盤）。
+    回傳 (表, 事件日 dict)。"""
+    if vix is None or 指數 is None or not len(vix) or not len(指數):
+        return pd.DataFrame(), {}
+    v = vix.dropna().astype(float)
+    p = 指數.dropna().astype(float).sort_index()
+    v = v[v.index >= p.index[0] - pd.Timedelta(days=5)]
+    fw = {n: p.shift(-n) / p - 1 for n in 天數}
+    列們 = [{"條件": "任意一天（基準）", "次數": len(p),
+            **{k: v2 for n in 天數 for k, v2 in ((f"{n}日平均%", round(fw[n].mean() * 100, 1)),
+                                                  (f"{n}日上漲%", round((fw[n].dropna() > 0).mean() * 100)))}}]
+    事件們 = {}
+    for 名, 規則 in VIX條件:
+        日們 = v.index[規則(v).fillna(False).to_numpy()]
+        進場 = []
+        for d in 日們:
+            後 = p.index[p.index > d] if 隔天 else p.index[p.index >= d]
+            if len(後) == 0:
+                continue
+            e = 後[0]
+            if 進場 and p.index.get_loc(e) - p.index.get_loc(進場[-1]) <= 間隔:
+                continue
+            進場.append(e)
+        事件們[名] = 日們
+        idx = pd.DatetimeIndex(進場)
+        列 = {"條件": 名, "次數": len(idx)}
+        for n in 天數:
+            x = fw[n].reindex(idx).dropna()
+            列[f"{n}日平均%"] = round(x.mean() * 100, 1) if len(x) else np.nan
+            列[f"{n}日上漲%"] = round((x > 0).mean() * 100) if len(x) else np.nan
+        列們.append(列)
+    return pd.DataFrame(列們), 事件們
+
+
+def VIX今日觸發(vix, 最近天數=3):
+    """最近 最近天數 個美股交易日有沒有符合任何 VIX 條件；回傳 [(日期, 條件, VIX, 單日變化%)]。"""
+    if vix is None or len(vix) < 3:
+        return []
+    v = vix.dropna().astype(float)
+    結果 = []
+    for 名, 規則 in VIX條件:
+        m = 規則(v).fillna(False)
+        for d in m.index[-最近天數:][m.iloc[-最近天數:].to_numpy()]:
+            結果.append((d, 名, float(v[d]), round((v[d] / v.shift(1)[d] - 1) * 100, 1)))
+    return 結果
+
+
+def 加融資佔股本(今日):
+    """今日表加「融資佔股本%」（融資餘額張數 × 1000 ÷ 發行股數）與「融資佔股本排名%」（全市場第幾 %，100＝最高）。"""
+    t = 今日
+    if "融資餘額" not in t.columns or "發行股數" not in t.columns:
+        return t
+    t = t.copy()
+    股 = pd.to_numeric(t["發行股數"], errors="coerce")
+    t["融資佔股本%"] = (pd.to_numeric(t["融資餘額"], errors="coerce") * 1000 / 股.where(股 > 0) * 100).round(2)
+    t["融資佔股本排名%"] = (t["融資佔股本%"].rank(pct=True) * 100).round(0)
+    return t
+
+
+def 個股beta(指標, K, 天數=120):
+    """近 天數 個交易日每檔股票對加權的 beta。指標要有 date、代號、日報酬。回傳 Series（代號 → beta）。"""
+    if K is None or 指標 is None or "日報酬" not in 指標.columns:
+        return pd.Series(dtype=float)
+    日們 = np.sort(指標["date"].unique())[-天數:]
+    r = 指標[指標["date"].isin(日們)].pivot_table(index="date", columns="代號", values="日報酬")
+    m = K.set_index("date")["close"].astype(float).pct_change().reindex(r.index)
+    ok = m.notna()
+    r, m = r[ok], m[ok]
+    if len(m) < 40:
+        return pd.Series(dtype=float)
+    rm = r.sub(r.mean())
+    mm = m - m.mean()
+    cov = rm.mul(mm, axis=0).sum() / (r.notna().mul(1).sum() - 1)
+    beta = cov / mm.var()
+    return beta.where(r.notna().sum() >= 40).round(2)
+
+
+def 籌碼不安定榜(今日, 指標=None, K=None, 檔數=50, 最少成交值億=0.5, 最少融資張=500):
+    """融資佔股本最高的股票（股癌 EP712：融資高的標的籌碼不安定，殺盤時是重災區）。附 beta 與近 5 日漲跌，
+    因為 2026-11 回測：融資高的股票 9 次急跌都跌更深，但同 beta 比只多跌 1～4 個百分點，主要是高波動股的另一面。"""
+    t = 加融資佔股本(今日) if "融資佔股本%" not in 今日.columns else 今日
+    if "融資佔股本%" not in t.columns:
+        return pd.DataFrame()
+    t = t[t["代號"].astype(str).str.fullmatch(r"\d{4}") & (t["融資餘額"] >= 最少融資張)]
+    if "成交值億" in t.columns:
+        t = t[t["成交值億"] >= 最少成交值億]
+    t = t.sort_values("融資佔股本%", ascending=False).head(檔數).copy()
+    if 指標 is not None and K is not None and len(t):
+        b = 個股beta(指標[指標["代號"].isin(t["代號"])], K)
+        t["beta"] = t["代號"].map(b)
+    return t.reset_index(drop=True)
+
+
+def 讀取Permit追蹤():
+    """data/permit_watch.csv（日期, 地區, 事件, 燈, 來源）：美國資料中心許可（建照、環保、電網併接）被卡住的紀錄。
+    燈：🔴 卡住擴大、🟡 部分暫停或審查中、🟢 恢復發放。最新一列的燈就是目前燈號，可以在 GitHub 直接加列。"""
+    f = 資料夾 / "permit_watch.csv"
+    if not f.exists():
+        return pd.DataFrame(columns=["日期", "地區", "事件", "燈", "來源"])
+    t = pd.read_csv(f, dtype=str).fillna("")
+    t["日期"] = pd.to_datetime(t["日期"], errors="coerce")
+    return t.iloc[::-1].sort_values("日期", ascending=False, kind="stable").reset_index(drop=True)  # 同一天：檔案後面的排前面
+
+
+Permit關鍵字 = '"data center" (permit OR moratorium OR pause OR "interconnection" OR ERCOT)'
+
+
+def Permit新聞(天數=14, 筆數=20):
+    """Google 新聞（英文）搜尋資料中心許可、暫停、併網審查的新聞。"""
+    import requests
+    import xml.etree.ElementTree as ET
+
+    回應 = requests.get("https://news.google.com/rss/search", timeout=20, headers={"User-Agent": "Mozilla/5.0"},
+                        params={"q": f"{Permit關鍵字} when:{天數}d", "hl": "en-US", "gl": "US", "ceid": "US:en"})
+    回應.raise_for_status()
+    列們 = []
+    for 項 in ET.fromstring(回應.content).iter("item"):
+        標題, 來源 = 項.findtext("title") or "", 項.findtext("source") or ""
+        if 來源 and 標題.endswith(" - " + 來源):
+            標題 = 標題[: -len(來源) - 3]
+        列們.append({"日期": pd.to_datetime(項.findtext("pubDate"), errors="coerce", utc=True), "標題": 標題,
+                   "來源": 來源, "連結": 項.findtext("link") or ""})
+    表 = pd.DataFrame(列們, columns=["日期", "標題", "來源", "連結"])
+    if 表.empty:
+        return 表
+    表["日期"] = 表["日期"].dt.tz_convert("Asia/Taipei").dt.tz_localize(None)
+    緊 = 表["標題"].str.contains(r"(?i)moratorium|pause|halt|block|ban|reject|deny|freeze", regex=True)
+    表["訊號"] = np.where(緊, "⚠️ 限制", "")
+    return 表.drop_duplicates("標題").sort_values("日期", ascending=False).head(筆數).reset_index(drop=True)
+
+
+長鞭族群 = [  # 名稱, 位置, 來源（概念 or 產業）, 值
+    ("被動元件", "小料件", "概念", "被動元件"),
+    ("電子零組件", "小料件", "產業", "電子零組件"),
+    ("電腦及週邊（組裝）", "中游", "產業", "電腦及週邊設備"),
+    ("半導體", "上游", "產業", "半導體"),
+    ("晶圓代工", "上游", "概念", "晶圓代工"),
+]
+
+
+def 砍單長鞭(營收=None, 月數=3):
+    """股癌 EP712：砍單通常先從違約代價低的小料件開始，再像甩長鞭往上傳。
+    各族群「近 月數 個月營收合計年增 < 0」的公司比例（%），月 × 族群。回傳 (表, 燈 dict)。
+    2022～2023 那次：被動元件 2023-02 衰退比例到 100%，晶圓代工晚約 2 個月（2023-04）才到 100%。"""
+    if 營收 is None:
+        f = 資料夾 / "fundamental" / "revenue_history.csv"
+        if not f.exists():
+            return pd.DataFrame(), None
+        營收 = pd.read_csv(f, dtype={"code": str})
+    p = 營收.pivot_table(index="month", columns="code", values="revenue").sort_index()
+    s = p.rolling(月數).sum()
+    yoy = s / s.shift(12) - 1
+    概 = 讀取概念()
+    產 = _股本表()["產業"]
+    欄們 = {}
+    for 名, _, 來源, 值 in 長鞭族群:
+        碼 = 概.loc[概["concept"] == 值, "code"].tolist() if 來源 == "概念" else 產[產 == 值].index.tolist()
+        碼 = [c for c in 碼 if c in yoy.columns]
+        if not 碼:
+            continue
+        y = yoy[碼]
+        欄們[名] = ((y < 0).sum(axis=1) / y.notna().sum(axis=1).replace(0, np.nan) * 100).round(0)
+    表 = pd.DataFrame(欄們).dropna(how="all")
+    if 表.empty:
+        return 表, None
+    表.index = pd.to_datetime(表.index)
+    最新 = 表.iloc[-1]
+    三月前 = 表.iloc[-4] if len(表) >= 4 else 表.iloc[0]
+    小 = [n for n, 位, *_ in 長鞭族群 if 位 == "小料件" and n in 表]
+    上 = [n for n, 位, *_ in 長鞭族群 if 位 == "上游" and n in 表]
+    小現 = float(最新[小].mean()) if 小 else np.nan
+    小升 = float((最新[小] - 三月前[小]).mean()) if 小 else np.nan
+    上現 = float(最新[上].mean()) if 上 else np.nan
+    if 小現 >= 50 and 上現 >= 50:
+        燈, 話 = "🔴", "小料件和上游都有一半以上公司營收年衰退，修正已經往上傳"
+    elif 小現 >= 50 or (小升 >= 15 and 小現 >= 35):
+        燈, 話 = "🟡", "小料件營收衰退比例升高，先觀察會不會往上游傳"
+    else:
+        燈, 話 = "🟢", "小料件營收大多還在成長，沒看到砍單從小東西開始"
+    return 表, {"燈": 燈, "說明": 話, "月份": 表.index[-1], "小料件%": round(小現), "小料件3月變化": round(小升),
+               "上游%": round(上現) if 上現 == 上現 else np.nan}
+
+
+def 讀取說法查核():
+    """data/claims.csv（來源, 日期, 編號, 說法, 查到的事實, 判定）：網紅、Podcast、講義說法的查核紀錄。"""
+    f = 資料夾 / "claims.csv"
+    if not f.exists():
+        return pd.DataFrame(columns=["來源", "日期", "編號", "說法", "查到的事實", "判定"])
+    return pd.read_csv(f, dtype=str).fillna("")
