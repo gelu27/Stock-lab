@@ -1133,6 +1133,10 @@ def 個股查詢(問, 完整=True):
             行們.append("🏦 " + 字)
     except Exception as e:
         print("券商共識失敗：", repr(e))
+    try:
+        行們 += line_report.公司新聞文字(line_report.公司資料(代), line_report.近期新聞(代, 名, 筆數=4))
+    except Exception as e:
+        print("公司介紹／新聞失敗：", repr(e))
     轉 = engine.讀取內部人轉讓()
     if 轉 is not None:
         近 = 轉[(轉["code"] == 代) & (轉["date"] >= 轉["date"].max() - pd.Timedelta(days=30))]

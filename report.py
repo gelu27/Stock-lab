@@ -560,6 +560,18 @@ def 產生PDF(代號, 名稱, 資料):
             for 標, 內 in re.findall(r"#+\s*([^\n]+)\n+(.*?)(?=\n#+\s|\Z)", 公司["AI介紹"], re.S):
                 小段(標.strip() + "（AI 整理）", 內.strip())
 
+    新聞們 = 資料.get("新聞") or []
+    if 新聞們:
+        if pdf.get_y() > pdf.h - 60:
+            pdf.add_page()
+        段標("News", "近期新聞整理（近 30 天，標題情緒為關鍵字粗判）")
+        for n in 新聞們:
+            字(10, True, {"利多": 紅, "利空": 綠}.get(n.get("情緒"), 青))
+            pdf.cell(22, 6, _乾淨(f"{n.get('日期', '')} {n.get('情緒', '')}"))
+            字(10, 色="#D5D5D5")
+            pdf.multi_cell(寬 - 22, 6, _乾淨(f"{n.get('標題', '')}（{n.get('來源', '')}）"), align="L", new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(3)
+
     pdf.add_page()
     圖高 = 72
     左圖右文("Revenue", "月營收：生意做得怎麼樣", 營收圖(資料.get("營收"), 高=3.3), 營收解讀(資料.get("營收")), 圖高 + 14)
