@@ -777,6 +777,222 @@ def 技術替代卡(概念們):
         st.warning("🔁 **技術替代風險**：" + "　".join(f"**{k}**｜{v}" for k, v in 風險))
 
 
+@st.cache_data(ttl=43200, show_spinner="回測這檔的做多訊號中…", max_entries=30)
+def 個股動能回測(代號, 版本鍵):
+    return momentum.個股回測(個股全史(代號, 版本鍵), 加權)
+
+
+def 交易計畫卡(代號):
+    """操盤手最在意的 4 個數字：買點、停損、目標 1／2、該買多少；附這檔 2 年與全市場 5 年的訊號回測。"""
+    段落("TRADE SETUP // 交易計畫卡（順勢做多，僅供研究）")
+    動 = 動能資料(_版本)
+    if 代號 not in 動.index:
+        st.caption("這檔沒有足夠資料計算交易計畫。")
+        return
+    列 = 動.loc[代號]
+    名們 = ["強勢突破", "VCP突破", "領頭羊", "RS強勢", "多頭排列", "法人連買"]
+    有 = [k for k in 名們 if bool(列.get(k))]
+    st.markdown(f"**RS 等級 {列['RS']:.0f}**（贏過全市場 {列['RS']:.0f}% 的股票）　·　今天符合："
+                + ("、".join(f"🔴 {k}" for k in 有) if 有 else "沒有符合任何做多訊號")
+                + (f"　·　量 {列['量倍數']:.1f} 倍於前 5 日均量" if pd.notna(列.get("量倍數")) else ""))
+    K = 個股K線(代號)
+    壓力 = None
+    try:
+        sr = engine.支撐壓力(K)
+        上 = sr["價位"][(sr["價位"]["角色"] == "壓力") & (sr["價位"]["價位"] > float(列["收盤"]) * 1.005)]
+        壓力 = float(上["價位"].min()) if len(上) else None
+    except Exception:
+        pass
+    計 = momentum.交易計畫(列, 壓力)
+    if not 計:
+        st.caption("資料不足（ATR 算不出來），無法給交易計畫。")
+        return
+    if 計.get("買點") is None:
+        st.info("⏳ " + 計["狀態"])
+    else:
+        卡片格([
+            卡片("① 關鍵買點", f"{計['買點']:,.2f}", "今天已帶量突破，收盤價" if 計["已突破"] else "站上前 20 日高點再進", 紅),
+            卡片("② 停損防守", f"{計['停損']:,.2f}", f"{計['停損依據']}，{計['停損%']:.1f}%", 綠),
+            卡片("③ 目標 1／2", f"{計['目標1']:,.2f} / {計['目標2']:,.2f}", "風報比 1:2 ／ 1:3", 青),
+            卡片("前波壓力", f"{計['前波壓力']:,.2f}" if 計.get("前波壓力") else "—",
+                 f"到壓力的風報比 1:{計['到壓力風報比']}" if 計.get("到壓力風報比") else "上方沒有明顯壓力"),
+        ])
+        if 計.get("到壓力風報比") is not None and 計["到壓力風報比"] < 2:
+            st.warning(f"⚠️ 前波壓力 {計['前波壓力']:,.2f} 離買點太近（風報比只有 1:{計['到壓力風報比']}），操盤手通常會放棄這筆。")
+        with st.expander("④ 這筆該買多少？（部位計算機）", expanded=False):
+            a, b = st.columns(2)
+            資金 = a.number_input("總資金（元）", min_value=10000, value=1_000_000, step=100000, key="計畫_資金")
+            風險 = b.number_input("這筆最多賠總資金的 %", min_value=0.1, max_value=10.0, value=1.0, step=0.5, key="計畫_風險")
+            建 = engine.部位建議(資金, 風險 / 100, 計["買點"], 計["停損"], 代號)
+            if 建:
+                卡片格([卡片("可買", f"{建['張']} 張" + (f" {建['零股']} 股" if 建["零股"] else ""), f"共 {建['股數']:,} 股", 青),
+                       卡片("投入金額", f"{建['金額']:,.0f}", f"占資金 {建['占資金%']:.1f}%"),
+                       卡片("停損會賠", f"{建['最多虧損']:,.0f}", "含手續費與稅", 綠)])
+    回 = 個股動能回測(代號, _版本)
+    全 = momentum.讀取全市場回測()
+    with st.expander("🧪 這些訊號在這檔、在全市場準不準？"):
+        if 回 is not None and len(回):
+            st.markdown("**這檔過去 2 年**（RS 用「近一年漲幅贏大盤 20 個百分點」近似）")
+            表格(回, hide_index=True, width="stretch")
+        else:
+            st.caption("這檔上市不到一年多，無法回測。")
+        if 全:
+            st.markdown("**全市場過去 5 年**")
+            表格(訊號回測表(全), hide_index=True, width="stretch", column_config={"說明": None})
+            計模 = 全.get("計畫模擬") or {}
+            if 計模.get("強勢突破"):
+                x = 計模["強勢突破"]
+                st.caption(f"照這張卡操作（停損 1.5 ATR、目標 3R、最多 20 天）在「強勢突破」{x['筆數']} 筆的結果：達標 {x['達標率%']}%、"
+                           f"停損 {x['停損率%']}%，平均每筆 {x['平均R']:+.2f}R。勝率不到一半是常態，靠停損控制虧損。")
+    st.caption("買點、停損、目標都是規則算出來的參考價，不是買賣建議；突破失敗很常見，進場前先想好停損。")
+
+
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=50)
+def 催化劑資料(代號, 名稱, 版本鍵):
+    t = engine.經濟日程(天數=90, 大型股=(代號,))
+    if t is None or not len(t):
+        return t
+    自己 = t["事件"].astype(str).str.contains(代號) | t["事件"].astype(str).str.contains(str(名稱))
+    return t[自己 | t["類別"].isin(["月營收", "財報"]) | (t["重要性"] == "高")].reset_index(drop=True)
+
+
+def 催化劑區(代號, 名稱):
+    """未來 90 天可能推動或打亂股價的事件：自己的法說會／除權息、月營收與財報期限、重要總經、美股龍頭財報、台指期結算。"""
+    t = 催化劑資料(代號, 名稱, _版本)
+    if t is None or not len(t):
+        return
+    段落("CATALYST // 未來 90 天催化劑時間軸")
+    t = t.assign(日期=pd.to_datetime(t["日期"]))
+    今 = pd.Timestamp.now().normalize()
+    t["倒數"] = (t["日期"] - 今).dt.days
+    自 = t["事件"].astype(str).str.contains(代號) | t["事件"].astype(str).str.contains(str(名稱))
+    t["分類"] = np.where(自, f"{代號} 自己", t["類別"])
+    色 = {f"{代號} 自己": 紅, "月營收": 青, "財報": 青, "美股財報": "#FFB020", "期貨結算": "#B388FF"}
+    圖 = go.Figure()
+    for 類, 子 in t.groupby("分類", sort=False):
+        圖.add_trace(go.Scatter(x=子["日期"], y=[類] * len(子), mode="markers+text", name=類,
+                                marker=dict(size=np.where(子["重要性"] == "高", 16, 10), color=色.get(類, "#BDBDBD"),
+                                            symbol="diamond"),
+                                text=子["事件"].astype(str).str.slice(0, 10), textposition="top center",
+                                textfont=dict(size=10), hovertext=子["事件"].astype(str) + "｜" + 子["說明"].astype(str).str.slice(0, 60),
+                                hoverinfo="text+x"))
+    圖.add_vline(x=今, line=dict(color=灰, dash="dot", width=1))
+    圖.update_layout(showlegend=False)
+    圖.update_yaxes(type="category")
+    st.plotly_chart(圖表外觀(圖, 120 + 40 * t["分類"].nunique()), width="stretch", config={"displayModeBar": False})
+    近 = t[t["倒數"] <= 14]
+    if len(近):
+        st.markdown("**兩週內要注意：** " + "；".join(f"{x['日期']:%m/%d}（{x['倒數']} 天後）{x['事件']}" for _, x in 近.head(6).iterrows()))
+    with st.expander(f"全部 {len(t)} 個事件"):
+        表格(t.assign(日期=t["日期"].dt.strftime("%Y/%m/%d"))[["日期", "倒數", "分類", "事件", "重要性", "說明"]],
+             hide_index=True, width="stretch", column_config={"說明": st.column_config.TextColumn(width="large")})
+    st.caption("紅色是這家公司自己的事件（法說會、除權息）；菱形越大越重要。財報、法說前後股價波動通常較大，"
+               "持股的人可以先想好財報不如預期時要怎麼做。美股龍頭財報常牽動台股供應鏈。")
+
+
+def 投研報告(代號, r):
+    """一鍵五段式投研報告（數據版）：只用網站已抓到的數字填空，不讓 AI 編數字。回傳 Markdown 文字。"""
+    f = lambda v, 式="{:,.2f}", 尾="": "—" if v is None or (isinstance(v, float) and np.isnan(v)) else 式.format(v) + 尾
+    收 = float(r["收盤"])
+    名 = r["名稱"]
+    # ---- 數據蒐集 ----
+    分表 = 評分資料(_版本)[0]
+    分 = 分表.loc[代號] if 代號 in 分表.index else None
+    判 = engine.規則判讀(r)
+    河 = engine.本益比河流(個股全史(代號, _版本))
+    合理 = 百分位 = None
+    if 河:
+        h, 倍數們, 百分位 = 河
+        中倍 = 倍數們[len(倍數們) // 2]
+        合理 = float(h["EPS"].iloc[-1]) * 中倍
+    roe, roe舊, _, _ = ROE資料(代號, r)
+    動 = 動能資料(_版本)
+    列 = 動.loc[代號] if 代號 in 動.index else None
+    計 = momentum.交易計畫(列) if 列 is not None else None
+    支撐 = 壓力 = None
+    try:
+        sr = engine.支撐壓力(個股K線(代號))
+        價 = sr["價位"]
+        下 = 價[(價["角色"] == "支撐") & (價["價位"] < 收)]["價位"]
+        上 = 價[(價["角色"] == "壓力") & (價["價位"] > 收)]["價位"]
+        支撐 = float(下.max()) if len(下) else None
+        壓力 = float(上.min()) if len(上) else None
+    except Exception:
+        pass
+    報告們 = [x for x in 券商報告清單(st.session_state.get("_券商版本", 0)) if str(x.get("代號")) == str(代號)]
+    共 = engine.券商共識(報告們, 收) if 報告們 else None
+    事 = 催化劑資料(代號, 名, _版本)
+    # ---- 1. 核心論點 ----
+    多頭 = 列 is not None and bool(列.get("多頭排列"))
+    強 = 列 is not None and (列.get("RS") or 0) >= 70
+    總 = float(分["總分"]) if 分 is not None and pd.notna(分["總分"]) else 50
+    貴 = 百分位 is not None and 百分位 > 80
+    if 總 >= 60 and 多頭 and not 貴:
+        立場 = "偏多"
+    elif 總 <= 40 or (列 is not None and not 多頭 and (列.get("RS") or 50) < 30):
+        立場 = "保守"
+    else:
+        立場 = "觀望"
+    目標們 = []
+    if 共 and 共.get("目標價數"):
+        目標們.append(f"券商共識中位數 {f(共['中位數'], '{:,.0f}')}（{共['家數']} 家）")
+    if 合理:
+        目標們.append(f"本益比河流中位倍數合理價 {f(合理, '{:,.0f}')}")
+    if 計 and 計.get("目標2"):
+        目標們.append(f"技術面目標 2（1:3 風報比）{f(計['目標2'])}")
+    理由 = []
+    if 分 is not None:
+        理由.append(f"網站規則評分 {總:.0f} 分（{分['看法']}）")
+    if 列 is not None:
+        理由.append(f"RS {列['RS']:.0f}" + ("、均線多頭排列" if 多頭 else "、均線尚未多頭排列"))
+    if 百分位 is not None:
+        理由.append(f"本益比位於歷史 {百分位:.0f}% 位置")
+    段 = [f"# {代號} {名} 投研報告（數據版）", f"資料日期 {最新日:%Y/%m/%d}　收盤 {f(收)}　｜　由網站數據自動填寫，僅供研究，不構成投資建議。", "",
+          "## 一、核心投資論點",
+          f"**{立場}**：" + "、".join(理由) + "。" + (f" 參考價：{'；'.join(目標們)}。" if 目標們 else ""), ""]
+    # ---- 2. 基本面 ----
+    段 += ["## 二、基本面與成長動能",
+           f"- 月營收（{r.get('營收月份') or '—'}）年增 {f(r.get('營收年增率'), '{:+.1f}', '%')}、月增 {f(r.get('營收月增率'), '{:+.1f}', '%')}、"
+           f"累計年增 {f(r.get('累計營收年增率'), '{:+.1f}', '%')}" + ("，創歷史新高" if r.get("營收創新高") == True else ""),
+           f"- 單季毛利率（{r.get('毛利率季度') or '—'}）{f(r.get('毛利率'), '{:.1f}', '%')}，較上季 {f(r.get('毛利率季增'), '{:+.1f}', ' 個百分點')}、"
+           f"較去年同季 {f(r.get('毛利率年增'), '{:+.1f}', ' 個百分點')}",
+           f"- ROE（近四季）{f(roe, '{:.1f}', '%')}，去年同期 {f(roe舊, '{:.1f}', '%')}；今年累計 EPS {f(r.get('EPS'))}",
+           f"- 估值：本益比 {f(r.get('本益比'), '{:.1f}', ' 倍')}" + (f"，位於過去 5 年 {百分位:.0f}% 位置（{'偏貴' if 百分位 > 75 else '偏便宜' if 百分位 < 25 else '合理區間'}）" if 百分位 is not None else "")
+           + f"；殖利率 {f(r.get('殖利率'), '{:.2f}', '%')}、股價淨值比 {f(r.get('淨值比'))}", ""]
+    # ---- 3. 技術面 ----
+    段 += ["## 三、技術面與量價結構",
+           f"- 均線：收盤{'站上' if 列 is not None and 收 > (列.get('MA20') or 9e9) else '低於'} 20 日線"
+           + (f"（20／50／200 日線 {f(列.get('MA20'))}／{f(列.get('MA50'))}／{f(列.get('MA200'))}）" if 列 is not None else ""),
+           f"- 支撐 {f(支撐)}、壓力 {f(壓力)}（網站自動計算的最近價位）",
+           f"- RS 等級 {f(列.get('RS') if 列 is not None else None, '{:.0f}')}；今日訊號："
+           + ("、".join(k for k in ("強勢突破", "VCP突破", "領頭羊", "RS強勢", "多頭排列", "法人連買") if 列 is not None and bool(列.get(k))) or "無"),
+           (f"- 交易計畫：買點 {f(計['買點'])}、停損 {f(計['停損'])}（{計['停損依據']}）、目標 {f(計['目標1'])}／{f(計['目標2'])}"
+            if 計 and 計.get("買點") else f"- 交易計畫：{計['狀態'] if 計 else '資料不足'}"), ""]
+    # ---- 4. 催化劑 ----
+    段 += ["## 四、關鍵催化劑（未來 1～3 個月）"]
+    if 事 is not None and len(事):
+        段 += [f"- {pd.Timestamp(x['日期']):%m/%d} {x['事件']}" for _, x in 事.head(8).iterrows()]
+    else:
+        段.append("- 目前沒有登錄到的事件")
+    段.append("")
+    # ---- 5. 風險 ----
+    風險 = []
+    if 計 and 計.get("停損"):
+        風險.append(f"收盤跌破 {f(計['停損'])}（交易計畫停損）")
+    if 支撐:
+        風險.append(f"跌破最近支撐 {f(支撐)}，短線結構轉弱")
+    if pd.notna(r.get("毛利率")):
+        風險.append(f"下一季毛利率低於 {f(float(r['毛利率']) - 2, '{:.1f}', '%')}（較本季掉 2 個百分點以上）")
+    if pd.notna(r.get("營收年增率")) and r["營收年增率"] > 0:
+        風險.append("月營收年增率轉為負數")
+    if 貴:
+        風險.append(f"本益比已在歷史 {百分位:.0f}% 高檔，獲利不如預期時修正空間大")
+    風險 += [f"規則判讀的利空：{x}" for x in 判["利空"][:3]]
+    段 += ["## 五、主要下行風險與情境分析", "以下任一情況發生，上述看法就要重新檢討："] + [f"- {x}" for x in 風險] + [""]
+    段.append("---\n*本報告由台股觀測站依公開資料與規則自動產生，所有數字皆來自網站資料庫；未經人工審閱，僅供個人研究。*")
+    return "\n".join(段)
+
+
 # ---------- 03 個股查詢 ----------
 if st.session_state.get("個股查詢") not in 股票選項:
     st.session_state["個股查詢"] = next((v for v in 股票選項 if v.startswith("2330 ")), 股票選項[0])
@@ -902,6 +1118,8 @@ with 分頁[0], 區塊防護("總覽"):
         a.markdown("**🔴 利多**\n" + ("".join(f"\n- {x}" for x in 判["利多"]) or "\n- 無"))
         b.markdown("**🟢 利空**\n" + ("".join(f"\n- {x}" for x in 判["利空"]) or "\n- 無"))
         st.caption("分數 = 利多權重 − 利空權重，換算成 −100 ~ +100；+30 以上偏多、−30 以下偏空。只看數據，不含新聞內容。")
+
+        催化劑區(代號, r["名稱"])
 
         段落("FLOW // 股價・週轉率・大戶・法人 變化")
         期間 = st.segmented_control("期間", ["3 個月", "半年", "1 年"], default="半年", key="變化期間",
@@ -1206,7 +1424,13 @@ with 分頁[2], 區塊防護("基本面"):
         同業 = engine.同族群(今日, 代號)
         if 同業 is not None and len(同業) > 1:
             段落(f"PEERS // 同族群比較（{r.get('產業')}，市值前 {len(同業)} 大）")
-            欄們 = [c for c in ["名稱", "市值億", "收盤", "漲跌幅", "20日漲幅", "本益比", "殖利率", "淨值比",
+            # 龍頭分數：營收年增、毛利率、市值、近 20 日漲幅在同業裡各自排名（百分位）後平均，0～100
+            同業 = 同業.copy()
+            依據 = [c for c in ("營收年增率", "毛利率", "市值億", "20日漲幅") if c in 同業.columns]
+            if 依據:
+                同業["龍頭分數"] = (同業[依據].rank(pct=True).mean(axis=1, skipna=True) * 100).round(0)
+                同業 = 同業.sort_values("龍頭分數", ascending=False)
+            欄們 = [c for c in ["名稱", "龍頭分數", "市值億", "收盤", "漲跌幅", "20日漲幅", "本益比", "殖利率", "淨值比",
                               "營收年增率", "毛利率", "EPS", "代號"] if c in 同業.columns]
             比較 = 同業[欄們].rename(columns={"收盤": "股價", "EPS": "EPS(今年)"})
             樣式 = 上色(比較).apply(lambda 列: ["background:#0E2A33" if 列["代號"] == 代號 else "" for _ in 列], axis=1)
@@ -1214,6 +1438,14 @@ with 分頁[2], 區塊防護("基本面"):
             中位 = 同業[同業["代號"] != 代號][["本益比", "營收年增率"]].median()
             st.caption(f"同業本益比中位數 {中位['本益比']:.1f} 倍、營收年增率中位數 {中位['營收年增率']:+.1f}%；"
                        "點一下股票可切換到那一檔。")
+            if "龍頭分數" in 同業 and 同業["龍頭分數"].notna().any():
+                頭 = 同業.iloc[0]
+                自 = 同業[同業["代號"] == 代號]
+                名次 = int((同業["代號"].tolist()).index(代號)) + 1 if len(自) else None
+                st.markdown(f"🏆 **產業龍頭（綜合）：{頭['代號']} {頭['名稱']}**（龍頭分數 {頭['龍頭分數']:.0f}）"
+                            + (f"；{代號} 在這 {len(同業)} 檔裡排第 {名次}" if 名次 else ""))
+                st.caption(f"龍頭分數＝{'、'.join(依據)} 在同業中的排名百分位平均（0～100）。"
+                           "成長快、賺得多（毛利率高）、規模大、股價也強，才算真正的龍頭；只是市值最大不一定是。")
 
 with 分頁[3], 區塊防護("技術"):
     if 分頁[3].open:
@@ -1229,6 +1461,8 @@ with 分頁[3], 區塊防護("技術"):
         符合 = 今日符合策略()
         st.markdown("**今天符合的烏賊策略：** " + ("、".join(
             f"{'🔴' if engine.烏賊條件[x]['方向'] == '多' else '🟢'} {x.replace('烏賊', '')}" for x in 符合) or "無"))
+
+        交易計畫卡(代號)
 
         段落("LEVELS // 支撐壓力（自動計算）")
         個股價位區(代號)
@@ -1338,6 +1572,17 @@ with 分頁[3], 區塊防護("技術"):
 
 with 分頁[4], 區塊防護("AI 分析"):
     if 分頁[4].open:
+        段落("REPORT // 一鍵五段式投研報告（數據版，免費）")
+        if st.button("📑 產生投研報告", key=f"投研_{代號}"):
+            st.session_state[f"投研報告_{代號}"] = 投研報告(代號, r)
+        if st.session_state.get(f"投研報告_{代號}"):
+            with st.container(border=True):
+                st.markdown(st.session_state[f"投研報告_{代號}"])
+            st.download_button("⬇️ 下載報告（Markdown）", st.session_state[f"投研報告_{代號}"].encode("utf-8"),
+                               file_name=f"{代號}_投研報告_{最新日:%Y%m%d}.md", key=f"投研下載_{代號}")
+        st.caption("依機構報告的五段架構（核心論點、基本面、技術面、催化劑、風險），只用網站資料庫的數字自動填寫，不用 AI、不花額度；"
+                   "要加上新聞與產業解讀，可以再用下面的 AI 分析。")
+
         段落("AI // 新聞彙整與投資觀點")
         try:
             設定 = dict(st.secrets)
