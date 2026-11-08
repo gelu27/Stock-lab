@@ -467,6 +467,9 @@ def 選股條件區():
                 條件["明年預估本益比上限"] = st.number_input("明年預估本益比 ≤", value=12.0, step=1.0, key="條_明年預估本益比 ≤")
             if st.checkbox("明年 EPS 成長率下限", key="條_明年EPS成長下限"):
                 條件["明年EPS成長下限"] = st.number_input("明年 EPS 成長(%) ≥", value=20.0, step=5.0, key="條_明年EPS成長(%) ≥")
+            if st.checkbox("預估 EPS 上修下限（跟上一份快照比）", key="條_預估上修下限",
+                           help="要上傳過至少兩份預估 EPS 快照（04 選股的「📐 預估 EPS」分頁）才有資料。"):
+                條件["預估修正下限"] = st.number_input("今年預估上修(%) ≥", value=5.0, step=1.0, key="條_預估上修(%) ≥")
             if st.checkbox("排除預估分歧大的股票", key="條_排除預估分歧",
                            help="A、B 兩個來源的今年預估差超過 30% 就排除（只有一個來源的不受影響）。"):
                 條件["排除預估分歧"] = True

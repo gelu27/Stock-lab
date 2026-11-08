@@ -91,6 +91,10 @@ def 預估EPS區(r):
                          f"已公布 {數(g('已公布累計EPS'))}（至 {g('累計至')}）" +
                          (f"，每季要比最新一季 {季成長:+.0f}%" if pd.notna(季成長) else ""),
                          漲跌色(季成長 if pd.notna(季成長) else 0)))
+    修 = g("預估修正%")
+    if pd.notna(修) and pd.notna(g("前期資料日")):
+        卡們.append(卡片("跟上一份比", f"{修:+.1f}%", f"{pd.Timestamp(g('前期資料日')):%m/%d} 是 {數(g('前期預估EPS今年'))}" +
+                         (f"，明年 {g('明年預估修正%'):+.1f}%" if pd.notna(g("明年預估修正%")) else ""), 漲跌色(修)))
     卡片格(卡們)
     表 = pd.DataFrame({"來源": ["A", "B", "Vera"],
                        f"{年} EPS": [g("預估A今年"), g("預估B今年"), g("預估Vera今年")],
@@ -1097,8 +1101,20 @@ with 分頁[2]:
                                     line=dict(width=0.5, color=河色[min(i, len(河色) - 1)]),
                                     fill="tonexty" if i else None, fillcolor=河色[min(i, len(河色) - 1)]))
         圖.add_trace(go.Scatter(x=h["date"], y=h["收盤"], name="股價", line=dict(color="#FFFFFF", width=1.6)))
+        預位 = engine.預估河流位置(h, r["收盤"], {str(int(r["預估年度"])) if pd.notna(r.get("預估年度")) else "今年": r.get("預估EPS今年"),
+                                               str(int(r["預估年度"]) + 1) if pd.notna(r.get("預估年度")) else "明年": r.get("預估EPS明年")})
+        for 位, 色 in zip(預位, ("#FFC24B", "#FF00E5")):
+            圖.add_hline(y=位["中位價"], line_dash="dot", line_color=色, line_width=1,
+                        annotation_text=f"{位['年度']} 預估 EPS × {位['中位倍']:.0f} 倍＝{位['中位價']:,.0f}",
+                        annotation_font_color=色, annotation_position="top left")
         圖.update_layout(hovermode="x unified")
         st.plotly_chart(圖表外觀(圖, 360), width="stretch")
+        if 預位:
+            卡片格([卡片(f"用 {位['年度']} 預估 EPS 算", f"{位['預估本益比']:.1f} 倍",
+                        f"比過去 {位['歷史百分位']}% 的日子貴；合理區 {位['低標價']:,.0f}～{位['高標價']:,.0f}",
+                        綠 if 位["歷史百分位"] < 25 else (紅 if 位["歷史百分位"] > 75 else "#EDEDED")) for 位 in 預位])
+            st.caption("虛線＝預估 EPS × 過去 5 年本益比中位數；合理區＝預估 EPS × 過去本益比 10%～90% 分位。"
+                       "預估本益比通常比近四季本益比低（獲利成長時），所以「歷史位置」會看起來比較便宜，要一起看預估 EPS 可不可信。")
         st.caption("每條線 = 近四季 EPS × 本益比倍數（取過去 5 年本益比的 10%~90% 區間）。"
                    "股價在越下面的帶子代表以歷史標準看越便宜；EPS 衰退時便宜也可能是合理的。")
 
@@ -1595,7 +1611,8 @@ with 分頁[4]:
                 try:
                     全史 = 個股全史(代號, _版本)
                     近 = 全史[全史["date"] >= 全史["date"].max() - pd.Timedelta(days=3 * 365)]
-                    提醒 = engine.檢查AI目標價(建議, r["收盤"], r["本益比"] if r["本益比"] > 0 else None, 近["收盤"].max())
+                    提醒 = engine.檢查AI目標價(建議, r["收盤"], r["本益比"] if r["本益比"] > 0 else None, 近["收盤"].max(),
+                                          共識={k: r.get(k) for k in ("預估EPS今年", "預估EPS明年", "預估年度")})
                 except Exception:
                     提醒 = engine.檢查AI目標價(建議, r["收盤"])
                 if 提醒:

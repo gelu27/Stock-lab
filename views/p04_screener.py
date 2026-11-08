@@ -395,7 +395,81 @@ def 條件訂閱區(條件, 範本, 結果):
 
 
 # ---------- 04 選股 ----------
-選股分頁 = st.tabs(["條件選股", "烏賊每日功課", "烏賊策略總覽", "🏆 策略排行榜", "券商報告", "網紅說法", "📝 研究筆記", "🧲 三條件抄底"])
+@st.cache_data(ttl=43200, max_entries=2, show_spinner=False)
+def 預估修正驗證資料(版本鍵, 快照們):
+    """快照們只用來當快取鍵（上傳新快照就重算）。用記憶體裡的 300 天還原價，不另外讀資料庫。"""
+    價 = 指標.pivot(index="date", columns="代號", values="還原價").sort_index()
+    return engine.預估修正驗證(價)
+
+
+def 預估上傳區():
+    if not 可編輯():
+        st.caption("上傳新的預估 EPS 要先在 01 市場總覽的庫存區輸入密碼解鎖。")
+        return
+    檔 = st.file_uploader("上傳全市場預估 EPS（CSV，跟 11/07 那份同格式：股號、A_2026E_EPS、B_2026E_EPS、Vera_2026E_EPS…）",
+                         type=["csv"], key="預估上傳")
+    if not 檔:
+        return
+    try:
+        原始 = pd.read_csv(檔, dtype={"股號": str, "代號": str, "code": str}, encoding="utf-8-sig")
+        t = engine.轉換預估檔(原始)
+    except Exception as e:
+        st.error(f"讀不懂這個檔：{e}")
+        return
+    import re as _re
+    m = _re.search(r"(20\d{6})", 檔.name)
+    預設 = pd.Timestamp(m.group(1)) if m else pd.Timestamp(最新日)
+    日 = st.date_input("這份預估的資料日", value=預設.date(), key="預估資料日")
+    st.caption(f"讀到 {len(t)} 檔，欄位：{'、'.join(c for c in t.columns if c != 'code')}")
+    if st.button("💾 存成新的一份快照", key="存預估", type="primary"):
+        try:
+            永久 = engine.存預估檔(t, 日, _設定())
+        except Exception as e:
+            st.error(f"存檔失敗：{e}")
+            return
+        st.cache_data.clear()
+        st.success(f"已存 {pd.Timestamp(日):%Y-%m-%d} 的預估（" + ("已寫入 GitHub，網站重新部署後全站生效）" if 永久 else "只存在網站上，重啟會消失）"))
+
+
+def 預估EPS分頁():
+    段落("FORECAST // 預估 EPS 快照：上修、下修追蹤")
+    快照 = engine.預估檔們()
+    卡片格([卡片("快照份數", f"{len(快照)}", "、".join(f"{d:%m/%d}" for d, _ in 快照[-4:]) or "—"),
+           卡片("最新一份", f"{快照[-1][0]:%Y-%m-%d}" if 快照 else "—"),
+           卡片("涵蓋檔數", f"{int(今日['預估EPS今年'].notna().sum()) if '預估EPS今年' in 今日 else 0}", "有 A 或 B 預估")])
+    with st.expander("📥 上傳新的一份預估 EPS", expanded=not 快照):
+        預估上傳區()
+    st.caption("建議每週（或每月）上傳一份同樣格式的匯出檔。網站會跟上一份比，算出上修、下修，"
+               "累積幾份之後自動驗證「預估上修的股票之後有沒有比較會漲」。")
+    if "預估修正%" not in 今日.columns:
+        st.info("目前只有一份預估快照，等下一份上傳後這裡就會列出上修、下修名單。")
+    else:
+        t = 今日[今日["預估修正%"].notna() & (今日["成交張數"] >= 200)]
+        欄 = [c for c in ["代號", "名稱", "收盤", "漲跌幅", "前期預估EPS今年", "預估EPS今年", "預估修正%", "明年預估修正%",
+                         "預估本益比", "明年預估本益比"] if c in t.columns]
+        上, 下 = st.columns(2)
+        with 上:
+            st.markdown("**🔺 上修最多**")
+            a = t[t["預估修正%"] > 0].nlargest(20, "預估修正%")
+            點選表(a, 上色(a[欄]), "預估上修表", height=400)
+        with 下:
+            st.markdown("**🔻 下修最多**")
+            b = t[t["預估修正%"] < 0].nsmallest(20, "預估修正%")
+            點選表(b, 上色(b[欄]), "預估下修表", height=400)
+        st.caption("修正%＝今年預估 EPS（A、B 中位數）跟上一份比；上一份太小（< 0.3 元）的不算。只列成交 200 張以上。")
+    段落("TEST // 預估上修的股票，之後有比較會漲嗎？")
+    結果, 說明 = 預估修正驗證資料(_版本, tuple(str(d) for d, _ in 快照))
+    st.markdown(說明)
+    if 結果 is not None:
+        表格(結果.style.format({"前期": "{:%Y-%m-%d}", "本期": "{:%Y-%m-%d}", "上修超額%": "{:+.2f}", "下修超額%": "{:+.2f}",
+                               "上修減下修%": "{:+.2f}"}), hide_index=True, width="stretch")
+    st.caption("每兩份相鄰快照：今年預估上修 ≥ 2% 與下修 ≤ −2% 的股票，下一份資料日後 20 個交易日的平均報酬減全體平均。"
+               "期數少的時候結果不穩定，至少累積 6 期以上再當參考。")
+
+
+選股分頁 = st.tabs(["條件選股", "烏賊每日功課", "烏賊策略總覽", "🏆 策略排行榜", "券商報告", "網紅說法", "📝 研究筆記", "🧲 三條件抄底", "📐 預估 EPS"])
+with 選股分頁[8]:
+  預估EPS分頁()
 with 選股分頁[7]:
   抄底區()
 with 選股分頁[6]:
@@ -474,11 +548,12 @@ with 選股分頁[0]:
                  ("自由現金流為正", ["近四季營業現金流億", "近四季自由現金流億"]),
                  ("合約負債年增下限", ["合約負債億", "合約負債年增", "能見度月"]), ("能見度月下限", ["合約負債億", "合約負債年增", "能見度月"]),
                  ("預估本益比上限", ["預估EPS今年", "預估本益比", "預估EPS明年", "明年預估本益比", "明年EPS成長%", "預估分歧%"]), ("明年預估本益比上限", ["預估EPS今年", "預估本益比", "預估EPS明年", "明年預估本益比", "明年EPS成長%", "預估分歧%"]),
+                 ("預估修正下限", ["預估EPS今年", "前期預估EPS今年", "預估修正%", "預估本益比"]),
                  ("明年EPS成長下限", ["預估EPS今年", "預估本益比", "預估EPS明年", "明年預估本益比", "明年EPS成長%", "預估分歧%"]), ("排除預估分歧", ["預估EPS今年", "預估本益比", "預估EPS明年", "明年預估本益比", "明年EPS成長%", "預估分歧%"])):
       if 條件.get(鍵) is not None:
           顯示欄 += [c for c in 欄們 if c in 結果.columns and c not in 顯示欄]
   if str(條件.get("排序", "")).startswith(("預估", "明年")):
-      顯示欄 += [c for c in ["預估EPS今年", "預估本益比", "預估EPS明年", "明年預估本益比", "明年EPS成長%"]
+      顯示欄 += [c for c in ["預估EPS今年", "預估本益比", "預估EPS明年", "明年預估本益比", "明年EPS成長%", "預估修正%"]
                 if c in 結果.columns and c not in 顯示欄]
   if 範本 != "自訂條件":  # 烏賊條件多看幾個相關欄位
       顯示欄[3:3] = [c for c in ["週轉率", "股本億", "量對5日均", "5日均量", "10日漲幅", "30日漲幅", "40日漲幅",

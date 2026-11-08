@@ -266,7 +266,9 @@ def 族群樹圖(族群, 個股, 界, 大小):
                     colorscale=[[0, "#00A86B"], [0.5, "#262626"], [1, "#E0244A"]],
                     line=dict(color="#000", width=1)),
         texttemplate="<b>%{label}</b><br>%{customdata:+.2f}%",
-        hovertemplate="<b>%{label}</b><br>漲跌 %{customdata:+.2f}%<extra></extra>",
+        hovertext=[(f"預估本益比 {v:.1f} 倍" if pd.notna(v) else "") for v in 族群.get("預估本益比", pd.Series(np.nan, index=族群.index))]
+                  + [""] * len(個股),
+        hovertemplate="<b>%{label}</b><br>漲跌 %{customdata:+.2f}%<br>%{hovertext}<extra></extra>",
         textfont=dict(color="#FFF", family="Noto Sans TC"), maxdepth=2, pathbar=dict(visible=True),
         tiling=dict(pad=1),
     ))
@@ -287,11 +289,12 @@ def 營收體質(版本鍵):
 
 
 def 族群排行(族群, 期間, 來源):
-    表 = 族群.reset_index().rename(columns={"產業": "族群"})[
-        ["族群", "漲跌幅", "上漲", "下跌", "成交值億", "領漲股"]]
+    表 = 族群.reset_index().rename(columns={"產業": "族群"})
+    表 = 表[[c for c in ["族群", "漲跌幅", "上漲", "下跌", "成交值億", "預估本益比", "明年預估本益比", "領漲股"] if c in 表.columns]]
     st.markdown("**族群排行**　點一下族群，下方會列出成分股")
     選 = 表格(表.style.map(lambda v: f"color:{漲跌色(v)}", subset=["漲跌幅"])
-                     .format({"漲跌幅": "{:+.2f}%", "成交值億": "{:,.1f}"}),
+                     .format({"漲跌幅": "{:+.2f}%", "成交值億": "{:,.1f}", "預估本益比": "{:.1f}", "明年預估本益比": "{:.1f}"},
+                             na_rep="—"),
                      key="族群表", on_select="rerun", selection_mode="single-row", hide_index=True,
                      width="stretch", height=300)
     列們 = 選.selection.rows
@@ -299,8 +302,8 @@ def 族群排行(族群, 期間, 來源):
         族 = 表.iloc[列們[0]]["族群"]
         欄 = engine.族群期間[期間]
         成分 = 來源[(來源["產業"] == 族) & (來源["收盤"] > 0)].sort_values(欄, ascending=False)
-        成分 = 成分[["名稱", "收盤", "漲跌幅", "5日漲幅", "20日漲幅", "成交張數", "本益比", "代號"]].rename(
-            columns={"收盤": "股價"})
+        成分 = 成分[[c for c in ["名稱", "收盤", "漲跌幅", "5日漲幅", "20日漲幅", "成交張數", "本益比", "預估本益比",
+                              "明年預估本益比", "代號"] if c in 成分.columns]].rename(columns={"收盤": "股價"})
         if 來源 is not 今日:
             營 = 營收體質(_版本)
             成分.insert(1, "營收", 成分["代號"].map(營).fillna("—"))
@@ -308,6 +311,9 @@ def 族群排行(族群, 期間, 來源):
         點選表(成分, 上色(成分), "族群成分", height=min(35 * (len(成分) + 1) + 3, 420))
         if "營收" in 成分:
             st.caption("營收：近 3 個月營收年增 20% 以上＝📈 有營收；0 以下＝💭 還在做夢（題材還沒變成營收）。")
+    if "預估本益比" in 表.columns:
+        st.caption("族群預估本益比＝族群裡有正的預估 EPS 的股票，合計市值 ÷ 合計預估獲利（大型股影響較大，虧損股不算）。"
+                   "預估 EPS 是使用者上傳的全市場預估（A、B 兩源中位數）。")
 
 
 @st.cache_resource(max_entries=1, show_spinner=False)
