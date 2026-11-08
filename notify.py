@@ -375,6 +375,10 @@ def 提醒事項(代號們):
         行們 += 台幣提醒(狀態)
     except Exception as e:
         print("台幣提醒失敗：", repr(e))
+    try:
+        行們 += 季線VIX提醒(狀態)
+    except Exception as e:
+        print("季線／VIX 提醒失敗：", repr(e))
     if 狀態 != 舊狀態:
         try:
             寫設定("alert_state.json", 狀態, sha)
@@ -412,6 +416,39 @@ def 台幣提醒(狀態):
         記[鍵] = 今.isoformat()
         新.append(w)
     return (["", "💱 台幣與外資"] + 新) if 新 else []
+
+
+def 季線VIX提醒(狀態):
+    """股癌 EP712：加權季線保衛戰狀態改變（等站上 → 站上第 N 天 → 站穩／又跌破）、VIX 單日跳升 ≥ 30% 時通知。
+    季線狀態只在「燈」改變時通知（第一次執行只記錄）；VIX 同一天只通知一次。"""
+    import engine
+    行們 = []
+    K = engine.讀取指數K線("TAIEX")
+    狀 = engine.季線狀態(K)
+    if 狀:
+        舊 = 狀態.get("季線燈")
+        狀態["季線燈"] = 狀["燈"]
+        if 舊 and 舊 != 狀["燈"] and 狀["燈"] != "⚪":
+            行們 += ["", f"📏 季線保衛戰：{狀['燈']} {狀['狀態']}（季線 {狀['季線']:,.0f}、乖離 {狀['乖離%']:+.1f}%）", 狀["說明"]]
+    v = engine.讀取VIX長線()
+    for d, 名, 值, 變 in engine.VIX今日觸發(v, 最近天數=1):
+        鍵 = f"{d:%Y-%m-%d}"
+        if 狀態.get("VIX跳升_最後") == 鍵:
+            break
+        狀態["VIX跳升_最後"] = 鍵
+        f = engine.資料夾 / "sox_long.csv"
+        話 = ""
+        if f.exists():
+            t = pd.read_csv(f, parse_dates=["date"])
+            標 = t[t["symbol"] == "^GSPC"].set_index("date")["close"]
+            表, _ = engine.VIX跳升統計(v, 標)
+            r = 表[表["條件"] == 名]
+            if len(r) and r["次數"].iloc[0]:
+                r = r.iloc[0]
+                話 = f"1994 年來（含這次）{r['次數']:.0f} 次，S&P 500 之後 20 日上漲 {r['20日上漲%']:.0f}%、平均 {r['20日平均%']:+.1f}%；250 日 {r['250日平均%']:+.1f}%"
+        行們 += ["", f"😨 {d:%m/%d} {名}：VIX {值:.1f}（單日 {變:+.0f}%）", 話 or "短線常是好買點，但先想清楚是做反彈還是長抱。"]
+        break
+    return 行們
 
 
 def 營收新高提醒(代號們, 狀態):
