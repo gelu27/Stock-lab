@@ -371,9 +371,10 @@ def 庫存歷史區(持股):
                + (f"沒有歷史股價、未計入：{'、'.join(沒)}" if 沒 else ""))
 
 
-@st.fragment(run_every=30 if engine.盤中時間() else None)
+@st.fragment(run_every=刷新秒(30))
 def 庫存區(持股):
     """盤中每 30 秒自動抓一次即時報價；收盤後用資料庫的收盤價。"""
+    輪詢檢查()  # 開盤／收盤時切換自動更新頻率
     即時 = None
     if engine.盤中時間():
         try:
@@ -552,9 +553,10 @@ def 群組績效(自選):
     st.caption("各群組等權重平均；最強 = 今天漲最多的一檔。")
 
 
-@st.fragment(run_every=30 if engine.盤中時間() else None)
+@st.fragment(run_every=刷新秒(30))
 def 自選表(代號們):
     """盤中每 30 秒更新即時報價，收盤後用資料庫的收盤價。"""
+    輪詢檢查()  # 開盤／收盤時切換自動更新頻率
     表 = 今日.set_index("代號").reindex(list(代號們)).reset_index()
     if engine.盤中時間():
         try:
