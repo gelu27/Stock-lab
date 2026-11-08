@@ -364,6 +364,10 @@ def 提醒事項(代號們):
     except Exception as e:
         print("自選重訊失敗：", repr(e))
     try:
+        行們 += 預估修正提醒(代號們, 狀態)
+    except Exception as e:
+        print("預估修正提醒失敗：", repr(e))
+    try:
         行們 += 跌深融資提醒(狀態)
     except Exception as e:
         print("跌深融資提醒失敗：", repr(e))
@@ -488,6 +492,12 @@ def 條件訂閱提醒(狀態, 最多=15):
     指標 = engine.計算指標(engine.讀取資料庫(最近天數=130))
     最新 = 指標["date"].max()
     今日 = engine.加基本面(指標[指標["date"] == 最新], engine.讀取基本面())
+    try:  # 選股條件可能用到預估本益比（網站今日表也有加）
+        預 = engine.預估EPS表()
+        if 預 is not None:
+            今日 = engine.加預估本益比(今日.join(預, on="代號"))
+    except Exception as e:
+        print("預估 EPS 加入失敗：", repr(e))
     名 = dict(zip(今日["代號"], 今日["名稱"]))
     日 = f"{最新:%Y-%m-%d}"
     行們 = []
@@ -510,6 +520,35 @@ def 條件訂閱提醒(狀態, 最多=15):
             if 出:
                 行們.append("　👋 剛剔除：" + "、".join(f"{c} {名.get(c, '')}" for c in 出[:最多]) + (f" 等 {len(出)} 檔" if len(出) > 最多 else ""))
     return (["", "🔔 選股訂閱變動"] + 行們) if 行們 else []
+
+
+def 預估修正提醒(代號們, 狀態, 門檻=5.0, 最多=15):
+    """上傳新一份預估 EPS 快照後，庫存＋自選股的今年預估跟上一份比上修／下修超過 門檻% 就通知（每份快照只通知一次）。"""
+    import engine
+    t = engine.預估EPS表()
+    if t is None or "預估修正%" not in t.columns:
+        return []
+    日 = f"{pd.Timestamp(t['預估資料日'].iloc[0]):%Y-%m-%d}"
+    if 狀態.get("預估修正_日") == 日:
+        return []
+    狀態["預估修正_日"] = 日
+    t = t.reindex([c for c in dict.fromkeys(代號們) if c in t.index])
+    修 = t["預估修正%"].dropna()
+    下, 上 = 修[修 <= -門檻].sort_values(), 修[修 >= 門檻].sort_values(ascending=False)
+    if not len(下) and not len(上):
+        return []
+    try:
+        _, 行情 = 最新行情()
+        名表 = dict(zip(行情["code"], 行情["name"]))
+    except Exception:
+        名表 = {}
+    前 = pd.Timestamp(t["前期資料日"].dropna().iloc[0]) if t["前期資料日"].notna().any() else None
+    def 行(c, v):
+        r = t.loc[c]
+        return f"{'🔻' if v < 0 else '🔺'} {c} {名表.get(c, '')} 今年預估 EPS {r['前期預估EPS今年']:.2f} → {r['預估EPS今年']:.2f}（{v:+.1f}%）"
+    行們 = ["", f"📐 預估 EPS 修正（庫存＋自選，{前:%m/%d} → {日[5:].replace('-', '/')}）" if 前 else "📐 預估 EPS 修正（庫存＋自選）"]
+    行們 += [行(c, v) for c, v in 下.head(最多).items()] + [行(c, v) for c, v in 上.head(最多).items()]
+    return 行們
 
 
 def 跌深融資提醒(狀態, 冷卻天數=30):

@@ -68,6 +68,62 @@ def PDF按鈕(代號, r, 建議, 內文, 時間):
                            mime="application/pdf", key=f"PDF下載{代號}", type="primary")
 
 
+def 預估EPS區(r):
+    """FORWARD // 三個來源的今年、明年預估 EPS，算預估本益比，跟已公布累計 EPS 對照。"""
+    g = lambda k: r.get(k, np.nan)
+    if pd.isna(g("預估EPS今年")) and pd.isna(g("預估Vera今年")):
+        return
+    年 = int(g("預估年度"))
+    日 = pd.Timestamp(g("預估資料日"))
+    段落(f"FORWARD // 預估 EPS 與預估本益比（資料日 {日:%Y-%m-%d}）")
+    分歧 = g("預估分歧%")
+    卡們 = [
+        卡片(f"{年} 預估 EPS", 數(g("預估EPS今年")), f"{int(g('預估來源數') or 0)} 個來源" +
+             (f"，兩源差 {分歧:.0f}%" if pd.notna(分歧) else ""), 紅 if pd.notna(分歧) and 分歧 > engine.預估分歧門檻 else "#EDEDED"),
+        卡片(f"{年} 預估本益比", 數(g("預估本益比"), "{:.1f}", " 倍"), f"近四季本益比 {數(r['本益比'], '{:.1f}')} 倍"),
+        卡片(f"{年 + 1} 預估 EPS", 數(g("預估EPS明年")), f"成長 {數(g('明年EPS成長%'), '{:+.1f}', '%')}",
+             漲跌色(g("明年EPS成長%") if pd.notna(g("明年EPS成長%")) else 0)),
+        卡片(f"{年 + 1} 預估本益比", 數(g("明年預估本益比"), "{:.1f}", " 倍")),
+    ]
+    if pd.notna(g("預估本業EPS")):
+        業外 = g("預估業外占比%")
+        卡們.append(卡片(f"{年} 本業 EPS（Vera）", 數(g("預估本業EPS")),
+                         f"本業本益比 {數(g('本業預估本益比'), '{:.1f}', ' 倍')}" + (f"，業外約占預估的 {業外:.0f}%" if pd.notna(業外) else ""),
+                         紅 if pd.notna(業外) and 業外 > 30 else "#EDEDED"))
+    if pd.notna(g("隱含剩餘EPS")):
+        季成長 = g("隱含季成長%")
+        卡們.append(卡片("全年預估還差多少", 數(g("隱含剩餘EPS")),
+                         f"已公布 {數(g('已公布累計EPS'))}（至 {g('累計至')}）" +
+                         (f"，每季要比最新一季 {季成長:+.0f}%" if pd.notna(季成長) else ""),
+                         漲跌色(季成長 if pd.notna(季成長) else 0)))
+    修 = g("預估修正%")
+    if pd.notna(修) and pd.notna(g("前期資料日")):
+        卡們.append(卡片("跟上一份比", f"{修:+.1f}%", f"{pd.Timestamp(g('前期資料日')):%m/%d} 是 {數(g('前期預估EPS今年'))}" +
+                         (f"，明年 {g('明年預估修正%'):+.1f}%" if pd.notna(g("明年預估修正%")) else ""), 漲跌色(修)))
+    卡片格(卡們)
+    表 = pd.DataFrame({"來源": ["A", "B", "Vera（只含本業）"],
+                       f"{年} EPS": [g("預估A今年"), g("預估B今年"), g("預估Vera今年")],
+                       f"{年 + 1} EPS": [g("預估A明年"), g("預估B明年"), np.nan]})
+    表[f"{年} 本益比"] = (r["收盤"] / 表[f"{年} EPS"]).where(表[f"{年} EPS"] > 0)
+    表[f"{年 + 1} 本益比"] = (r["收盤"] / 表[f"{年 + 1} EPS"]).where(表[f"{年 + 1} EPS"] > 0)
+    表 = 表.dropna(subset=[f"{年} EPS", f"{年 + 1} EPS"], how="all")
+    with st.expander("三個來源的數字"):
+        表格(表.style.format({c: "{:.2f}" for c in 表.columns if "EPS" in c} | {c: "{:.1f}" for c in 表.columns if "本益比" in c},
+                            na_rep="—"), hide_index=True, width="stretch")
+    提醒 = []
+    if g("預估低於累計") == True:
+        提醒.append("今年預估比已公布的累計 EPS 還低：可能是舊預估沒更新，或預期後面幾季虧損，使用前先查證。")
+    if g("預估來源數") == 1 and pd.isna(g("預估B今年")):
+        提醒.append("只有 A 來源：沒有法人研究的股票，A 的數字多半接近近四季 EPS，參考性較低。")
+    for 文 in 提醒:
+        st.warning(文)
+    if 日 < 最新日 - pd.Timedelta(days=45):
+        st.warning(f"預估資料是 {日:%m/%d} 的，已超過 45 天，可能沒反映最新財報。")
+    st.caption("預估 EPS 來自使用者匯出的全市場預估。A、B 是法人常用的來源，網站用兩者的中位數當共識（含業外，跟財報 EPS 同口徑）；"
+               "Vera 是 AI 角色，只預估本業（業內），所以不納入共識、也不跟已公布的累計 EPS 比，另列「本業 EPS」與「業外約占多少」"
+               "（共識與本業的差）。預估本益比每天用最新收盤重算；預估 EPS 要等使用者上傳新的一份才會更新。")
+
+
 def 做PDF(代號, r, 建議, 內文, 時間):
     import report
     importlib.reload(report)  # 網站更新後確保用的是最新版的報告排版
@@ -103,6 +159,8 @@ def 做PDF(代號, r, 建議, 內文, 時間):
                     ("週轉率", 數(r["volume"] / 股數 * 100 if pd.notna(股數) else np.nan, "{:.2f}", "%")),
                     ("本益比", 數(r["本益比"])), ("殖利率", 數(r["殖利率"], 尾="%")), ("股價淨值比", 數(r["淨值比"]))]),
         ("基本面", [("ROE（近四季）", 數(現, "{:.1f}", "%")), ("今年累計 EPS", 數(g("EPS"))), ("近四季 EPS", 數(四季)),
+                  ("今年預估 EPS", 數(g("預估EPS今年"))), ("預估本益比", 數(g("預估本益比"), "{:.1f}", " 倍")),
+                  ("明年預估 EPS", 數(g("預估EPS明年"))), ("本業預估 EPS", 數(g("預估本業EPS"))),
                   ("月營收年增", 數(g("營收年增率"), 尾="%")), ("累計營收年增", 數(g("累計營收年增率"), 尾="%")),
                   ("單季毛利率", 數(g("毛利率"), 尾="%")), ("毛利率較上季", 數(g("毛利率季增"), "{:+.1f}", " pt")),
                   ("營業利益率", 數(g("營益率"), 尾="%")), ("營益率較上季", 數(g("營益率季增"), "{:+.1f}", " pt")),
@@ -1373,6 +1431,7 @@ with 分頁[2], 區塊防護("基本面"):
             卡片("累計營收年增率", 數(r.get("累計營收年增率"), 尾="%"), "", 漲跌色(r.get("累計營收年增率") or 0)),
             卡片("距 52 週高點", 數(r["距52週高點"], "{:+.1f}", "%")),
         ] + 毛利卡片(r) + ROE卡片(代號, r))
+        預估EPS區(r)
         全年EPS反推區(代號)
         河流 = engine.本益比河流(個股全史(代號, _版本))
         if 河流:
@@ -1392,8 +1451,20 @@ with 分頁[2], 區塊防護("基本面"):
                                         line=dict(width=0.5, color=河色[min(i, len(河色) - 1)]),
                                         fill="tonexty" if i else None, fillcolor=河色[min(i, len(河色) - 1)]))
             圖.add_trace(go.Scatter(x=h["date"], y=h["收盤"], name="股價", line=dict(color="#FFFFFF", width=1.6)))
+            預位 = engine.預估河流位置(h, r["收盤"], {str(int(r["預估年度"])) if pd.notna(r.get("預估年度")) else "今年": r.get("預估EPS今年"),
+                                                   str(int(r["預估年度"]) + 1) if pd.notna(r.get("預估年度")) else "明年": r.get("預估EPS明年")})
+            for 位, 色 in zip(預位, ("#FFC24B", "#FF00E5")):
+                圖.add_hline(y=位["中位價"], line_dash="dot", line_color=色, line_width=1,
+                            annotation_text=f"{位['年度']} 預估 EPS × {位['中位倍']:.0f} 倍＝{位['中位價']:,.0f}",
+                            annotation_font_color=色, annotation_position="top left")
             圖.update_layout(hovermode="x unified")
             st.plotly_chart(圖表外觀(圖, 360), width="stretch")
+            if 預位:
+                卡片格([卡片(f"用 {位['年度']} 預估 EPS 算", f"{位['預估本益比']:.1f} 倍",
+                            f"比過去 {位['歷史百分位']}% 的日子貴；合理區 {位['低標價']:,.0f}～{位['高標價']:,.0f}",
+                            綠 if 位["歷史百分位"] < 25 else (紅 if 位["歷史百分位"] > 75 else "#EDEDED")) for 位 in 預位])
+                st.caption("虛線＝預估 EPS × 過去 5 年本益比中位數；合理區＝預估 EPS × 過去本益比 10%～90% 分位。"
+                           "預估本益比通常比近四季本益比低（獲利成長時），所以「歷史位置」會看起來比較便宜，要一起看預估 EPS 可不可信。")
             st.caption("每條線 = 近四季 EPS × 本益比倍數（取過去 5 年本益比的 10%~90% 區間）。"
                        "股價在越下面的帶子代表以歷史標準看越便宜；EPS 衰退時便宜也可能是合理的。")
 
@@ -1718,6 +1789,9 @@ with 分頁[4], 區塊防護("AI 分析"):
                         摘要 = "公司資料：\n" + 公司 + "\n\n最新數據：\n" + 摘要
                 except Exception:
                     pass
+            預 = engine.預估EPS文字(r)
+            if 預:
+                摘要 += f"\n- {預}"
             鏈 = engine.產業鏈位置(代號, dict(zip(今日["代號"], 今日["名稱"])))
             if 鏈:
                 摘要 += f"\n- 產業鏈位置：{鏈}"
@@ -1938,7 +2012,8 @@ with 分頁[4], 區塊防護("AI 分析"):
                     try:
                         全史 = 個股全史(代號, _版本)
                         近 = 全史[全史["date"] >= 全史["date"].max() - pd.Timedelta(days=3 * 365)]
-                        提醒 = engine.檢查AI目標價(建議, r["收盤"], r["本益比"] if r["本益比"] > 0 else None, 近["收盤"].max())
+                        提醒 = engine.檢查AI目標價(建議, r["收盤"], r["本益比"] if r["本益比"] > 0 else None, 近["收盤"].max(),
+                                              共識={k: r.get(k) for k in ("預估EPS今年", "預估EPS明年", "預估年度")})
                     except Exception:
                         提醒 = engine.檢查AI目標價(建議, r["收盤"])
                     if 提醒:

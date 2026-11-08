@@ -215,6 +215,15 @@ def 數據摘要(代號, r, 全, 公司=None, 新聞=None):
         摘要 += f"\n- 建議評價方法：{engine.評價方法建議(r.get('產業'), r.get('近三季EPS'))}"
     except Exception:
         pass
+    try:
+        預 = engine.預估EPS查詢(代號)
+        if 預:
+            預 = engine.加預估本益比(pd.DataFrame([{**預, "收盤": float(r["收盤"])}])).iloc[0].to_dict()
+            文 = engine.預估EPS文字(預)
+            if 文:
+                摘要 += f"\n- {文}"
+    except Exception as e:
+        print("預估 EPS 摘要失敗：", repr(e))
     if 公司:
         if 公司.get("業務"):
             摘要 += f"\n\n公司資料：\n- 主要經營業務（公開資訊觀測站）：{公司['業務']}"
@@ -282,7 +291,8 @@ def 目標價提醒(建議, r, 全):
     try:
         近 = 全[全["date"] >= 全["date"].max() - pd.Timedelta(days=3 * 365)]
         本益比 = float(r["本益比"]) if pd.notna(r.get("本益比")) and r["本益比"] > 0 else None
-        return engine.檢查AI目標價(建議, float(r["收盤"]), 本益比, float(近["收盤"].max()))
+        return engine.檢查AI目標價(建議, float(r["收盤"]), 本益比, float(近["收盤"].max()),
+                                 共識=engine.預估EPS查詢(str(r.get("代號", ""))))
     except Exception as e:
         print("目標價檢查失敗：", repr(e))
         return []
