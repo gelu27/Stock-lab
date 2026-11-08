@@ -114,7 +114,7 @@ def 收影片(設):
         print("沒有 GEMINI_API_KEY，略過影片")
         return 0, 0
     表, 已看影片, 已看檔 = _已看(設)
-    待 = 影片清單(設, 已看影片)[: int(os.environ.get("INTAKE_MAX") or 4)]
+    待 = 影片清單(設, 已看影片)[: int(os.environ.get("INTAKE_MAX") or 3)]
     print(f"待處理影片 {len(待)} 支")
     if not 待:
         return 0, 0
@@ -165,6 +165,10 @@ def 收影片(設):
             失敗 += 1
             print(f"  失敗（{time.time() - t0:.0f} 秒）：{e!r}", flush=True)
             待人工.append(f"{標題[:30]} {網址}")
+            if "額度" in str(e):   # 額度用完，後面的影片只會一樣失敗，直接列給人工處理
+                待人工.extend(f"{t[2][:30]} {t[1]}" for t in 待[待.index((vid, 網址, 標題, 日期)) + 1:])
+                print("額度用完，剩下的影片改列人工清單", flush=True)
+                break
     if 新 or 失敗:
         旗 = [f"{v['頻道']} {v['日期']}：" + "；".join(v["查核"]) for v in 新 if v["查核"]]
         _通知(f"🎬 自動收到 {len(新)} 支網紅影片摘要" + (f"（{失敗} 支失敗）" if 失敗 else "")
