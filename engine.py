@@ -29,6 +29,9 @@ def 稅率(代號):
     "法人5日買超 多→少": ("法人5日買超", False),
     "投信連買天數 多→少": ("投信連買", False),
     "週轉率 高→低": ("週轉率", False),
+    "預估本益比 低→高": ("預估本益比", True),
+    "明年預估本益比 低→高": ("明年預估本益比", True),
+    "明年 EPS 成長 高→低": ("明年EPS成長%", False),
 }
 
 
@@ -719,6 +722,13 @@ def 選股(當日, 條件):
     for 鍵, 欄 in (("合約負債年增下限", "合約負債年增"), ("能見度月下限", "能見度月")):
         if c.get(鍵) is not None and 欄 in 結果.columns:
             結果 = 結果[結果[欄] >= c[鍵]]
+    for 鍵, 欄 in (("預估本益比上限", "預估本益比"), ("明年預估本益比上限", "明年預估本益比")):
+        if c.get(鍵) is not None and 欄 in 結果.columns:
+            結果 = 結果[結果[欄] <= c[鍵]]
+    if c.get("明年EPS成長下限") is not None and "明年EPS成長%" in 結果.columns:
+        結果 = 結果[結果["明年EPS成長%"] >= c["明年EPS成長下限"]]
+    if c.get("排除預估分歧") and "預估分歧%" in 結果.columns:
+        結果 = 結果[~(結果["預估分歧%"] > 預估分歧門檻)]
     if c.get("自由現金流為正") and "近四季自由現金流億" in 結果.columns:
         結果 = 結果[結果["近四季自由現金流億"] > 0]
     for 鍵, 欄 in (("外資連買下限", "外資連買"), ("投信連買下限", "投信連買"), ("法人5日買超下限", "法人5日買超"),
@@ -5933,6 +5943,106 @@ def 合約負債表():
         結果["合約負債佔股本"] = (最新["合約負債"] * 1000 / 股.reindex(最新.index) * 100).round(1)
     結果.index.name = "代號"
     return 結果
+
+
+def 讀取預估EPS():
+    """data/forecast/eps_forecast_YYYYMMDD.csv 取最新一份（使用者匯出的全市場預估 EPS，三個來源）。
+    欄位：code、A_年、B_年、Vera_年（今年）、A_年+1、B_年+1（明年）。回傳 (DataFrame, 資料日 Timestamp) 或 (None, None)。"""
+    檔們 = sorted((資料夾 / "forecast").glob("eps_forecast_*.csv"))
+    if not 檔們:
+        return None, None
+    f = 檔們[-1]
+    t = pd.read_csv(f, dtype={"code": str})
+    try:
+        日 = pd.Timestamp(f.stem.split("_")[-1])
+    except ValueError:
+        日 = pd.Timestamp(f.stat().st_mtime, unit="s").normalize()
+    return (t if len(t) else None), 日
+
+
+預估分歧門檻 = 30  # A、B 兩源差超過 30% 視為分歧
+
+
+def 預估EPS表():
+    """每檔的預估 EPS 整理（以代號為索引）：
+    預估EPS今年／預估EPS明年＝A、B 兩源中位數（Vera 只顯示不納入：2026-11-07 那份有 18% 的股票 Vera 全年預估
+    比已公布的今年累計 EPS 還低，和 A 的差距中位數 27%，A、B 只差 4%）。
+    另算 預估分歧%（A、B 差）、明年EPS成長%、隱含剩餘EPS（今年預估 − 已公布累計）、隱含季成長%（剩下幾季平均 vs 最新單季）、
+    預估低於累計（今年預估比已公布累計還低，可能是舊預估或預期後面虧損）。"""
+    t, 日 = 讀取預估EPS()
+    if t is None:
+        return None
+    年們 = sorted({int(c.split("_")[1]) for c in t.columns if "_" in c and c.split("_")[1].isdigit()})
+    if not 年們:
+        return None
+    今年 = 年們[0]
+    t = t.drop_duplicates("code", keep="last").set_index("code")
+    g = lambda c: pd.to_numeric(t[c], errors="coerce") if c in t.columns else pd.Series(np.nan, index=t.index)
+    A, B, V = g(f"A_{今年}"), g(f"B_{今年}"), g(f"Vera_{今年}")
+    A2, B2 = g(f"A_{今年 + 1}"), g(f"B_{今年 + 1}")
+    結果 = pd.DataFrame(index=t.index)
+    結果["預估EPS今年"] = pd.concat([A, B], axis=1).median(axis=1).round(2)
+    結果["預估EPS明年"] = pd.concat([A2, B2], axis=1).median(axis=1).round(2)
+    結果["預估A今年"], 結果["預估B今年"], 結果["預估Vera今年"] = A, B, V
+    結果["預估A明年"], 結果["預估B明年"] = A2, B2
+    結果["預估來源數"] = A.notna().astype(int) + B.notna().astype(int)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        分母 = ((A.abs() + B.abs()) / 2).where(lambda s: s >= 0.3)
+        結果["預估分歧%"] = ((A - B).abs() / 分母 * 100).round(0)
+        今 = 結果["預估EPS今年"]
+        結果["明年EPS成長%"] = ((結果["預估EPS明年"] / 今 - 1) * 100).where(今 >= 0.3).round(1)
+    結果["預估年度"] = 今年
+    結果["預估資料日"] = 日
+    # 跟已公布的今年累計 EPS 對照
+    e = 近四季EPS表()
+    if len(e):
+        e = e.reindex(結果.index)
+        同年 = e["EPS季度"].astype(str).str[:4] == str(今年)
+        季 = pd.to_numeric(e["EPS季度"].astype(str).str[-1], errors="coerce")
+        累計 = e["累計EPS"].where(同年)
+        結果["已公布累計EPS"] = 累計
+        結果["累計至"] = e["EPS季度"].where(同年)
+        結果["隱含剩餘EPS"] = (今 - 累計).round(2)
+        剩 = (4 - 季).where(同年 & (季 < 4))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            季均 = 結果["隱含剩餘EPS"] / 剩
+            單 = e["單季EPS"].where(同年)
+            結果["隱含季成長%"] = ((季均 / 單 - 1) * 100).where(單 >= 0.2).round(0)
+        結果["預估低於累計"] = (今 < 累計 * 0.95) & (累計 > 0.5)
+    結果.index.name = "代號"
+    return 結果
+
+
+def 加預估本益比(t):
+    """t 要有 收盤、預估EPS今年、預估EPS明年 → 加 預估本益比、明年預估本益比（EPS ≤ 0 不算；每天用最新收盤重算）。"""
+    if "預估EPS今年" not in t.columns:
+        return t
+    t = t.copy()
+    for 欄, 新 in (("預估EPS今年", "預估本益比"), ("預估EPS明年", "明年預估本益比")):
+        e = pd.to_numeric(t[欄], errors="coerce")
+        t[新] = (t["收盤"] / e).where(e > 0).round(1)
+    return t
+
+
+def 預估EPS文字(r):
+    """給 AI 用的一行文字；r 是今日表的一列（dict 或 Series）。沒有資料回傳空字串。"""
+    g = lambda k: r.get(k, np.nan)
+    今 = g("預估EPS今年")
+    if not isinstance(今, (int, float)) or pd.isna(今):
+        return ""
+    年 = int(g("預估年度")) if pd.notna(g("預估年度")) else ""
+    日 = g("預估資料日")
+    說 = [f"市場預估 EPS（使用者匯出的全市場預估，A、B 兩源中位數，資料日 {pd.Timestamp(日):%Y-%m-%d}）：{年} 年 {今:.2f}"]
+    if pd.notna(g("預估EPS明年")):
+        說.append(f"{年 + 1 if 年 else '明'} 年 {g('預估EPS明年'):.2f}")
+    if pd.notna(g("預估本益比")):
+        說.append(f"預估本益比 {g('預估本益比'):.1f} 倍" + (f"／明年 {g('明年預估本益比'):.1f} 倍" if pd.notna(g("明年預估本益比")) else ""))
+    if pd.notna(g("預估分歧%")) and g("預估分歧%") > 預估分歧門檻:
+        說.append(f"兩源差 {g('預估分歧%'):.0f}%（分歧大）")
+    if pd.notna(g("隱含剩餘EPS")):
+        說.append(f"已公布累計 {g('已公布累計EPS'):.2f}（至 {g('累計至')}），全年預估隱含後面還要賺 {g('隱含剩餘EPS'):.2f}"
+                  + (f"，平均每季比最新一季 {g('隱含季成長%'):+.0f}%" if pd.notna(g("隱含季成長%")) else ""))
+    return "，".join(說)
 
 
 def 合約負債驗證(價=None, 天數=60, 最少成交值=2e7):

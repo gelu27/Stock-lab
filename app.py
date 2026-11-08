@@ -354,9 +354,9 @@ with b.popover("🔄 更新"):
 
 @st.cache_data(ttl=3600, show_spinner=False, max_entries=1)
 def 補充欄位(版本鍵):
-    """外資持股比、當沖比率、投信 60 日買超佔股本、負債比、流動比、近四季現金流、合約負債（每天更新一次）。"""
+    """外資持股比、當沖比率、投信 60 日買超佔股本、負債比、流動比、近四季現金流、合約負債、預估 EPS（每天更新一次）。"""
     表 = engine.籌碼補充表(指標)
-    for 補 in (engine.財報體質表(), engine.合約負債表()):
+    for 補 in (engine.財報體質表(), engine.合約負債表(), engine.預估EPS表()):
         if 補 is not None:
             表 = 表.join(補, how="outer")
     return 表
@@ -370,7 +370,7 @@ def 基本面資料(版本鍵):
 @st.cache_data(max_entries=2, show_spinner=False)
 def 今日資料(版本鍵):
     """最新一天的行情＋基本面＋籌碼補充欄位。以前每點一下都重算（約 1.4 秒），現在每天只算一次。"""
-    return engine.加基本面(指標[指標["date"] == 最新日], 基本面資料(版本鍵)).join(補充欄位(版本鍵), on="代號")
+    return engine.加預估本益比(engine.加基本面(指標[指標["date"] == 最新日], 基本面資料(版本鍵)).join(補充欄位(版本鍵), on="代號"))
 
 
 @st.cache_data(ttl=3600, max_entries=64, show_spinner=False)
@@ -459,7 +459,18 @@ def 選股條件區():
             if st.checkbox("合約負債能見度下限", key="條_合約負債能見度下限",
                            help="合約負債 ÷ 近四季營收 × 12，約等於手上預收款夠做幾個月營收。"):
                 條件["能見度月下限"] = st.number_input("能見度(月) ≥", value=3.0, step=0.5, key="條_能見度(月) ≥")
-            st.caption("月營收、EPS、負債比、現金流、合約負債只有最新一期，組合回測時不會套用。")
+            if st.checkbox("預估本益比上限（今年）", key="條_預估本益比上限",
+                           help="今年預估 EPS（使用者匯出的全市場預估，A、B 兩源中位數）÷ 今天收盤。預估 EPS ≤ 0 的股票會被排除。"):
+                條件["預估本益比上限"] = st.number_input("預估本益比 ≤", value=15.0, step=1.0, key="條_預估本益比 ≤")
+            if st.checkbox("明年預估本益比上限", key="條_明年預估本益比上限",
+                           help="明年預估 EPS 只有約 500 檔有（多半是有法人研究的中大型股）。"):
+                條件["明年預估本益比上限"] = st.number_input("明年預估本益比 ≤", value=12.0, step=1.0, key="條_明年預估本益比 ≤")
+            if st.checkbox("明年 EPS 成長率下限", key="條_明年EPS成長下限"):
+                條件["明年EPS成長下限"] = st.number_input("明年 EPS 成長(%) ≥", value=20.0, step=5.0, key="條_明年EPS成長(%) ≥")
+            if st.checkbox("排除預估分歧大的股票", key="條_排除預估分歧",
+                           help="A、B 兩個來源的今年預估差超過 30% 就排除（只有一個來源的不受影響）。"):
+                條件["排除預估分歧"] = True
+            st.caption("月營收、EPS、負債比、現金流、合約負債、預估 EPS 只有最新一期，組合回測時不會套用。")
         with 格[1].container(border=True):
             st.markdown("**籌碼面**")
             if st.checkbox("外資連續買超", key="條_外資連續買超"):

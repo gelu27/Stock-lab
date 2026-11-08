@@ -33,3 +33,5 @@ jobs:
         run: python tests/test_ai_card.py
       - name: 止跌與抄底工具
         run: python tests/test_dip_tools.py
+      - name: 預估 EPS（三源）與預估本益比
+        run: python tests/test_forecast.py
