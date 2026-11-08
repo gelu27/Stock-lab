@@ -1,4 +1,4 @@
-streamlit
+streamlit>=1.67  # 分頁只算打開的（st.tabs on_change）、站內導航元件（components.v2）需要
 pandas
 numpy
 plotly
