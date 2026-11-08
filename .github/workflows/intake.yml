@@ -22,14 +22,14 @@ concurrency: intake
 jobs:
   intake:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: pip install pandas numpy requests pyarrow pypinyin
-      - run: python auto_intake.py ${{ github.event.inputs.mode || 'all' }}
+      - run: python -u auto_intake.py ${{ github.event.inputs.mode || 'all' }}
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
