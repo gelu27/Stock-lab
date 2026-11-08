@@ -1014,7 +1014,7 @@ def 抓期貨保證金():
 
 美股代號 = {"^SOX": "費城半導體", "^IXIC": "那斯達克", "^GSPC": "S&P 500", "^DJI": "道瓊", "^VIX": "VIX",
           "TSM": "台積電 ADR", "NVDA": "輝達", "AAPL": "蘋果", "AMD": "超微", "AVGO": "博通", "MU": "美光",
-          "TSLA": "特斯拉", "^N225": "日經 225", "^KS11": "韓國綜合", "LITE": "Lumentum",
+          "TSLA": "特斯拉", "^N225": "日經 225", "^KS11": "韓國綜合", "LITE": "Lumentum", "COHR": "Coherent",
           # 全球風險燈（總經區塊）
           "DX-Y.NYB": "美元指數", "CL=F": "原油", "HYG": "高收益債 HYG", "^TNX": "美債10年殖利率",
           # 財報關注的其他龍頭（美股財報 → 台股隔日反應用）
@@ -1024,7 +1024,7 @@ def 抓期貨保證金():
 財報關注 = {"NVDA": "輝達", "AAPL": "蘋果", "MSFT": "微軟", "GOOGL": "Alphabet", "AMZN": "亞馬遜", "META": "Meta",
           "TSLA": "特斯拉", "AMD": "超微", "AVGO": "博通", "MU": "美光", "QCOM": "高通", "INTC": "英特爾",
           "AMAT": "應用材料", "LRCX": "科林研發", "KLAC": "科磊", "ASML": "艾司摩爾", "TSM": "台積電 ADR",
-          "SMCI": "美超微", "DELL": "戴爾", "HPE": "慧與", "ORCL": "甲骨文", "ARM": "安謀", "MRVL": "邁威爾",
+          "SMCI": "美超微", "DELL": "戴爾", "HPE": "慧與", "ORCL": "甲骨文", "ARM": "安謀", "MRVL": "邁威爾", "LITE": "Lumentum", "COHR": "Coherent",
           "CSCO": "思科", "ANET": "Arista", "TXN": "德州儀器", "NXPI": "恩智浦", "ON": "安森美", "WDC": "威騰"}
 
 
