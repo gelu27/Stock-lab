@@ -23,6 +23,8 @@ jobs:
         run: python tests/test_pages.py
       - name: 網站錯誤通知不重複推播
         run: python tests/test_error_notify.py
+      - name: 止跌訊號（指數 vs 融資、借券、賣壓消散、破低不破）
+        run: python tests/test_bottom_signals.py
       - name: 融資成本估算
         run: python tests/test_margin.py
       - name: 面額分割換算
