@@ -1907,17 +1907,17 @@ Gemini備用模型 = ["gemini-flash-latest", "gemini-3.5-flash", "gemini-flash-l
 Gemini本次呼叫 = {"成功": 0, "失敗": 0}   # 這個程序裡呼叫 Gemini 的次數，排程結束時寫進 ai_usage.json
 
 
-def Gemini呼叫(內容, api_key, 模型="gemini-flash-latest", 每個試幾次=2):
+def Gemini呼叫(內容, api_key, 模型="gemini-flash-latest", 每個試幾次=2, 逾時=180, 換模型=True):
     """呼叫 Gemini；遇到「忙線」(500/503/504) 或逾時會稍等重試，還是不行就換備用模型。回傳 (回應, 實際模型)。"""
     import time
     import requests
 
     最後錯誤 = None
-    for m in dict.fromkeys([模型] + Gemini備用模型):
+    for m in dict.fromkeys([模型] + (Gemini備用模型 if 換模型 else [])):
         網址 = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent"
         for 次 in range(每個試幾次):
             try:
-                回應 = requests.post(網址, headers={"x-goog-api-key": api_key}, json=內容, timeout=180)
+                回應 = requests.post(網址, headers={"x-goog-api-key": api_key}, json=內容, timeout=逾時)
             except requests.RequestException as 錯:
                 最後錯誤 = f"連線逾時或中斷（{type(錯).__name__}）"
                 time.sleep(3)

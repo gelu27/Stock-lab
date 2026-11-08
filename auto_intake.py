@@ -11,6 +11,7 @@ import datetime as dt
 import os
 import re
 import sys
+import time
 import traceback
 import urllib.parse
 
@@ -20,6 +21,8 @@ import engine
 
 台北 = dt.timezone(dt.timedelta(hours=8))
 倉庫 = os.environ.get("GITHUB_REPOSITORY", "gelu27/Stock-lab")
+影片時限秒 = 18 * 60   # 超過這個時間就不再開始新的影片，剩下的下次再做（workflow 上限 30 分鐘）
+sys.stdout.reconfigure(line_buffering=True)   # Actions 上才看得到即時進度
 
 # 與 views/p04_screener.py 的「網紅指令」相同（網站解析器 engine.解析影片整理 吃這個格式）
 網紅指令 = ("請用繁體中文完整整理這支影片，不要只寫摘要，也不要加入你自己的看法。\n"
@@ -96,7 +99,7 @@ def 收影片(設):
         print("沒有 GEMINI_API_KEY，略過影片")
         return 0, 0
     表, 已看影片, 已看檔 = _已看(設)
-    待 = 影片清單(設, 已看影片)[: int(os.environ.get("INTAKE_MAX") or 10)]
+    待 = 影片清單(設, 已看影片)[: int(os.environ.get("INTAKE_MAX") or 6)]
     print(f"待處理影片 {len(待)} 支")
     if not 待:
         return 0, 0
@@ -105,14 +108,20 @@ def 收影片(設):
     名稱表 = dict(zip(今["name"], 今["code"]))
     名表 = dict(zip(今["code"], 今["name"]))
     模型 = 設.get("GEMINI_MODEL") or "gemini-flash-latest"
-    新, 失敗 = [], 0
+    新, 失敗, 開始 = [], 0, time.time()
     for vid, 網址, 標題, 日期 in 待:
+        if time.time() - 開始 > 影片時限秒:
+            print("已超過時間上限，剩下的影片下次再處理")
+            break
         if not _額度夠(設, "影片"):
             break
+        t0 = time.time()
+        print(f"處理 {網址} {標題}", flush=True)
         try:
             內容 = {"contents": [{"role": "user", "parts": [{"file_data": {"file_uri": 網址}}, {"text": 網紅指令}]}],
                   "generationConfig": {"temperature": 0.2, "maxOutputTokens": 12000}}
-            回應, _ = engine.Gemini呼叫(內容, 金鑰, 模型)
+            # 影片很長，只試一次、不換模型（失敗就等下次，避免整個排程卡住）
+            回應, _ = engine.Gemini呼叫(內容, 金鑰, 模型, 每個試幾次=1, 逾時=300, 換模型=False)
             候選 = (回應.json().get("candidates") or [{}])[0]
             文字 = "".join(p.get("text", "") for p in (候選.get("content") or {}).get("parts", [])).strip()
             v = engine.解析影片整理(文字, 名稱表)
@@ -124,14 +133,15 @@ def 收影片(設):
             v["查核"] = engine.初步查核網紅(v, 名表)
             新.append(v)
             已看影片.add(vid)
+            # 每支做完就存檔：中途被截斷也不會白做
+            engine.儲存網紅說法(設, engine.合併網紅說法(engine.讀取網紅說法(設), [v]))
+            表["影片"] = sorted(已看影片)[-500:]
+            engine.儲存設定檔(設, "intake_seen.json", 表, f"自動收件：影片 {vid}")
+            print(f"  完成（{time.time() - t0:.0f} 秒，{len(v['股票'])} 檔股票）", flush=True)
         except Exception as e:
             失敗 += 1
-            print(f"影片 {網址} 失敗：{e!r}")
-            traceback.print_exc()
-    if 新:
-        engine.儲存網紅說法(設, engine.合併網紅說法(engine.讀取網紅說法(設), 新))
-        表["影片"] = sorted(已看影片)[-500:]
-        engine.儲存設定檔(設, "intake_seen.json", 表, f"自動收件：影片 {len(新)} 支")
+            print(f"  失敗（{time.time() - t0:.0f} 秒）：{e!r}", flush=True)
+    if 新 or 失敗:
         旗 = [f"{v['頻道']} {v['日期']}：" + "；".join(v["查核"]) for v in 新 if v["查核"]]
         _通知(f"🎬 自動收到 {len(新)} 支網紅影片摘要" + (f"（{失敗} 支失敗）" if 失敗 else "")
             + ("\n🚩 初步查核：\n" + "\n".join(旗) if 旗 else ""))
