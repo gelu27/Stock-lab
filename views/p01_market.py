@@ -481,6 +481,7 @@ def 資金面區():
     融資洗盤區(洗)
     融資減幅比區(洗)
     恐慌日區(洗)
+    正2融資區(每日, 洗)
     日 = 每日.index.strftime("%m/%d")
     圖 = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.06,
                        subplot_titles=("上漲家數 − 下跌家數", "上市融資維持率（%）", "外資台指期淨未平倉（口）"))
@@ -497,6 +498,75 @@ def 資金面區():
     st.caption("融資維持率 = 上市股票融資市值 ÷ 融資金額，意思見上方「ℹ️ 融資維持率是什麼」。"
                "外資淨未平倉 = 外資台指期（大台）多單減空單，負的代表偏空避險。")
     槓桿趨勢()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def 正2融資資料(版本鍵):
+    return engine.正2融資明細(engine.讀取資料庫(代號=list(engine.台股正2)))
+
+
+def 正2融資區(每日, 洗):
+    """槓桿 ETF 融資追蹤（建議 1）、正2 融資維持率估算（建議 2）、「大盤洗融資、正2 加碼」背離回測（建議 4）。"""
+    天, 檔們 = 正2融資資料(_版本)
+    if 天 is None or not len(天) or not 檔們:
+        return
+    st.markdown("**🎢 正2 融資追蹤：散戶用融資買槓桿 ETF 有多少？**")
+    最 = 天.iloc[-1]
+    金額 = engine.讀取融資金額()
+    佔 = None
+    if 金額 is not None and 天.index[-1] in 金額.index and 金額.loc[天.index[-1]] > 0:
+        佔 = 最["估借款億"] / (金額.loc[天.index[-1]] * 1000 / 1e8) * 100
+    最長 = max(檔們, key=lambda r: r["連增天數"])
+    卡們 = [卡片(f"4 檔台股正2 融資市值 · {天.index[-1]:%m/%d}", f"{最['融資市值億']:,.0f} 億",
+                 f"單日 {最['單日增減億']:+.1f} 億；估借款 {最['估借款億']:,.0f} 億"
+                 + (f"，只佔上市融資金額 {佔:.1f}%" if 佔 is not None else ""), "#EDEDED"),
+            卡片(f"{最長['代號']} 融資連增", f"{最長['連增天數']} 天",
+                 f"今天 {最長['單日增減張'] or 0:+,} 張（約 {(最長['單日增減張'] or 0) * 最長['收盤'] / 1e5:+.1f} 億元）",
+                 "#FFB020" if 最長["連增天數"] >= 10 else "#EDEDED")]
+    維 = 最["估維持率"]
+    差 = 維 - 天["估維持率"].iloc[-2] if len(天) >= 2 else np.nan
+    if 維 >= 130:
+        小 = f"大盤再跌約 {(1 - 130 / 維) * 50:.1f}% 平均就到 130% 追繳線"
+    else:
+        小 = "平均已低於 130% 追繳線，高檔買的多半已被追繳"
+    卡們.append(卡片("正2 融資估維持率（4 檔合計）", f"{維:.0f}%",
+                   ("" if pd.isna(差) else f"較前一日 {差:+.1f}　") + 小, 維持率等級(維)[1]))
+    背 = engine.今日正2背離(每日["融資變化%"].dropna() if "融資變化%" in 每日 else None, 天)
+    回 = (洗 or {}).get("正2背離") or {}
+    統 = {r["天數"]: r for r in 回.get("統計", [])}
+    if 背:
+        是, 大, 正 = 背
+        r60 = 統.get(60)
+        卡們.append(卡片("大盤洗融資、正2 加碼？", "🔪 背離" if 是 else "—",
+                       f"大盤融資 {大:+.2f}%、正2 融資 {正:+.2f}%"
+                       + (f"；過去 {r60['次數']} 次 60 日後平均 {r60['平均%']:+.1f}%（一般日子 {r60['基準平均%']:+.1f}%）"
+                          if r60 and r60.get("次數") else ""), "#FFB020" if 是 else "#EDEDED"))
+    卡片格(卡們)
+    with st.expander("📋 正2 融資明細與「接刀」回測"):
+        表格(pd.DataFrame([{"代號": r["代號"], "名稱": r["名稱"], "融資(張)": r["融資張數"], "單日增減(張)": r["單日增減張"],
+                            "連增天數": r["連增天數"], "收盤": r["收盤"], "融資市值(億)": r["融資市值億"], "估成本": r["估成本"],
+                            "估維持率%": r["估維持率"]} for r in 檔們]),
+             hide_index=True, width="stretch",
+             column_config={"收盤": st.column_config.NumberColumn(format="%.2f"),
+                            "單日增減(張)": st.column_config.NumberColumn(format="%+d")})
+        st.caption("張數看起來很大，是因為 00631L（2026-03-31 一拆 22）、00685L（2026-07-07 一拆 25）分割過，一張只值幾千到兩萬多元；"
+                   "要看金額。融資自備四成 → 2.5 倍，再乘正2 的 2 倍＝買進當下約 5 倍曝險；大盤跌約 11%，正2 跌約 22%，"
+                   "自備款虧掉一半多，維持率剛好到 130%。估成本：融資增加的張數用當天收盤計入，減少時成本不變，"
+                   "可能高估維持率幾個百分點；追繳看的是整戶維持率，不是單一檔。")
+        if 回.get("統計"):
+            st.markdown(f"**大盤融資單日減 ≥ {abs(回['大盤門檻'])}%、正2 融資同日增 ≥ {回['正2門檻']:g}% 之後，加權怎麼走？**")
+            表格(pd.DataFrame([{"天數": f"{r['天數']} 日後", "次數": r["次數"], "上漲機率%": r["上漲機率%"], "平均%": r["平均%"],
+                                "一般日子上漲機率%": r["基準上漲機率%"], "一般日子平均%": r["基準平均%"]} for r in 回["統計"]]),
+                 hide_index=True, width="stretch",
+                 column_config={c: st.column_config.NumberColumn(format="%+.2f") for c in ("平均%", "一般日子平均%")})
+            事 = pd.DataFrame(回.get("事件", []))
+            if len(事):
+                表格(事.iloc[::-1].rename(columns={"date": "日期"}), hide_index=True, width="stretch")
+            st.caption("常見說法：大盤融資斷頭、正2 融資卻逆勢大增，是散戶「接刀」、之後會再崩。"
+                       f"資料 {洗.get('起')}～{洗.get('迄')}，同一段 14 天內只算第一次。2026-11 實測：這種背離不是少見的異象，"
+                       "之後 20、60 日加權都不比一般日子差；但 2022 空頭年 6 次裡有 3 次 60 日後還在跌。只是參考，不是買賣訊號。")
+        else:
+            st.caption("背離回測還沒算好（GitHub Actions 每月重算時會補上）。")
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -687,6 +757,26 @@ def 槓桿趨勢():
     if 燈列:
         表格(pd.DataFrame(燈列), hide_index=True, width="stretch",
              column_config={c: st.column_config.NumberColumn(format="%+d") for c in ("淨未平倉(口)", "較前日(口)", "近 5 日(口)")})
+    對 = engine.期貨多空對手(讀檔("讀取期貨未平倉", _版本))
+    if 對:
+        卡片格([卡片(f"外資淨空 ÷ 投信淨多 · {對['日期']:%m/%d}", f"{對['最新']:.2f} 倍",
+                     f"{對['燈']} {對['說明']}；外資 {對['外資']:+,} 口、投信 {對['投信']:+,} 口；平常 {對['低']}～{對['高']} 倍（中位 {對['中位']}）",
+                     "#FFB020" if 對["燈"] == "🟡" else "#EDEDED")])
+        with st.expander("🤝 期貨多空對手方：外資空單創新高，是外資在大舉作空嗎？"):
+            s = 對["序列"]
+            圖 = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08,
+                               subplot_titles=("外資淨空單 vs 投信淨多單（口）", "外資淨空 ÷ 投信淨多（倍）"))
+            期 = 讀檔("讀取期貨未平倉", _版本).reindex(s.index)
+            圖.add_trace(go.Scatter(x=s.index, y=-期["foreign_oi"], mode="lines", line=dict(color="#4DA3FF", width=2), name="外資淨空"), 1, 1)
+            圖.add_trace(go.Scatter(x=s.index, y=期["trust_oi"], mode="lines", line=dict(color="#FF00E5", width=2), name="投信淨多"), 1, 1)
+            圖.add_trace(go.Scatter(x=s.index, y=s, mode="lines", line=dict(color="#FFB020", width=2), name="比值"), 2, 1)
+            圖.add_hline(y=對["中位"], line=dict(color=灰, dash="dot"), row=2, col=1)
+            圖.update_annotations(font=dict(size=11, color=灰), x=0, xanchor="left")
+            圖表外觀(圖, 420).update_layout(legend=dict(orientation="h", y=-0.1, x=0))
+            st.plotly_chart(圖, width="stretch")
+            st.caption("期貨是零和：有人做多就有人做空。投信的台指期多單主要是正2 ETF 的期貨部位，一年多從 2 萬口長到 9 萬口，"
+                       "外資空單跟著同步變大（一部分是對手方、一部分是替手上台股現貨避險）。所以「外資空單歷史新高」在正2 變大以後會一直出現，"
+                       "比較有用的是看比值：比值高於平常（黃燈）才代表外資空得比正2 對手方更多。每天的增減兩者並不同步，外資仍有自己的方向。")
     夜 = 夜盤法人資料(_版本)
     if 夜 is not None and len(夜):
         最 = 夜["date"].max()

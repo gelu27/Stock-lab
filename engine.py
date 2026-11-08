@@ -7370,7 +7370,8 @@ def 更新大盤融資洗盤(強制=False, 間隔天數=25):
     檔 = 資料夾 / "margin_flush.json"
     if 檔.exists() and not 強制:
         舊 = json.loads(檔.read_text())
-        if (pd.Timestamp.now() - pd.Timestamp(舊.get("計算日", "2000-01-01"))).days < 間隔天數 and "恐慌日" in 舊:
+        if (pd.Timestamp.now() - pd.Timestamp(舊.get("計算日", "2000-01-01"))).days < 間隔天數 and "恐慌日" in 舊 \
+                and "正2背離" in 舊:
             print("大盤融資洗盤：還不用重算")
             return
     表 = 讀取資料庫()
@@ -7384,6 +7385,8 @@ def 更新大盤融資洗盤(強制=False, 間隔天數=25):
             "洗盤": 融資洗盤統計(變, K, -1.5), "大洗盤": 融資洗盤統計(變, K, -2.5),
             "減幅比": 融資減幅比回測(融資減幅比序列(變, K), K),
             "恐慌日": 恐慌日統計(K, 變)}
+    正2每日, _ = 正2融資明細(讀取資料庫(代號=list(台股正2)))
+    結果["正2背離"] = 正2背離統計(變, 正2每日, K)
     檔.write_text(json.dumps(結果, ensure_ascii=False, indent=1))
     print(f"大盤融資洗盤：{結果['洗盤']['次數']} 次（≤ −1.5%）")
 
@@ -8403,3 +8406,130 @@ def 讀取說法查核():
     if not f.exists():
         return pd.DataFrame(columns=["來源", "日期", "編號", "說法", "查到的事實", "判定"])
     return pd.read_csv(f, dtype=str).fillna("")
+
+
+# ========== 正2 融資斷頭論述（2026-11-08）：槓桿 ETF 融資追蹤、正2 融資維持率估算、期貨多空對手方、背離回測 ==========
+台股正2 = {"00631L": "元大台灣50正2", "00685L": "群益臺灣加權正2", "00663L": "國泰臺灣加權正2", "00675L": "富邦臺灣加權正2"}
+
+
+def 正2融資明細(表):
+    """台股 4 檔正2 每天的融資：表要有 code、date、close、margin（讀取資料庫(代號=台股正2) 即可）。
+    回傳 (每日, 每檔最新)：
+    每日（index＝date）：融資市值億、估借款億、單日增減億（張數變化 × 收盤）、估維持率；
+    每檔最新（list of dict）：代號、名稱、日期、融資張數、單日增減張、連增天數、收盤、融資市值億、估成本、估維持率、到130%大盤再跌%。
+    估成本：融資增加的張數以當天收盤計入加權平均成本（同 融資成本估算），面額分割（00631L 2026-03-31、00685L 2026-07-07）
+    從收盤跳動自動換算。融資成數 60%。維持率 ＝ 收盤 ÷（成本 × 60%）。"""
+    if 表 is None or not len(表) or "margin" not in 表:
+        return pd.DataFrame(), []
+    t = 表[表["code"].isin(list(台股正2))][["code", "date", "close", "margin"]].copy()
+    t = t.dropna(subset=["close"]).sort_values(["code", "date"], ignore_index=True)
+    if t.empty:
+        return pd.DataFrame(), []
+    t["close"] = t["close"].astype("float64")
+    t["margin"] = t["margin"].astype("float64")
+    比 = t["close"] / t.groupby("code")["close"].shift()
+    報 = (比 - 1).where((比 > 0.6) & (比 < 1.4), 0.0).fillna(0.0)   # 跳太多＝分割，報酬設 0 讓成本跟著換算
+    t["成本"] = 融資成本估算(t["code"].to_numpy(), t["close"].to_numpy(), 報.to_numpy(), t["margin"].to_numpy())
+    前 = t.groupby("code")["margin"].shift()
+    分割 = (比 <= 0.6) | (比 >= 1.4)
+    t["增減張"] = (t["margin"] - 前).where(~分割)
+    t["市值"] = t["margin"] * 1000 * t["close"] / 1e8
+    t["借款"] = t["margin"] * 1000 * t["成本"] * 0.6 / 1e8
+    t["增減億"] = t["增減張"] * 1000 * t["close"] / 1e8
+    群 = t.groupby("date")
+    每日 = pd.DataFrame({"融資市值億": 群["市值"].sum(min_count=1), "估借款億": 群["借款"].sum(min_count=1),
+                         "單日增減億": 群["增減億"].sum(min_count=1)})
+    每日["估維持率"] = (每日["融資市值億"] / 每日["估借款億"] * 100).round(1)
+    每檔 = []
+    for c, g in t.groupby("code"):
+        g = g.dropna(subset=["margin"])
+        if g.empty:
+            continue
+        x = g.iloc[-1]
+        連 = 0
+        for v in g["增減張"].iloc[1:][::-1]:
+            if pd.isna(v):          # 分割那天不算增減，也不打斷連增
+                continue
+            if v > 0:
+                連 += 1
+            else:
+                break
+        維 = x["close"] / (x["成本"] * 0.6) * 100 if x["成本"] > 0 else np.nan
+        每檔.append({"代號": c, "名稱": 台股正2[c], "日期": x["date"], "融資張數": int(x["margin"]),
+                     "單日增減張": None if pd.isna(x["增減張"]) else int(x["增減張"]), "連增天數": 連,
+                     "收盤": float(x["close"]), "融資市值億": round(float(x["市值"]), 1),
+                     "估成本": round(float(x["成本"]), 2), "估維持率": round(float(維), 1),
+                     "到130%大盤再跌%": round(float(min(0.0, 130 / 維 - 1) * 50), 1) if 維 == 維 else np.nan})
+    return 每日.round(2), sorted(每檔, key=lambda r: -r["融資市值億"])
+
+
+def 期貨多空對手(期):
+    """外資台指期淨空單 ÷ 投信淨多單。投信多單主要是正2 ETF 的期貨部位，外資空單有一大塊是它的對手方或現貨避險；
+    比值在平常水準時，外資空單創新高多半只是正2 規模變大。期：讀取期貨未平倉()。
+    回傳 dict(序列, 最新, 中位, 低, 高, 燈, 說明) 或 None。"""
+    if 期 is None or "foreign_oi" not in 期 or "trust_oi" not in 期:
+        return None
+    d = 期[["foreign_oi", "trust_oi"]].dropna()
+    d = d[d["trust_oi"] > 1000]
+    if len(d) < 20:
+        return None
+    s = (-d["foreign_oi"] / d["trust_oi"]).round(2)
+    中, 低, 高 = float(s.median()), float(s.quantile(0.1)), float(s.quantile(0.9))
+    v = float(s.iloc[-1])
+    if v > 高:
+        燈, 話 = "🟡", "外資空單明顯多於投信多單，超出正2 對手方的部分偏多，外資比平常更偏空"
+    elif v < 低:
+        燈, 話 = "🟢", "外資空單少於平常比例，偏空力道比數字看起來小"
+    else:
+        燈, 話 = "⚪", "比例在平常範圍：外資空單變大主要是跟著正2 期貨多單一起變大，不能單看口數說外資大舉作空"
+    return {"序列": s, "最新": v, "中位": round(中, 2), "低": round(低, 2), "高": round(高, 2), "燈": 燈, "說明": 話,
+            "外資": int(d["foreign_oi"].iloc[-1]), "投信": int(d["trust_oi"].iloc[-1]), "日期": d.index[-1]}
+
+
+def 正2背離統計(變, 正2每日, K, 大盤門檻=-1.5, 正2門檻=3.0, 間隔天數=14, 天數=(5, 20, 60)):
+    """「大盤融資單日減 ≥ 1.5%，正2 融資同日增 ≥ 3%」（散戶在大盤洗融資時用融資接正2）之後加權的漲跌，
+    對照任何一天買進。變：大盤融資變化()（%）；正2每日：正2融資明細() 的每日（要有 單日增減億、融資市值億）。
+    2026-11 實測（2021-11～2026-11）：18 次，20 日 +2.8%、60 日 +9.8%，都不比一般日子差，不是崩盤前兆。"""
+    if 正2每日 is None or not len(正2每日) or K is None:
+        return None
+    前市值 = 正2每日["融資市值億"].shift()
+    正2變 = (正2每日["單日增減億"] / 前市值.where(前市值 > 0) * 100)
+    d = pd.DataFrame({"大盤": 變, "正2": 正2變}).dropna()
+    條件 = d[(d["大盤"] <= 大盤門檻) & (d["正2"] >= 正2門檻)]
+    c = K.set_index("date")["close"].astype(float)
+    事件, 上次 = [], None
+    for 日, r in 條件.iterrows():
+        if 日 not in c.index:
+            continue
+        if 上次 is None or (日 - 上次).days > 間隔天數:
+            事件.append((日, r))
+            上次 = 日
+    統計 = []
+    for n in 天數:
+        後 = (c.shift(-n) / c - 1) * 100
+        x = 後.reindex([e[0] for e in 事件]).dropna()
+        基 = 後.loc[c.index >= d.index.min()].dropna()
+        統計.append({"天數": n, "次數": int(len(x)), "平均%": round(float(x.mean()), 2) if len(x) else None,
+                     "上漲機率%": round(float((x > 0).mean() * 100)) if len(x) else None,
+                     "基準平均%": round(float(基.mean()), 2), "基準上漲機率%": round(float((基 > 0).mean() * 100))})
+    列 = []
+    for 日, r in 事件:
+        項 = {"date": f"{日:%Y-%m-%d}", "大盤融資%": round(float(r["大盤"]), 2), "正2融資%": round(float(r["正2"]), 2)}
+        for n in 天數:
+            i = c.index.get_loc(日)
+            項[f"{n}日後%"] = round(float((c.iloc[i + n] / c.iloc[i] - 1) * 100), 1) if i + n < len(c) else None
+        列.append(項)
+    return {"大盤門檻": 大盤門檻, "正2門檻": 正2門檻, "次數": len(事件), "統計": 統計, "事件": 列}
+
+
+def 今日正2背離(大盤變化, 正2每日, 大盤門檻=-1.5, 正2門檻=3.0):
+    """最新一天是不是「大盤洗融資、正2 融資逆勢增」。回傳 (是否, 大盤%, 正2%) 或 None。"""
+    if 正2每日 is None or len(正2每日) < 2 or 大盤變化 is None or not len(大盤變化):
+        return None
+    日 = 正2每日.index[-1]
+    if 日 not in 大盤變化.index:
+        return None
+    前 = 正2每日["融資市值億"].iloc[-2]
+    正 = float(正2每日["單日增減億"].iloc[-1] / 前 * 100) if 前 > 0 and pd.notna(正2每日["單日增減億"].iloc[-1]) else np.nan
+    大 = float(大盤變化.loc[日])
+    return (大 <= 大盤門檻 and 正 >= 正2門檻), round(大, 2), round(正, 2)
