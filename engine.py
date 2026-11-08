@@ -1907,7 +1907,7 @@ Gemini備用模型 = ["gemini-flash-latest", "gemini-3.5-flash", "gemini-flash-l
 Gemini本次呼叫 = {"成功": 0, "失敗": 0}   # 這個程序裡呼叫 Gemini 的次數，排程結束時寫進 ai_usage.json
 
 
-def Gemini呼叫(內容, api_key, 模型="gemini-flash-latest", 每個試幾次=2, 逾時=180, 換模型=True):
+def Gemini呼叫(內容, api_key, 模型="gemini-flash-latest", 每個試幾次=2, 逾時=180, 換模型=True, 等429秒=0):
     """呼叫 Gemini；遇到「忙線」(500/503/504) 或逾時會稍等重試，還是不行就換備用模型。回傳 (回應, 實際模型)。"""
     import time
     import requests
@@ -1931,7 +1931,10 @@ def Gemini呼叫(內容, api_key, 模型="gemini-flash-latest", 每個試幾次=
             except Exception:
                 訊息 = 回應.text[:200]
             if 回應.status_code == 429:
-                最後錯誤 = "今天的 Gemini 免費額度用完了，明天再試。"
+                最後錯誤 = "Gemini 額度或每分鐘字數上限用完了（免費額度對長影片很容易超過，可到 Google AI Studio 開啟付費）。"
+                if 等429秒 and 次 + 1 < 每個試幾次:
+                    time.sleep(等429秒)   # 可能只是「每分鐘」上限，等一下再試
+                    continue
                 break  # 這個模型額度用完，換下一個
             if 回應.status_code in (500, 503, 504):
                 最後錯誤 = "Gemini 目前使用的人太多（忙線），已自動重試和換模型仍失敗，請過幾分鐘再按一次。"
