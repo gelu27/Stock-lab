@@ -31,3 +31,5 @@ jobs:
         run: python tests/test_news_tools.py
       - name: AI 報告 json 拆解與目標價檢查
         run: python tests/test_ai_card.py
+      - name: 止跌與抄底工具
+        run: python tests/test_dip_tools.py
