@@ -90,7 +90,10 @@ def 影片清單(設, 已看影片, 天數=3):
         m = re.search(r"(?:v=|youtu\.be/|shorts/)([\w-]{11})", u)
         if m:
             結果.setdefault(m.group(1), (m.group(1), f"https://www.youtube.com/watch?v={m.group(1)}", "", ""))
-    return [v for k, v in 結果.items() if k not in 已看影片]
+    略過 = [k for k in (來源.get("略過關鍵字") or ["直播"]) if k]   # 直播常常好幾個小時，額度吃不消
+    def 要處理(v):
+        return v[0] not in 已看影片 and not any(k in v[2] for k in 略過)
+    return [v for v in 結果.values() if 要處理(v)]
 
 
 def 收影片(設):
@@ -99,7 +102,7 @@ def 收影片(設):
         print("沒有 GEMINI_API_KEY，略過影片")
         return 0, 0
     表, 已看影片, 已看檔 = _已看(設)
-    待 = 影片清單(設, 已看影片)[: int(os.environ.get("INTAKE_MAX") or 6)]
+    待 = 影片清單(設, 已看影片)[: int(os.environ.get("INTAKE_MAX") or 4)]
     print(f"待處理影片 {len(待)} 支")
     if not 待:
         return 0, 0
@@ -119,9 +122,10 @@ def 收影片(設):
         print(f"處理 {網址} {標題}", flush=True)
         try:
             內容 = {"contents": [{"role": "user", "parts": [{"file_data": {"file_uri": 網址}}, {"text": 網紅指令}]}],
-                  "generationConfig": {"temperature": 0.2, "maxOutputTokens": 12000}}
-            # 影片很長，只試一次、不換模型（失敗就等下次，避免整個排程卡住）
-            回應, _ = engine.Gemini呼叫(內容, 金鑰, 模型, 每個試幾次=1, 逾時=300, 換模型=False)
+                  "generationConfig": {"temperature": 0.2, "maxOutputTokens": 12000,
+                                     "mediaResolution": "MEDIA_RESOLUTION_LOW"}}   # 低解析度：影片用的字數約少 2/3，省額度
+            # 影片很長：不換模型；遇到 429（每分鐘上限）等 65 秒再試一次
+            回應, _ = engine.Gemini呼叫(內容, 金鑰, 模型, 每個試幾次=2, 逾時=240, 換模型=False, 等429秒=65)
             候選 = (回應.json().get("candidates") or [{}])[0]
             文字 = "".join(p.get("text", "") for p in (候選.get("content") or {}).get("parts", [])).strip()
             v = engine.解析影片整理(文字, 名稱表)
