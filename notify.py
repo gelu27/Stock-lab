@@ -948,6 +948,25 @@ def 網站錯誤():
     return [f"{v['頁面']}：{v['類型']} {v['訊息'][:80]}（{v.get('位置', '')}，共 {v['次數']} 次，最近 {v['最近']}）" for _, v in 新]
 
 
+def 主動ETF月報(迄):
+    """上個月、今年以來，主動式 ETF 對同 beta 組合（台股型＝0050＋正 2）的超額前 3、後 3 名。"""
+    import engine
+    import etf_perf
+    月起 = (迄.replace(day=1) - pd.DateOffset(months=1)).normalize()
+    月迄 = 迄.replace(day=1) - pd.Timedelta(days=1)
+    年起 = pd.Timestamp(f"{月迄.year}-01-01")
+    原始 = engine.讀取資料庫(起日=min(年起, 月起) - pd.Timedelta(days=30))
+    指標 = engine.計算指標(原始)
+    del 原始
+    主 = etf_perf.主動式代號(指標["code"].unique())
+    寬 = etf_perf.報酬寬表(指標, 主 + ["0050", etf_perf.正2代號] + sorted(set(etf_perf.基準名) - {"0050"}))
+    名 = 指標.drop_duplicates("code", keep="last").set_index("code")["名稱"].str.replace("主動", "", regex=False).to_dict()
+    行們 = etf_perf.月報文字(寬, 主, 月起, 月迄, 年起, 名)
+    if 行們:
+        行們[1] = 行們[1].replace("📊 主動式 ETF", f"📊 主動式 ETF {月起:%m} 月報")
+    return 行們
+
+
 def 週報():
     """這週（最近 5 個交易日）的大盤、庫存、自選股表現，主動式 ETF 一週加減碼，下週日程。"""
     import engine
@@ -1005,6 +1024,12 @@ def 週報():
                     "減碼：" + "、".join(f"{c} {r['名稱']} {r['金額'] / 1e8:+.1f} 億" for c, r in 減.iterrows() if r["金額"] < 0)]
     except Exception as e:
         print("ETF 週統計失敗：", repr(e))
+
+    if 迄.day <= 7 or os.environ.get("ETF_MONTHLY") == "1":   # 每月第一份週報附上個月主動式 ETF 績效（月報）
+        try:
+            行們 += 主動ETF月報(迄)
+        except Exception as e:
+            print("主動式 ETF 月報失敗：", repr(e))
 
     日程 = engine.重要日程(set(庫存們 + 自選們), 天數=9)
     if len(日程):
