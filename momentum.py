@@ -240,3 +240,72 @@ def 今日訊號(t, 最新日, 加權=None):
     """全市場最新一天的動能表（每檔一列）與各訊號遮罩。t＝加上動能欄位() 的結果。"""
     今 = t[t["date"] == 最新日].copy()
     return 今, 訊號遮罩(今, 大盤回檔序列(加權, 今["date"]))
+
+
+# ---------- 族群輪動：龍頭領漲期 vs 二線補漲期 ----------
+階段順序 = {"龍頭領漲期": 0, "二線補漲期": 1, "全面上攻": 2, "整理": 3, "退潮": 4}
+
+
+def 族群輪動階段(來源, 最少檔數=6):
+    """來源＝今日資料（或 概念展開 後的表，產業欄＝族群）。每個族群市值前 3 大當龍頭，其餘當二線：
+    龍頭 20 日漲 ≥ 8% 且贏二線 5 個百分點以上、近 5 日仍領先 → 龍頭領漲期；
+    龍頭 20 日已漲 ≥ 5%、但近 5 日二線比龍頭多漲 2 個百分點以上 → 二線補漲期（資金往落後股擴散，通常是中後段）；
+    龍頭、二線 20 日都漲 ≥ 8% 且差距小 → 全面上攻；兩邊 20 日都跌 3% 以上 → 退潮；其他 → 整理。"""
+    t = 來源[(來源["收盤"] > 0) & ~來源["代號"].astype(str).str.startswith("00")].copy()
+    if "發行股數" not in t:
+        return pd.DataFrame()
+    t["市值"] = t["收盤"] * t["發行股數"]
+    列們 = []
+    for 群, g in t.dropna(subset=["市值", "20日漲幅", "5日漲幅"]).groupby("產業"):
+        if not 群 or len(g) < 最少檔數:
+            continue
+        g = g.sort_values("市值", ascending=False)
+        龍, 二 = g.head(3), g.iloc[3:]
+        L20, O20 = float(龍["20日漲幅"].mean()), float(二["20日漲幅"].median())
+        L5, O5 = float(龍["5日漲幅"].mean()), float(二["5日漲幅"].median())
+        if L20 >= 8 and O20 >= 8 and abs(L20 - O20) < 5:
+            階 = "全面上攻"
+        elif L20 >= 8 and L20 - O20 >= 5 and L5 >= O5:
+            階 = "龍頭領漲期"
+        elif L20 >= 5 and O5 - L5 >= 2:
+            階 = "二線補漲期"
+        elif L20 <= -3 and O20 <= -3:
+            階 = "退潮"
+        else:
+            階 = "整理"
+        列們.append({"族群": 群, "階段": 階, "龍頭": "、".join(f"{c} {n}" for c, n in zip(龍["代號"], 龍["名稱"])),
+                   "龍頭20日%": round(L20, 1), "二線20日%": round(O20, 1), "龍頭5日%": round(L5, 1), "二線5日%": round(O5, 1),
+                   "檔數": len(g)})
+    表 = pd.DataFrame(列們)
+    if 表.empty:
+        return 表
+    return 表.sort_values(["階段", "龍頭20日%"], key=lambda s: s.map(階段順序) if s.name == "階段" else -s).reset_index(drop=True)
+
+
+# ---------- 大盤多維度資金水位 ----------
+def 資金水位(指標, 加權, vix=None):
+    """每天一個 0～100 的「市場健康分數」與建議持股水位（20%～90%）：
+    市場寬度（站上 20 日線家數比例）、騰落（近 10 日上漲減下跌家數）、加權指數相對 60 日線、VIX（越低越好）
+    各自在這段期間的百分位，平均起來。回傳 (每日表, 回測表)。回測＝分數高／中／低時，加權之後 20 日的表現。"""
+    t = 指標[["date", "代號", "還原價", "MA20", "漲跌"]].dropna(subset=["還原價"])
+    t = t[t["代號"].astype(str).str.fullmatch(r"\d{4}")]
+    日 = t.groupby("date").agg(站上月線=("還原價", lambda s: np.nan), 家數=("代號", "size"))
+    日["站上月線"] = (t["還原價"] > t["MA20"]).groupby(t["date"]).mean() * 100
+    日["淨上漲"] = ((t["漲跌"] > 0).astype(int) - (t["漲跌"] < 0).astype(int)).groupby(t["date"]).sum()
+    日["騰落10日"] = 日["淨上漲"].rolling(10, min_periods=5).sum() / 日["家數"] * 100
+    w = 加權.sort_values("date").set_index("date")["close"]
+    日["加權"] = w.reindex(日.index)
+    日["加權對季線%"] = (w / w.rolling(60, min_periods=40).mean() - 1).reindex(日.index) * 100
+    if vix is not None and len(vix):
+        v = vix.set_index("date")["close"]
+        日["VIX"] = v.reindex(日.index, method="ffill")
+    成分 = [c for c in ("站上月線", "騰落10日", "加權對季線%", "VIX") if c in 日 and 日[c].notna().any()]
+    分 = pd.concat([(日[c].rank(pct=True) if c != "VIX" else 1 - 日[c].rank(pct=True)) for c in 成分], axis=1)
+    日["分數"] = (分.mean(axis=1) * 100).round(0)
+    日["建議持股%"] = (20 + 日["分數"] * 0.7).clip(20, 90).round(-1)
+    日["之後20日%"] = (w.shift(-20) / w - 1).reindex(日.index) * 100
+    日 = 日.dropna(subset=["分數"])
+    樣 = 日.dropna(subset=["之後20日%"])
+    組 = pd.cut(樣["分數"], [-1, 35, 65, 101], labels=["低（≤35，防守）", "中（36～65）", "高（>65，積極）"])
+    回 = 樣.groupby(組, observed=False)["之後20日%"].agg(天數="size", 平均="mean", 上漲機率=lambda s: (s > 0).mean() * 100).round(1)
+    return 日.reset_index(), 回.reset_index().rename(columns={"分數": "分數區間", "平均": "加權之後20日平均%", "上漲機率": "之後20日上漲機率%"})
