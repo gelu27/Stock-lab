@@ -360,6 +360,10 @@ def 提醒事項(代號們):
     except Exception as e:
         print("興櫃承銷失敗：", repr(e))
     try:
+        行們 += 自選重訊提醒(代號們, 狀態)
+    except Exception as e:
+        print("自選重訊失敗：", repr(e))
+    try:
         行們 += 跌深融資提醒(狀態)
     except Exception as e:
         print("跌深融資提醒失敗：", repr(e))
@@ -610,6 +614,29 @@ def 興櫃承銷提醒(代號們, 狀態):
     return ["", "🌱 興櫃推薦券商／掛牌消息"] + 行們 if 行們 else []
 
 
+def 自選重訊提醒(代號們, 狀態, 上限=10):
+    """庫存、自選股近 3 天的重大訊息（公開資訊觀測站全部重訊，同一則只通知一次）。"""
+    import engine
+    訊 = engine.讀取全部重訊(天數=5)
+    if 訊 is None or not 代號們:
+        return []
+    近 = 訊[(訊["date"] >= 訊["date"].max() - pd.Timedelta(days=3)) & 訊["code"].isin(set(代號們))]
+    期限 = f"{pd.Timestamp.now() - pd.Timedelta(days=30):%Y%m%d}"
+    for k in [k for k in 狀態 if k.startswith("自選重訊_") and k.split("_")[2] < 期限]:
+        del 狀態[k]   # 一個月前的不用記了，免得狀態檔越來越大
+    行們 = []
+    for _, x in 近.sort_values(["date", "time"]).iterrows():
+        鍵 = f"自選重訊_{x['code']}_{x['date']:%Y%m%d}_{str(x['subject'])[:12]}"
+        if 狀態.get(鍵):
+            continue
+        狀態[鍵] = 1
+        行們.append(f"{x['code']} {x['name']}（{x['date']:%m/%d}）：{str(x['subject'])[:50]}")
+    if not 行們:
+        return []
+    多 = len(行們) - 上限
+    return ["", "📢 自選股重大訊息"] + 行們[:上限] + ([f"…還有 {多} 則，到網站個股頁看"] if 多 > 0 else [])
+
+
 def ETF共識提醒(代號們, 狀態, 門檻=3):
     """最新一天有 門檻 家以上主動式 ETF 一起新增／加碼的股票（每個資料日只通知一次）。"""
     import etf_data
@@ -810,9 +837,16 @@ def 健康檢查():
         return pd.read_csv(f, usecols=[欄])[欄].astype(str).max() if f.exists() else None
 
     太舊("集保股權分散（每週）", _最新檔日("tdcc"), 10)
+    # 借券賣出（TWT93U、櫃買 sbl）和融資一樣約 21:00 後才公布，18:17 更新時只會有前一個交易日，
+    # 22:23「補融資融券」會補當天的；所以落後一個交易日是正常，落後兩個交易日以上才算抓取失敗
     借 = _最新檔日("sbl")
-    if 價 and 借 and 借 < 價:
-        問題.append(f"借券賣出資料落後（最新 {借:%m/%d}，股價 {價:%m/%d}）")
+    交易日們 = sorted({pd.Timestamp(f.name[:8]).date() for f in (資料夾 / "prices").glob("*/*.csv.gz")})
+    前一交易日 = 交易日們[-2] if len(交易日們) >= 2 else 價
+    if 價 and 借 is None:
+        問題.append("沒有借券賣出資料")
+    elif 價 and 借 < 前一交易日:
+        問題.append(f"借券賣出資料落後（最新 {借:%m/%d}，股價 {價:%m/%d}；晚上 22:23 補抓也沒補到，"
+                    "可到 Actions 手動跑「補融資融券」）")
     for 名稱, 檔 in (("融資金額（融資維持率用）", "margin_total.csv"), ("外資台指期未平倉", "futures_oi.csv"),
                      ("外資持股比", "qfii.csv.gz"), ("上市個股當沖", "daytrade.csv.gz"), ("選擇權籌碼", "options_pc.csv")):
         最新 = 讀(檔, "date")

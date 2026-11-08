@@ -164,6 +164,13 @@ def 網紅說法總覽():
         表格(彙, width="stretch", column_config={"平均超額%": st.column_config.NumberColumn(format="%+.1f")})
         st.caption("超額報酬＝個股報酬減同期加權報酬。看多且贏大盤、看空且輸大盤算說對；不到 20 天的算「暫時」，不計入命中率。"
                    "中立的不算。樣本少的時候命中率只是參考。")
+    混 = engine.摘要混稿偵測(影片們)
+    if 混:
+        段落("DUPLICATE // 摘要可能重複或混稿")
+        表格(pd.DataFrame(混), hide_index=True, width="stretch",
+             column_config={"理由相似度": st.column_config.NumberColumn(format="percent")})
+        st.caption("前後 1 天內兩個不同頻道點名 3 檔以上相同股票、理由句子又很像（兩字一組重疊 55% 以上），"
+                   "可能是同一支影片整理兩次，或 Gemini 把兩支影片混在一起。這種在「被多個頻道點名」裡等於只算一次，要回去看原影片確認。")
     段落("FLAGS // 紅旗：哪些說法要打折")
     for v in 影片們:
         旗 = v.get("紅旗") or []
@@ -325,6 +332,44 @@ def 研究筆記區():
             st.rerun()
 
 
+@st.cache_data(ttl=6 * 3600, show_spinner="計算長均線（年線、月 10MA、72 週線）…")
+def 抄底名單(版本鍵, 距離上限):
+    """三條件抄底：先用今天的融資、營收篩，剩下的才讀 1 年半歷史算長均線，省時間也省記憶體。"""
+    營, _ = engine.月營收總表()
+    年增 = 營["近3月年增"].dropna().to_dict() if len(營) and "近3月年增" in 營 else {}
+    t = 今日[今日["代號"].str.fullmatch(r"\d{4}") & (今日["收盤"] > 0)]
+    洗 = t["融資洗完"].astype(bool) if "融資洗完" in t.columns else pd.Series(False, index=t.index)
+    減 = t["融資20日增減"] <= -10 if "融資20日增減" in t.columns else pd.Series(False, index=t.index)
+    t = t[(洗 | 減) & t["代號"].map(lambda c: (年增.get(c) or 0) > 0)]
+    if t.empty:
+        return pd.DataFrame(), 0
+    歷 = engine.讀取資料庫(代號=t["代號"].tolist(), 起日=最新日 - pd.Timedelta(days=560))
+    if 歷 is None:
+        return pd.DataFrame(), len(t)
+    距 = engine.長均線距離(歷)
+    del 歷
+    return engine.抄底三條件(t, 距, 年增, 距離上限=距離上限), len(t)
+
+
+def 抄底區():
+    段落("DIP BUY // 三條件抄底：跌到長均線＋營收沒壞＋融資洗掉")
+    st.caption("通勤族（阿信，2026-11-04）的選股法：① 技術面跌到長均線支撐（年線、月 10MA、72 週線任一條，上下幾 % 內）、"
+               "② 基本面沒壞（近 3 個月營收年增 > 0）、③ 融資已經退場（🧹 融資洗完，或融資 20 日減少 10% 以上）。")
+    距離上限 = st.segmented_control("離均線多近", [2.0, 3.0, 5.0], default=3.0, key="抄底距離",
+                                format_func=lambda v: f"±{v:.0f}%") or 3.0
+    表, 候選 = 抄底名單(_版本, 距離上限)
+    if 表.empty:
+        st.caption(f"今天沒有三個條件都符合的股票（融資＋營收先篩出 {候選} 檔，沒有一檔靠近長均線）。")
+        return
+    點選表(表, 上色(表).format({c: "{:+.1f}" for c in ("距年線%", "距月10MA%", "距72週線%", "近3月營收年增", "融資20日增減")}
+                             | {"融資維持率": "{:.0f}", "本益比": "{:.1f}"}, na_rep="—"), "抄底表",
+          height=min(35 * (len(表) + 1) + 3, 520))
+    st.caption(f"融資＋營收先篩出 {候選} 檔，其中 {len(表)} 檔靠近長均線。距離用原始收盤價（沒有還原除權息），"
+               "月 10MA＝最近 10 個月底收盤平均（含本月）、72 週線＝最近 72 個週收盤平均（含本週）。"
+               "阿信的做法是等震盪中均線不破、再站回 5 週線才加碼；這張表只是觀察名單，"
+               "網站回測過「融資洗完」單獨當策略並不好（見 01 跌深榜說明），不是買賣建議。")
+
+
 def 訂閱清單():
     if "條件訂閱" not in st.session_state:
         try:
@@ -369,7 +414,9 @@ def 條件訂閱區(條件, 範本, 結果):
 
 
 # ---------- 04 選股 ----------
-選股分頁 = st.tabs(["條件選股", "烏賊每日功課", "烏賊策略總覽", "🏆 策略排行榜", "券商報告", "網紅說法", "📝 研究筆記"])
+選股分頁 = st.tabs(["條件選股", "烏賊每日功課", "烏賊策略總覽", "🏆 策略排行榜", "券商報告", "網紅說法", "📝 研究筆記", "🧲 三條件抄底"])
+with 選股分頁[7]:
+  抄底區()
 with 選股分頁[6]:
   研究筆記區()
 with 選股分頁[3]:
