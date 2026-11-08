@@ -97,9 +97,14 @@ def 盤中即時條():
         漲幅 = r["change"] / (r["close"] - r["change"]) * 100
         格式 = ",.0f" if r["close"] >= 1000 else ",.2f"
         高低 = f" 高 {r['high']:{格式}} 低 {r['low']:{格式}}" if pd.notna(r.get("high")) and pd.notna(r.get("low")) else ""
-        卡們.append(卡片(f"⚡ {名稱} · {r['time']}", f"{r['close']:,.2f}",
-                       f"{r['change']:+,.2f}（{漲幅:+.2f}%）{高低}", 漲跌色(r["change"]),
-                       錨("加權指數") if 代號 == "t00" else 錨("價位")))
+        卡 = 卡片(f"⚡ {名稱} · {r['time']}", f"{r['close']:,.2f}",
+                f"{r['change']:+,.2f}（{漲幅:+.2f}%）{高低}", 漲跌色(r["change"]),
+                錨("加權指數") if 代號 == "t00" else 錨("價位"))
+        前 = st.session_state.get(f"_即時前值{代號}")  # 跟上次更新比：漲了閃紅、跌了閃綠
+        st.session_state[f"_即時前值{代號}"] = float(r["close"])
+        if 前 is not None and float(r["close"]) != 前:
+            卡 = f'<div class="{"flash-up" if float(r["close"]) > 前 else "flash-dn"}">{卡}</div>'
+        卡們.append(卡)
     if 卡們:
         st.markdown(f'<div class="grid2">{"".join(卡們)}</div>', unsafe_allow_html=True)
         st.caption("盤中即時（證交所，延遲約 5～20 秒，每 30 秒自動更新）；點加權卡片可看當日即時走勢。"
@@ -205,6 +210,7 @@ def 族群熱力圖():
     with 熱分頁:
         族群樹圖(族群, 個股, 界, 大小)
     族群排行(族群, 期間, 來源)
+    族群輪動區(來源)
     if 分類 == "概念股":
         st.caption("概念股是自己整理的題材清單（data/concepts.csv，約 25 個題材），一檔股票可以同時屬於好幾個概念；"
                    "想增刪可以直接在 GitHub 編輯這個檔案。")
@@ -2361,11 +2367,78 @@ def 供應鏈政策區():
                        "晶圓代工晚約 2 個月才到 100%。營收資料從 2021-10 開始，只看得到一次循環。")
 
 
-首頁區塊 = ["30秒", "市場", "狀態", "價位", "AI解讀", "焦點", "國際", "總經", "連動", "加權指數", "權值", "資金", "跌深", "止跌", "護盤", "選擇權", "情緒", "族群", "行事曆", "事件", "排行"]
+階段色 = {"龍頭領漲期": "#E0244A", "全面上攻": "#FF6B6B", "二線補漲期": "#FFB020", "整理": "#888888", "退潮": "#00A86B"}
 
 
-新手區塊 = ["30秒", "市場", "狀態", "AI解讀", "焦點", "排行"]
-版面們 = {"新手": "只看 6 個重點區塊", "完整": "全部區塊", "自訂": "自己挑、自己排順序"}
+def 族群輪動區(來源):
+    """族群輪動階段：每個族群市值前 3 大當龍頭，看龍頭和二線股誰在漲。"""
+    try:
+        表 = momentum.族群輪動階段(來源)
+    except Exception:
+        return
+    if 表 is None or 表.empty:
+        return
+    with st.expander("🔄 族群輪動階段：龍頭領漲 → 二線補漲 → 退潮（點開看每個族群走到哪）", expanded=False):
+        數 = 表["階段"].value_counts()
+        st.markdown(" ".join(f'<span style="display:inline-block;padding:2px 10px;margin:0 6px 6px 0;border:1px solid {階段色.get(k, "#888")};border-radius:12px;color:{階段色.get(k, "#888")}">'
+                             f'{k} {數.get(k, 0)}</span>' for k in momentum.階段順序), unsafe_allow_html=True)
+        表格(表, hide_index=True, width="stretch", height=min(420, 38 + 35 * len(表)))
+        st.caption("龍頭＝族群市值前 3 大，二線＝其餘股票的中位數。龍頭先漲、二線沒跟＝「龍頭領漲期」（族群剛發動，通常買龍頭）；"
+                   "龍頭漲過一段、近 5 日換二線股漲比較多＝「二線補漲期」（資金往落後股擴散，常是行情中後段，追二線要小心）；"
+                   "兩邊都跌＝退潮。這是用近 20 日／5 日漲幅做的簡單分類，沒有做過歷史回測，只當觀察族群位置的參考。")
+
+
+@st.cache_data(ttl=43200, show_spinner=False)
+def 資金水位資料(版本鍵):
+    v = engine.讀取VIX長線()
+    vix = None if v is None else v.rename("close").rename_axis("date").reset_index()
+    return momentum.資金水位(指標, 加權, vix)
+
+
+def 資金水位區():
+    段落("LEVEL // 市場健康分數與建議持股水位")
+    日, 回 = 資金水位資料(_版本)
+    if 日 is None or 日.empty:
+        st.caption("資料不足，暫時算不出市場健康分數。")
+        return
+    今 = 日.iloc[-1]
+    分, 水位 = float(今["分數"]), float(今["建議持股%"])
+    色 = 綠 if 分 <= 35 else (紅 if 分 > 65 else "#FFB020")
+    a, b = st.columns([1, 1.3])
+    圖 = go.Figure(go.Indicator(
+        mode="gauge+number", value=分, number=dict(suffix=" 分", font=dict(color=色)),
+        title=dict(text=f"{pd.Timestamp(今['date']):%m/%d} 市場健康分數", font=dict(size=14)),
+        gauge=dict(axis=dict(range=[0, 100]), bar=dict(color=色),
+                   steps=[dict(range=[0, 35], color="rgba(0,168,107,.18)"), dict(range=[35, 65], color="rgba(255,176,32,.15)"),
+                          dict(range=[65, 100], color="rgba(224,36,74,.18)")])))
+    圖表外觀(圖, 260)
+    a.plotly_chart(圖, width="stretch", config={"displayModeBar": False})
+    成分 = []
+    for k, 說 in (("站上月線", "站上 20 日線的股票比例 {:.0f}%"), ("騰落10日", "近 10 日騰落（淨上漲家數佔比）{:+.0f}%"),
+                 ("加權對季線%", "加權距 60 日線 {:+.1f}%"), ("VIX", "VIX {:.1f}（越低越好）")):
+        if k in 今 and pd.notna(今[k]):
+            成分.append("- " + 說.format(float(今[k])))
+    b.markdown(f"**建議持股水位：約 {水位:.0f}%**（分數 0 → 20%，100 → 90%）\n\n" + "\n".join(成分))
+    b.caption("每個指標都換算成「在近一年多裡排第幾」的百分位，再平均。")
+    近 = 日.tail(120)
+    線 = go.Figure(go.Scatter(x=近["date"], y=近["分數"], mode="lines", line=dict(color="#FFB020", width=2), name="分數"))
+    線.add_hline(y=35, line=dict(color=綠, dash="dot", width=1))
+    線.add_hline(y=65, line=dict(color=紅, dash="dot", width=1))
+    圖表外觀(線, 220).update_layout(showlegend=False)
+    st.plotly_chart(線, width="stretch", config={"displayModeBar": False})
+    if 回 is not None and len(回):
+        st.markdown("**實測：分數高／中／低的時候，加權之後 20 個交易日怎麼走**")
+        表格(回, hide_index=True, width="stretch")
+    st.caption("⚠️ 誠實說明：這段資料只有約一年多（重疊的 20 日區間，實際獨立樣本很少）。實測反而是「分數低的時候」之後 20 日漲比較多，"
+               "代表這個分數比較像「市場體溫計」（現在有多熱、多冷），不是進出場的時機訊號；分數低時降低持股是控制回撤，"
+               "不是因為之後一定會跌。持股水位只是風險控管的參考，不是報酬保證。")
+
+
+首頁區塊 = ["30秒", "市場", "狀態", "價位", "AI解讀", "焦點", "國際", "總經", "連動", "加權指數", "權值", "資金", "跌深", "止跌", "護盤", "選擇權", "情緒", "水位", "族群", "行事曆", "事件", "排行"]
+
+
+新手區塊 = ["30秒", "市場", "狀態", "水位", "AI解讀", "焦點", "排行"]
+版面們 = {"新手": "只看 7 個重點區塊", "完整": "全部區塊", "自訂": "自己挑、自己排順序"}
 
 
 def 讀版面():
@@ -2407,7 +2480,7 @@ def _國際():
         st.caption("國際行情暫時無法顯示。")
 區塊函式 = {"30秒": 三十秒卡, "市場": 市場卡片, "狀態": 狀態區, "價位": 關鍵價位區, "AI解讀": AI解讀區, "焦點": 焦點區, "國際": _國際, "總經": 總經區, "連動": 連動區,
          "加權指數": 加權圖 if 加權 is not None and len(加權) > 1 else None, "權值": 權值區, "資金": 資金面區, "跌深": 跌深區, "止跌": 止跌訊號區, "護盤": 護盤區, "選擇權": 選擇權區, "事件": 事件區,
-         "情緒": 情緒區, "族群": 族群熱力圖, "行事曆": 行事曆區, "排行": 排行區}
+         "情緒": 情緒區, "水位": 資金水位區, "族群": 族群熱力圖, "行事曆": 行事曆區, "排行": 排行區}
 要畫 = [x for x in 顯示 if 區塊函式.get(x)]
 if len(要畫) > 3:  # 首頁很長，上方放一排快速跳轉
     st.markdown('<div class="jump">' + "".join(f'<a href="#h-{x}" target="_self">{x}</a>' for x in 要畫)

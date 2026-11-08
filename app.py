@@ -5,6 +5,7 @@ import datetime as dt
 import hashlib
 import hmac
 import io
+import json
 import os
 import re
 import threading
@@ -33,12 +34,16 @@ import etf_analysis
 import etf_perf
 import macro
 import momentum
+import beginner
+import ai_debate
 
 importlib.reload(engine)
 importlib.reload(etf_data)  # 程式更新後確保用的是最新版的計算規則
 importlib.reload(etf_analysis)
 importlib.reload(etf_perf)
 importlib.reload(momentum)  # 順勢做多選股引擎
+importlib.reload(beginner)  # 新手白話：名詞小卡、白話燈號
+importlib.reload(ai_debate)  # AI 多空辯論、數字查核
 importlib.reload(macro)  # 01 首頁總經／資金用；沒重新載入時，部署新版後會沿用舊版 macro 而找不到新函式
 
 _圖示 = Path(__file__).parent / "static" / "icon-192.png"
@@ -204,6 +209,28 @@ a.cardlink:hover .card, a.cardlink:active .card {{ border-color: {青}; backgrou
 .thermo i {{ position: absolute; top: -5px; width: 4px; height: 22px; background: #FFF; box-shadow: 0 0 6px #FFF; }}
 .thermo-l {{ display: flex; justify-content: space-between; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #777; }}
 @media (max-width: 640px) {{ .lamps {{ grid-template-columns: 1fr; gap: 6px; }} .verdict {{ font-size: 14px; }} }}
+/* 名詞小卡：❓ 懸停或點一下顯示 */
+.tip {{ position: relative; display: inline-block; margin-left: 4px; cursor: help; font-size: 10px; opacity: .55; letter-spacing: 0; text-transform: none; }}
+.tip:hover, .tip:focus {{ opacity: 1; outline: none; }}
+.tip .tipbox {{ display: none; position: absolute; z-index: 999; left: -8px; top: 18px; width: 260px; padding: 10px 12px;
+    background: #101418; border: 1px solid {青}; color: #EDEDED; font-family: 'Noto Sans TC', sans-serif; font-size: 12px;
+    line-height: 1.55; letter-spacing: 0; white-space: normal; box-shadow: 0 6px 24px rgba(0,0,0,.6); }}
+.tip .tipbox b {{ display: block; color: {青}; font-size: 13px; margin-bottom: 2px; }}
+.tip .tipbox i {{ display: block; font-style: normal; color: #FFB020; margin-top: 6px; font-size: 11px; }}
+.tip:hover .tipbox, .tip:focus .tipbox {{ display: block; }}
+.card {{ overflow: visible; }}
+/* 盤中報價跳動：只讓數字閃一下 */
+@keyframes flashup {{ 0% {{ background: rgba(255,59,92,.45); }} 100% {{ background: transparent; }} }}
+@keyframes flashdn {{ 0% {{ background: rgba(0,214,143,.45); }} 100% {{ background: transparent; }} }}
+.flash-up .v {{ animation: flashup 1.2s ease-out; }}
+.flash-dn .v {{ animation: flashdn 1.2s ease-out; }}
+/* 新手三步驟 */
+.steps {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 6px 0 14px; }}
+.steps a {{ text-decoration: none; color: inherit; border: 1px solid #1E1E1E; background: #070707; padding: 12px 14px; display: block; }}
+.steps a:hover {{ border-color: {青}; }}
+.steps b {{ color: {青}; display: block; margin-bottom: 4px; }}
+.steps span {{ font-size: 13px; color: #BDBDBD; }}
+@media (max-width: 640px) {{ .steps {{ grid-template-columns: 1fr; }} }}
 /* 站內導航（攔截連結、快捷鍵）不佔版面；足跡列小一點 */
 .st-key-navjs {{ position: absolute; width: 0; height: 0; overflow: hidden; }}
 .st-key-trail {{ margin-top: -8px; }}
@@ -233,6 +260,9 @@ a.cardlink:hover .card, a.cardlink:active .card {{ border-color: {青}; backgrou
 
 def 卡片(標題, 數值, 小字="", 顏色="#EDEDED", 連結=None):
     """連結：點卡片要去的地方，例如 #h-加權指數（首頁區塊）、?s=2330（個股）、?p=07（換頁）。"""
+    詞 = beginner.找名詞(標題)
+    if 詞:  # 專有名詞旁邊加 ❓：滑鼠移過去（手機點一下）看白話說明
+        標題 = f"{標題}{beginner.小卡HTML(詞)}"
     內 = (f'<div class="card"><div class="k">{標題}</div>'
           f'<div class="v" style="color:{顏色}">{數值}</div><div class="d" style="color:{顏色}">{小字}</div></div>')
     return f'<a class="cardlink" href="{連結}" target="_self">{內}</a>' if 連結 else 內
@@ -336,14 +366,28 @@ if "精簡表格" not in st.session_state:  # 手機預設精簡
         st.session_state["精簡表格"] = "Mobile" in st.context.headers.get("User-Agent", "")
     except Exception:
         st.session_state["精簡表格"] = False
-a, c, e, d, b = st.container(key="toolbar").columns([3, 1, 1, 1, 1], vertical_alignment="center")
+if "新手模式" not in st.session_state:  # 網址 ?n=1 記住新手模式
+    st.session_state["新手模式"] = st.query_params.get("n") == "1"
+a, n, c, e, d, b = st.container(key="toolbar").columns([3, 1, 1, 1, 1, 1], vertical_alignment="center")
 a.caption(f"📅 資料日期 {最新日:%Y/%m/%d}　·　資料庫最後更新 {最後更新()}"
           '<span class="hide-m">（每個交易日約 18:00 自動更新）</span>', unsafe_allow_html=True)
+n.toggle("🔰 新手模式", key="新手模式", help="打開後：首頁顯示三步驟看盤教學、個股頁先給白話一句話結論並收起進階指標；專有名詞旁的 ❓ 可看白話說明")
+新手 = bool(st.session_state.get("新手模式"))
+if (st.query_params.get("n") == "1") != 新手:
+    if 新手:
+        st.query_params["n"] = "1"
+    else:
+        del st.query_params["n"]
 c.toggle("📱 精簡表格", key="精簡表格", help="表格只留名稱、股價、漲跌等重點欄位，手機不用左右滑")
 e.toggle("⬇️ 下載表格", key="顯示下載", help="打開後，每個表格下面會多一個「下載 Excel」按鈕")
 with d.popover("📖 名詞"):
     找 = st.text_input("查名詞", placeholder="例如：共振區、Beta、融資維持率", key="查名詞", label_visibility="collapsed")
+    for 詞, (白, 用, 坑) in beginner.名詞卡.items():
+        if not 找 or 找.lower() in 詞.lower() or 找 in 白 + 用 + 坑:
+            st.markdown(f"**{詞}**\n- 白話是什麼：{白}\n- 這數字怎麼用：{用}\n- 新手常見陷阱：{坑}")
     for 詞, 說明 in engine.名詞表.items():
+        if 詞 in beginner.名詞卡:
+            continue
         if not 找 or 找.lower() in 詞.lower() or 找 in 說明:
             st.markdown(f"**{詞}**　{說明}")
 with b.popover("🔄 更新"):
@@ -1571,6 +1615,11 @@ def 執行頁面(索引):
         threading.Thread(target=engine.記錄錯誤, args=(_設定(), 頁面們[索引], e, traceback.format_exc()), daemon=True).start()
 
 
+if 新手 and 頁面 == 頁面們[0]:
+    st.markdown('<div class="sec">BEGINNER // 新手三步驟看盤</div><div class="steps">' + "".join(
+        f'<a href="?p={碼}" target="_self"><b>{標}</b><span>{說}</span></a>' for 標, 說, 碼 in beginner.三步驟) + "</div>",
+        unsafe_allow_html=True)
+    st.caption("網站的設計順序就是這三步：大盤好不好 → 誰最強 → 哪裡買、哪裡停損。名詞旁的 ❓ 可以看白話說明；不想看可以關掉上方「🔰 新手模式」。")
 執行頁面(頁面們.index(頁面))
 
 

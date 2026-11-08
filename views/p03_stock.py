@@ -993,6 +993,73 @@ def 投研報告(代號, r):
     return "\n".join(段)
 
 
+def 個股位階(代號):
+    """(本益比歷史百分位, 最近支撐, 最近壓力, 動能列)，白話燈號、投研報告、AI 數據包共用。"""
+    河 = engine.本益比河流(個股全史(代號, _版本))
+    百分位 = float(河[2]) if 河 else None
+    動 = 動能資料(_版本)
+    列 = 動.loc[代號] if 代號 in 動.index else None
+    支撐 = 壓力 = None
+    try:
+        K = 個股K線(代號)
+        價 = engine.支撐壓力(K)["價位"]
+        收 = float(K["close"].iloc[-1])
+        下 = 價[(價["角色"] == "支撐") & (價["價位"] < 收)]["價位"]
+        上 = 價[(價["角色"] == "壓力") & (價["價位"] > 收)]["價位"]
+        支撐 = float(下.max()) if len(下) else None
+        壓力 = float(上.min()) if len(上) else None
+    except Exception:
+        pass
+    return 百分位, 支撐, 壓力, 列
+
+
+def 白話結論區(代號, r):
+    """新手一句話：把 RSI、乖離、均線、法人、估值、RS 翻成「該買、該等、還是該跑」。"""
+    百分位, _, _, 列 = 個股位階(代號)
+    燈們 = beginner.白話燈號(r, 均線, 百分位, 列["RS"] if 列 is not None else None)
+    結論 = beginner.一句話結論(燈們)
+    with st.expander(f"🔰 白話一句話：{結論}", expanded=bool(st.session_state.get("新手模式"))):
+        for 燈, 標, 白, 建 in 燈們:
+            st.markdown(f"**{燈} {標}**：{白}  \n　👉 {建}")
+        st.caption("燈號依規則自動判斷（🔥 過熱、🟢 偏多、🟡 中性、🔴 偏弱、🧊 跌深），不是買賣建議；顏色是「行動建議」，跟紅漲綠跌無關。")
+
+
+def AI數據包(代號, r):
+    """AI 只能用的 JSON 數字包（網站即時資料＋回測），辯論庭、數字查核共用。"""
+    百分位, 支撐, 壓力, 列 = 個股位階(代號)
+    計 = momentum.交易計畫(列, 壓力) if 列 is not None else None
+    return ai_debate.數據包(代號, r["名稱"], r, 列, 計, 百分位, 支撐, 壓力, 個股動能回測(代號, _版本), momentum.讀取全市場回測())
+
+
+def 查核區(文字, 包):
+    核, 錯 = ai_debate.數字查核(文字, 包)
+    if 錯:
+        st.warning("🔎 數字查核：以下數字跟網站資料對不上，請以網站資料為準：\n" + "\n".join(f"- {x}" for x in 錯[:8]))
+    elif 核:
+        st.caption(f"🔎 數字查核：AI 引用的 {核} 個數字都跟網站資料一致（誤差 3% 內）。")
+
+
+def 辯論顯示(結果, 包):
+    長 = 結果.get("投資長") or {}
+    色 = {"偏多": 紅, "偏空": 綠}.get(長.get("結論"), "#EDEDED")
+    卡片格([卡片("投資長裁決", 長.get("結論", "—"), f"信心：{長.get('信心', '—')}", 色),
+           卡片("引用的回測", "", str(長.get("引用回測", "—"))[:80]),
+           卡片("論點失效條件", "", str(長.get("論點失效條件", "—"))[:80])])
+    if 長.get("一句話"):
+        st.markdown(f'<div class="verdict">{長["一句話"]}</div>', unsafe_allow_html=True)
+    a, b = st.columns(2)
+    with a.container(border=True):
+        st.markdown("**🐂 多方（激進做多操盤手）**\n\n" + 結果.get("多方", ""))
+    with b.container(border=True):
+        st.markdown("**🐻 空方（風險控管分析師）**\n\n" + 結果.get("空方", ""))
+    if 長.get("觀察指標"):
+        st.markdown("**要追蹤的數字：** " + "、".join(map(str, 長["觀察指標"])))
+    查核區("\n".join([結果.get("多方", ""), 結果.get("空方", ""), json.dumps(長, ensure_ascii=False)]), 包)
+    with st.expander("AI 看到的數據（JSON，AI 只能用這些數字）"):
+        st.json(包, expanded=False)
+    st.caption("三位 AI 依同一包網站數據辯論；勝率只准引用網站回測，不准 AI 自己估。僅供研究，不構成投資建議。")
+
+
 # ---------- 03 個股查詢 ----------
 if st.session_state.get("個股查詢") not in 股票選項:
     st.session_state["個股查詢"] = next((v for v in 股票選項 if v.startswith("2330 ")), 股票選項[0])
@@ -1097,6 +1164,8 @@ def 今日符合策略():
             if 代號 in engine.選股(今日[今日["代號"] == 代號], dict(設定["條件"], 排除ETF=False))["代號"].values]
 
 
+with 區塊防護("白話一句話"):
+    白話結論區(代號, r)
 分頁 = st.tabs(個股分頁們, key="個股分頁", on_change="rerun")
 with 分頁[5], 區塊防護("比較"):
     if 分頁[5].open:
@@ -1459,7 +1528,8 @@ with 分頁[3], 區塊防護("技術"):
             卡片("今日振幅", 數(r["振幅"], 尾="%")),
         ])
         符合 = 今日符合策略()
-        st.markdown("**今天符合的烏賊策略：** " + ("、".join(
+        if not 新手:  # 新手模式收起進階策略名稱
+            st.markdown("**今天符合的烏賊策略：** " + ("、".join(
             f"{'🔴' if engine.烏賊條件[x]['方向'] == '多' else '🟢'} {x.replace('烏賊', '')}" for x in 符合) or "無"))
 
         交易計畫卡(代號)
@@ -1779,6 +1849,22 @@ with 分頁[4], 區塊防護("AI 分析"):
                 if st.session_state.get(會鍵):
                     with st.container(border=True):
                         st.markdown(st.session_state[會鍵])
+                        查核區(st.session_state[會鍵], AI數據包(代號, r))
+
+                辯鍵 = f"辯論_{代號}_{今天}"
+                if st.button("⚖️ AI 多空辯論庭（做多操盤手 vs 風控空頭，投資長裁決）", key="辯論鈕"):
+                    用量 = AI用量()
+                    if 用量.get(今天, 0) + 3 > int(設定.get("AI_DAILY_LIMIT", 20)):
+                        st.warning("今天的 AI 次數不夠（辯論要用 3 次），明天再試。")
+                    else:
+                        with st.spinner("多方立論 → 空方反駁 → 投資長裁決，約 40 秒…"):
+                            try:
+                                st.session_state[辯鍵] = ai_debate.AI多空辯論(AI數據包(代號, r), engine.Gemini呼叫, 金鑰, 模型)
+                                用量[今天] = 用量.get(今天, 0) + 3
+                            except Exception as 錯:
+                                st.error(f"辯論失敗：{錯}")
+                if st.session_state.get(辯鍵):
+                    辯論顯示(st.session_state[辯鍵], AI數據包(代號, r))
 
             按鈕字 = f"✨ 產生 {代號} {r['名稱']} 的 AI 分析" if not 上次 else "🔄 重新分析"
             if 可執行 and st.button(按鈕字, key="AI按鈕", type="primary" if not 上次 or 天數 >= 過久 else "secondary"):
