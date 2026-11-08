@@ -1904,6 +1904,7 @@ def 規則判讀(r):
 
 
 Gemini備用模型 = ["gemini-flash-latest", "gemini-3.5-flash", "gemini-flash-lite-latest"]
+Gemini本次呼叫 = {"成功": 0, "失敗": 0}   # 這個程序裡呼叫 Gemini 的次數，排程結束時寫進 ai_usage.json
 
 
 def Gemini呼叫(內容, api_key, 模型="gemini-flash-latest", 每個試幾次=2):
@@ -1922,7 +1923,9 @@ def Gemini呼叫(內容, api_key, 模型="gemini-flash-latest", 每個試幾次=
                 time.sleep(3)
                 continue
             if 回應.status_code == 200:
+                Gemini本次呼叫["成功"] += 1
                 return 回應, m
+            Gemini本次呼叫["失敗"] += 1
             try:
                 訊息 = 回應.json()["error"]["message"]
             except Exception:
@@ -1943,6 +1946,58 @@ def Gemini呼叫(內容, api_key, 模型="gemini-flash-latest", 每個試幾次=
 
 會診角色 = {"技術面": "只看 K 線、均線、支撐壓力、量價", "籌碼面": "只看三大法人、融資券、大戶與主動式 ETF",
           "基本面": "只看營收、毛利率、EPS、評價", "唱反調": "專門找這檔的空方理由與最可能看錯的地方"}
+
+
+def AI用量紀錄(設定, 流程, 保留天數=60):
+    """把這個程序呼叫 Gemini 的次數累加進 ai-reports 的 ai_usage.json（{日期: {流程: {成功, 失敗}}}）。"""
+    n = dict(Gemini本次呼叫)
+    if not (n["成功"] or n["失敗"]):
+        return
+    日 = pd.Timestamp.now(tz="Asia/Taipei").strftime("%Y-%m-%d")
+    表 = 讀取設定檔(設定, "ai_usage.json") or {}
+    格 = 表.setdefault(日, {}).setdefault(流程, {"成功": 0, "失敗": 0})
+    格["成功"] += n["成功"]
+    格["失敗"] += n["失敗"]
+    截止 = (pd.Timestamp.now(tz="Asia/Taipei") - pd.Timedelta(days=保留天數)).strftime("%Y-%m-%d")
+    儲存設定檔(設定, "ai_usage.json", {k: v for k, v in sorted(表.items()) if k >= 截止}, f"AI 用量 {日} {流程}")
+    Gemini本次呼叫.update({"成功": 0, "失敗": 0})
+
+
+def AI今日呼叫數(設定, 流程=None):
+    日 = pd.Timestamp.now(tz="Asia/Taipei").strftime("%Y-%m-%d")
+    今 = (讀取設定檔(設定, "ai_usage.json") or {}).get(日, {})
+    return sum(v["成功"] + v["失敗"] for k, v in 今.items() if 流程 in (None, k))
+
+
+def AI用量小卡(設定, 天數=7):
+    """近 N 天各流程 Gemini 呼叫次數的 LINE 文字（失敗次數另列）。"""
+    表 = 讀取設定檔(設定, "ai_usage.json") or {}
+    起 = (pd.Timestamp.now(tz="Asia/Taipei") - pd.Timedelta(days=天數)).strftime("%Y-%m-%d")
+    合 = {}
+    for 日, 流們 in 表.items():
+        if 日 >= 起:
+            for 流, v in 流們.items():
+                格 = 合.setdefault(流, [0, 0])
+                格[0] += v["成功"]
+                格[1] += v["失敗"]
+    if not 合:
+        return f"📊 近 {天數} 天沒有 Gemini 呼叫紀錄。"
+    行們 = [f"　{k}：{a} 次" + (f"（失敗 {b}）" if b else "") for k, (a, b) in sorted(合.items(), key=lambda x: -x[1][0])]
+    總 = sum(a for a, _ in 合.values())
+    return f"📊 近 {天數} 天 Gemini 呼叫 {總} 次\n" + "\n".join(行們) + "\n（免費額度內不用錢；超過才依 Google 計價）"
+
+
+def 初步查核網紅(影片, 名表):
+    """程式化初步查核（不用 AI）：代號存在嗎？名稱和代號對得上嗎？回傳紅旗文字清單，空＝沒發現問題。
+    名表＝{代號: 名稱}。有紅旗的才需要人（或 Claude）再看。"""
+    旗 = []
+    for x in 影片.get("股票", []):
+        代, 名 = str(x.get("代號") or ""), str(x.get("名稱") or "")
+        if 代 and 代 in 名表 and 名 and 名 not in 名表[代] and 名表[代] not in 名:
+            旗.append(f"{代} 影片寫「{名}」，資料庫是「{名表[代]}」")
+        elif 代 and 名表 and 代 not in 名表 and not 代.isalpha():
+            旗.append(f"{代}{名} 在資料庫找不到")
+    return 旗
 
 
 def AI多角色會診(代號, 名稱, 數據摘要, api_key, 模型="gemini-flash-latest"):
