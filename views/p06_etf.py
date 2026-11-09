@@ -123,6 +123,14 @@ else:
     最新變化 = 變化
 資料日 = max(最新日期.values())
 
+_事件 = engine.讀取ETF事件()
+if len(_事件):
+    _未來 = _事件[_事件["日期"] >= pd.Timestamp.today().normalize()]
+    if len(_未來):
+        段落("ETF EVENTS // 即將到來的 ETF 事件（分割、受益人會議）")
+        表格(_未來.assign(日期=_未來["日期"].dt.strftime("%Y/%m/%d")), hide_index=True, width="stretch")
+        st.caption("分割只是把一張切成幾張，總市值不變，不代表會比原本的 ETF 漲得多；時程是媒體整理，請以投信公告為準。")
+
 段落("ACTIVE ETF // 主動式 ETF 總覽")
 列們 = []
 for 代號, d in sorted(最新日期.items()):

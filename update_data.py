@@ -1223,6 +1223,43 @@ def 抓指數K線(年數=5):
     print(f"指數 K 線完成：{len(表)} 筆，最新 {表['date'].max()}")
 
 
+def 抓指數長期(起年=2000, 每次月數=40):
+    """加權指數 2000 年以來的每日收盤 → data/index_long.csv，給國安基金歷次護盤回測補長歷史。
+    證交所 MI_5MINS_HIST 一次一個月；每天最多補 每次月數 個月（約 2 分鐘），補完就不再抓。"""
+    檔 = 資料夾 / "index_long.csv"
+    舊 = pd.read_csv(檔, dtype={"date": str}) if 檔.exists() else pd.DataFrame(columns=["date", "close"])
+    已有 = set(舊["date"].str[:7])
+    今天 = dt.datetime.now(台北時區).date()
+    尾 = (今天.replace(day=1) - dt.timedelta(days=365 * 5 + 40)).replace(day=1)
+    月, 列們, 抓了 = dt.date(起年, 1, 1), [], 0
+    while 月 < 尾 and 抓了 < 每次月數:
+        if f"{月:%Y-%m}" not in 已有:
+            try:
+                r = requests.get(f"https://www.twse.com.tw/rwd/zh/TAIEX/MI_5MINS_HIST?date={月:%Y%m}01&response=json", headers=標頭, timeout=30)
+                for _, 欄位, 資料 in 取得表格(r.json()):
+                    if "最高" not in "".join(欄位):
+                        continue
+                    for 列 in 資料:
+                        年, 月份, 日子 = re.split(r"[/-]", str(列[0]).strip())
+                        年 = int(年) + (1911 if int(年) < 1000 else 0)
+                        收 = 轉數字(列[4])
+                        if pd.notna(收) and 收 > 0:
+                            列們.append({"date": f"{年}-{int(月份):02d}-{int(日子):02d}", "close": 收})
+                    break
+                抓了 += 1
+            except Exception as 錯誤:
+                print(f"{月:%Y-%m} 長期指數失敗：{錯誤}")
+                抓了 += 1
+            time.sleep(2)
+        月 = (月 + dt.timedelta(days=32)).replace(day=1)
+    if not 列們:
+        print("長期指數沒有新資料")
+        return
+    表 = pd.concat([舊, pd.DataFrame(列們)]).drop_duplicates("date", keep="last").sort_values("date")
+    表.to_csv(檔, index=False)
+    print(f"長期指數：{len(表)} 筆，{表['date'].min()} ～ {表['date'].max()}")
+
+
 def 抓經濟行事曆():
     """ForexFactory 本週、下週的經濟數據（只留美、中、日、歐、英的中高重要性）→ data/econ_calendar.csv。
     欄位：date（台北時間）、time、country、title、impact、forecast、previous、actual。"""
@@ -1833,7 +1870,7 @@ def main():
 
     if not 參數.skip_latest:
         for 工作 in (抓分時, 抓興櫃, 抓基本面, 抓匯率, 抓處置注意, 抓借券, 抓法說會, 抓融資金額, 抓期貨未平倉, 抓小台散戶,
-                     抓美股日線, 抓經濟行事曆, 抓美股財報, 抓指數K線, 抓選擇權, 抓新股申購, 抓外資持股, 抓當沖, 抓庫藏股, 抓可轉債, 抓公司簡介, 抓合約負債, 抓合約負債歷史,
+                     抓美股日線, 抓經濟行事曆, 抓美股財報, 抓指數K線, 抓指數長期, 抓選擇權, 抓新股申購, 抓外資持股, 抓當沖, 抓庫藏股, 抓可轉債, 抓公司簡介, 抓合約負債, 抓合約負債歷史,
                      抓內部人轉讓, 抓興櫃推薦券商, 抓重大訊息, 抓美國數據, 抓美股資本支出, 抓費半長線, 抓VIX長線, 抓夜盤法人, 抓台指期價差, 抓期貨保證金, 抓0050成分):  # 這些出問題不影響主資料庫
             try:
                 工作()
