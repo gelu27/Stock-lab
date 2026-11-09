@@ -47,3 +47,5 @@ jobs:
         run: python tests/test_forecast.py
       - name: 主動式 ETF 績效體檢、除權息日報酬
         run: python tests/test_etf_perf.py
+      - name: 預估本益比情境、做帳季節、年線、反彈尺、關注清單、領頭連動
+        run: python tests/test_market_views.py

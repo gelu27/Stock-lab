@@ -554,11 +554,58 @@ def 預估EPS分頁():
                "期數少的時候結果不穩定，至少累積 6 期以上再當參考。")
 
 
-選股分頁 = st.tabs(["🚀 順勢做多", "條件選股", "烏賊每日功課", "烏賊策略總覽", "🏆 策略排行榜", "券商報告", "網紅說法", "📝 研究筆記", "🧲 三條件抄底", "📐 預估 EPS"],
+@st.cache_data(ttl=3600, show_spinner=False)
+def 關注清單資料(版本鍵):
+    return engine.關注清單表(engine.讀取關注清單(), 今日, 指標[["代號", "date", "收盤"]])
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def 領頭連動資料(版本鍵):
+    return engine.領頭連動(engine.讀取領頭連動(), 指標[[c for c in ("代號", "date", "收盤", "還原價") if c in 指標.columns]])
+
+
+def 關注清單分頁():
+    """市場評論提到的股票清單（不記人名）：加入後表現、共識預估 EPS 成長與預估本益比；規格升級 vs 漲價題材對照；領頭股連動。"""
+    明, 彙 = 關注清單資料(_版本)
+    if 明.empty:
+        st.info("還沒有關注清單（data/watchlists.csv）。")
+        return
+    段落("LISTS // 各清單彙總（從加入日收盤起算）")
+    表格(彙, hide_index=True, width="stretch",
+         column_config={c: st.column_config.NumberColumn(format="%+.1f") for c in ("加入後平均%", "超額平均%", "明年EPS成長中位數%", "距60日高平均%")})
+    st.caption("超額＝加入後漲跌減同期加權。明年預估本益比(合計)＝清單裡有正預估 EPS 的股票，合計市值 ÷ 合計明年預估獲利。"
+               "「規格升級」對照「漲價題材」：市場評論認為明年上半年漲價股的獲利會回落、規格升級股才有持續成長，"
+               "這裡用共識預估 EPS 檢查兩組的成長與倍數，並記錄之後的實際表現。")
+    清單們 = list(dict.fromkeys(明["清單"]))
+    選 = st.segmented_control("清單", 清單們, default=清單們[0], key="關注清單選") or 清單們[0]
+    表 = 明[明["清單"] == 選].drop(columns="清單")
+    if not (表["標記"] != "").any():
+        表 = 表.drop(columns="標記")
+    點選表(表, 上色(表), "關注清單表",
+          column_config={c: st.column_config.NumberColumn(format="%+.1f") for c in ("加入後%", "超額%", "距60日高%", "明年EPS成長%")})
+    if "標記" in 表.columns:
+        st.caption("標記：新＝設計或規格升級、增＝用量提升、大＝龍頭。")
+    st.caption("清單只記錄市場評論提到的股票與日期，不是推薦；點一列可跳到個股查詢。")
+    段落("LEADERS // 領頭股連動：領頭股站回月線，同組跟著反攻嗎？")
+    狀, 測 = 領頭連動資料(_版本)
+    if 狀.empty:
+        st.caption("沒有連動組資料（data/leader_groups.csv）。")
+        return
+    表格(狀.merge(測, on="組", how="left"), hide_index=True, width="stretch",
+         column_config={c: st.column_config.NumberColumn(format="%+.1f") for c in 狀.columns.union(測.columns) if str(c).endswith("%")}
+         | {"說明": st.column_config.TextColumn(width="large")})
+    st.caption("站回＝領頭股前 10 天都在月線（20 日均線）下、今天收盤站上。之後 20 日＝同組跟隨股平均漲跌，跟跟隨股一般日子比。"
+               "只用網站常駐的近一年多資料，次數少，只是參考；領頭股今天站回月線時，收盤 LINE 會提醒。")
+
+
+選股分頁 = st.tabs(["🚀 順勢做多", "條件選股", "烏賊每日功課", "烏賊策略總覽", "🏆 策略排行榜", "券商報告", "網紅說法", "📝 研究筆記", "🧲 三條件抄底", "📐 預估 EPS", "⭐ 關注清單"],
                    key="選股分頁", on_change="rerun")
 with 選股分頁[0], 區塊防護("順勢做多"):
     if 選股分頁[0].open:
         順勢做多區()
+with 選股分頁[10], 區塊防護("關注清單"):
+    if 選股分頁[10].open:
+        關注清單分頁()
 with 選股分頁[9], 區塊防護("預估EPS"):
     if 選股分頁[9].open:
         預估EPS分頁()
