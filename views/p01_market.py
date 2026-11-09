@@ -1274,6 +1274,7 @@ def 盤中權值來源():
     if 即 is None or 指 is None or "t00" not in 指.index or 加權 is None:
         return None
     來源 = 今日.copy()
+    來源["收盤"] = 來源["收盤"].astype("float64")  # 資料庫是 float32，pandas 3 不允許把 float64 即時價寫進去
     來源["漲跌幅"] = 0.0
     有 = 來源["代號"].isin(即.index)
     現 = 來源.loc[有, "代號"].map(即["close"])
