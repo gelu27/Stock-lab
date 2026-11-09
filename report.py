@@ -463,7 +463,8 @@ def 產生PDF(代號, 名稱, 資料):
     # ===== 第 1 頁：總覽 =====
     pdf.add_page()
     字(9, 色=青)
-    pdf.cell(0, 5, f"STOCK REPORT  //  {資料.get('日期', '')}  //  {資料.get('產業') or ''}  ·  {資料.get('市場', '')}")
+    即時 = f"（現價：{資料['即時']}）" if 資料.get("即時") else ""
+    pdf.cell(0, 5, f"STOCK REPORT  //  {資料.get('日期', '')}{即時}  //  {資料.get('產業') or ''}  ·  {資料.get('市場', '')}")
     pdf.set_xy(左, 頂 + 6)
     字(34, True)
     pdf.cell(pdf.get_string_width(代號) + 4, 16, 代號)

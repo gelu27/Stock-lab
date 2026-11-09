@@ -1140,9 +1140,17 @@ def 個股查詢(問, 完整=True):
     代, 名 = str(r["code"]), str(r["name"])
     import line_report
     今, 個股史 = line_report.準備(代)
+    即時 = None
+    if 今 is not None:   # 盤中（或收盤後到晚上更新前）用證交所即時價，AI 報告與 PDF 也跟著用
+        今, 即時 = engine.套用即時價(今, 代, r["date"])
     指標 = 個股史.tail(400) if 個股史 is not None else engine.計算指標(engine.讀取資料庫(最近天數=400, 代號=[代]))
-    行們 = [f"🔍 {代} {名}　{r['date']:%m/%d}", f"收盤 {r['close']:,.2f}（{符號(r['change'])}{abs(r['change']):,.2f}）"
-          + (f"，本益比 {r['pe']:.1f}" if pd.notna(r.get("pe")) and r["pe"] > 0 else "")]
+    if 即時:
+        行們 = [f"🔍 {代} {名}　{即時}", f"現價 {今['收盤']:,.2f}（{符號(今['漲跌'])}{abs(今['漲跌']):,.2f}，{今['漲跌幅']:+.2f}%）"
+              + (f"，本益比 {今['本益比']:.1f}" if pd.notna(今.get("本益比")) and 今["本益比"] > 0 else "")
+              + f"\n（籌碼、評分、技術是 {r['date']:%m/%d} 收盤資料）"]
+    else:
+        行們 = [f"🔍 {代} {名}　{r['date']:%m/%d}", f"收盤 {r['close']:,.2f}（{符號(r['change'])}{abs(r['change']):,.2f}）"
+              + (f"，本益比 {r['pe']:.1f}" if pd.notna(r.get("pe")) and r["pe"] > 0 else "")]
     try:
         全 = engine.計算指標(engine.讀取資料庫(最近天數=40))
         分, _, _ = engine.今昨評分(全, engine.讀取基本面(), engine.讀取加權指數())
@@ -1167,7 +1175,7 @@ def 個股查詢(問, 完整=True):
             行們.append("⬇️ 支撐 " + "、".join(f"{x['價位']:,.2f}（{x['名稱']}）" for _, x in 撐.iterrows()))
     try:
         報告們 = [x for x in (讀設定("broker_reports.json")[0] or {}).get("報告", []) if str(x.get("代號")) == 代]
-        字 = engine.共識文字(engine.券商共識(報告們, float(r["close"])))
+        字 = engine.共識文字(engine.券商共識(報告們, float(今["收盤"] if 即時 else r["close"])))
         if 字:
             行們.append("🏦 " + 字)
     except Exception as e:
