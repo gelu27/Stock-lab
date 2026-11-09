@@ -26,6 +26,10 @@ jobs:
           python-version: "3.12"
       - run: pip install pandas requests openpyxl beautifulsoup4
       - run: python etf_data.py --days ${{ github.event.inputs.days || 7 }}
+      - name: 經理費、保管費（早上那次跑；只補空白或自動抓超過 30 天的，手動填的不動）
+        if: github.event.schedule == '40 0 * * 2-6' || github.event_name == 'workflow_dispatch'
+        continue-on-error: true
+        run: python etf_data.py --fees
       - name: 存回 GitHub
         run: |
           git config user.name "stock-bot"

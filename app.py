@@ -5,9 +5,11 @@ import datetime as dt
 import hashlib
 import hmac
 import io
+import json
 import os
 import re
 import threading
+import time
 import urllib.parse
 from pathlib import Path
 
@@ -20,14 +22,28 @@ import streamlit as st
 
 import importlib
 
+# 雲端主機的時鐘是 UTC：台灣 00:00～08:00 時「今天」會變成昨天（交易日記預設日期、除權息預告、近 N 天篩選都會錯一天）。
+# 整個網站一律用台灣時間，pd.Timestamp.now()、dt.date.today() 拿到的就是台灣的現在。
+os.environ["TZ"] = "Asia/Taipei"
+if hasattr(time, "tzset"):
+    time.tzset()
+
 import engine
 import etf_data
 import etf_analysis
+import etf_perf
 import macro
+import momentum
+import beginner
+import ai_debate
 
 importlib.reload(engine)
 importlib.reload(etf_data)  # 程式更新後確保用的是最新版的計算規則
 importlib.reload(etf_analysis)
+importlib.reload(etf_perf)
+importlib.reload(momentum)  # 順勢做多選股引擎
+importlib.reload(beginner)  # 新手白話：名詞小卡、白話燈號
+importlib.reload(ai_debate)  # AI 多空辯論、數字查核
 importlib.reload(macro)  # 01 首頁總經／資金用；沒重新載入時，部署新版後會沿用舊版 macro 而找不到新函式
 
 _圖示 = Path(__file__).parent / "static" / "icon-192.png"
@@ -193,6 +209,33 @@ a.cardlink:hover .card, a.cardlink:active .card {{ border-color: {青}; backgrou
 .thermo i {{ position: absolute; top: -5px; width: 4px; height: 22px; background: #FFF; box-shadow: 0 0 6px #FFF; }}
 .thermo-l {{ display: flex; justify-content: space-between; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #777; }}
 @media (max-width: 640px) {{ .lamps {{ grid-template-columns: 1fr; gap: 6px; }} .verdict {{ font-size: 14px; }} }}
+/* 名詞小卡：❓ 懸停或點一下顯示 */
+.tip {{ position: relative; display: inline-block; margin-left: 4px; cursor: help; font-size: 10px; opacity: .55; letter-spacing: 0; text-transform: none; }}
+.tip:hover, .tip:focus {{ opacity: 1; outline: none; }}
+.tip .tipbox {{ display: none; position: absolute; z-index: 999; left: -8px; top: 18px; width: 260px; padding: 10px 12px;
+    background: #101418; border: 1px solid {青}; color: #EDEDED; font-family: 'Noto Sans TC', sans-serif; font-size: 12px;
+    line-height: 1.55; letter-spacing: 0; white-space: normal; box-shadow: 0 6px 24px rgba(0,0,0,.6); }}
+.tip .tipbox b {{ display: block; color: {青}; font-size: 13px; margin-bottom: 2px; }}
+.tip .tipbox i {{ display: block; font-style: normal; color: #FFB020; margin-top: 6px; font-size: 11px; }}
+.tip:hover .tipbox, .tip:focus .tipbox {{ display: block; }}
+.card {{ overflow: visible; }}
+/* 盤中報價跳動：只讓數字閃一下 */
+@keyframes flashup {{ 0% {{ background: rgba(255,59,92,.45); }} 100% {{ background: transparent; }} }}
+@keyframes flashdn {{ 0% {{ background: rgba(0,214,143,.45); }} 100% {{ background: transparent; }} }}
+.flash-up .v {{ animation: flashup 1.2s ease-out; }}
+.flash-dn .v {{ animation: flashdn 1.2s ease-out; }}
+/* 新手三步驟 */
+.steps {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 6px 0 14px; }}
+.steps a {{ text-decoration: none; color: inherit; border: 1px solid #1E1E1E; background: #070707; padding: 12px 14px; display: block; }}
+.steps a:hover {{ border-color: {青}; }}
+.steps b {{ color: {青}; display: block; margin-bottom: 4px; }}
+.steps span {{ font-size: 13px; color: #BDBDBD; }}
+@media (max-width: 640px) {{ .steps {{ grid-template-columns: 1fr; }} }}
+/* 站內導航（攔截連結、快捷鍵）不佔版面；足跡列小一點 */
+.st-key-navjs {{ position: absolute; width: 0; height: 0; overflow: hidden; }}
+.st-key-trail {{ margin-top: -8px; }}
+.st-key-trail button {{ min-height: 26px; padding: 0 10px; }}
+.st-key-trail button p {{ font-size: 12px; }}
 /* 手機：頁首縮小、頁面選單改成一排可左右滑 */
 @media (max-width: 640px) {{
     .hero {{ padding: 16px 16px 12px; margin-bottom: 10px; }}
@@ -217,6 +260,9 @@ a.cardlink:hover .card, a.cardlink:active .card {{ border-color: {青}; backgrou
 
 def 卡片(標題, 數值, 小字="", 顏色="#EDEDED", 連結=None):
     """連結：點卡片要去的地方，例如 #h-加權指數（首頁區塊）、?s=2330（個股）、?p=07（換頁）。"""
+    詞 = beginner.找名詞(標題)
+    if 詞:  # 專有名詞旁邊加 ❓：滑鼠移過去（手機點一下）看白話說明
+        標題 = f"{標題}{beginner.小卡HTML(詞)}"
     內 = (f'<div class="card"><div class="k">{標題}</div>'
           f'<div class="v" style="color:{顏色}">{數值}</div><div class="d" style="color:{顏色}">{小字}</div></div>')
     return f'<a class="cardlink" href="{連結}" target="_self">{內}</a>' if 連結 else 內
@@ -320,14 +366,28 @@ if "精簡表格" not in st.session_state:  # 手機預設精簡
         st.session_state["精簡表格"] = "Mobile" in st.context.headers.get("User-Agent", "")
     except Exception:
         st.session_state["精簡表格"] = False
-a, c, e, d, b = st.container(key="toolbar").columns([3, 1, 1, 1, 1], vertical_alignment="center")
+if "新手模式" not in st.session_state:  # 網址 ?n=1 記住新手模式
+    st.session_state["新手模式"] = st.query_params.get("n") == "1"
+a, n, c, e, d, b = st.container(key="toolbar").columns([3, 1, 1, 1, 1, 1], vertical_alignment="center")
 a.caption(f"📅 資料日期 {最新日:%Y/%m/%d}　·　資料庫最後更新 {最後更新()}"
           '<span class="hide-m">（每個交易日約 18:00 自動更新）</span>', unsafe_allow_html=True)
+n.toggle("🔰 新手模式", key="新手模式", help="打開後：首頁顯示三步驟看盤教學、個股頁先給白話一句話結論並收起進階指標；專有名詞旁的 ❓ 可看白話說明")
+新手 = bool(st.session_state.get("新手模式"))
+if (st.query_params.get("n") == "1") != 新手:
+    if 新手:
+        st.query_params["n"] = "1"
+    else:
+        del st.query_params["n"]
 c.toggle("📱 精簡表格", key="精簡表格", help="表格只留名稱、股價、漲跌等重點欄位，手機不用左右滑")
 e.toggle("⬇️ 下載表格", key="顯示下載", help="打開後，每個表格下面會多一個「下載 Excel」按鈕")
 with d.popover("📖 名詞"):
     找 = st.text_input("查名詞", placeholder="例如：共振區、Beta、融資維持率", key="查名詞", label_visibility="collapsed")
+    for 詞, (白, 用, 坑) in beginner.名詞卡.items():
+        if not 找 or 找.lower() in 詞.lower() or 找 in 白 + 用 + 坑:
+            st.markdown(f"**{詞}**\n- 白話是什麼：{白}\n- 這數字怎麼用：{用}\n- 新手常見陷阱：{坑}")
     for 詞, 說明 in engine.名詞表.items():
+        if 詞 in beginner.名詞卡:
+            continue
         if not 找 or 找.lower() in 詞.lower() or 找 in 說明:
             st.markdown(f"**{詞}**　{說明}")
 with b.popover("🔄 更新"):
@@ -354,9 +414,9 @@ with b.popover("🔄 更新"):
 
 @st.cache_data(ttl=3600, show_spinner=False, max_entries=1)
 def 補充欄位(版本鍵):
-    """外資持股比、當沖比率、投信 60 日買超佔股本、負債比、流動比、近四季現金流、合約負債（每天更新一次）。"""
+    """外資持股比、當沖比率、投信 60 日買超佔股本、負債比、流動比、近四季現金流、合約負債、預估 EPS（每天更新一次）。"""
     表 = engine.籌碼補充表(指標)
-    for 補 in (engine.財報體質表(), engine.合約負債表()):
+    for 補 in (engine.財報體質表(), engine.合約負債表(), engine.預估EPS表()):
         if 補 is not None:
             表 = 表.join(補, how="outer")
     return 表
@@ -370,7 +430,7 @@ def 基本面資料(版本鍵):
 @st.cache_data(max_entries=2, show_spinner=False)
 def 今日資料(版本鍵):
     """最新一天的行情＋基本面＋籌碼補充欄位。以前每點一下都重算（約 1.4 秒），現在每天只算一次。"""
-    return engine.加基本面(指標[指標["date"] == 最新日], 基本面資料(版本鍵)).join(補充欄位(版本鍵), on="代號")
+    return engine.加預估本益比(engine.加融資佔股本(engine.加基本面(指標[指標["date"] == 最新日], 基本面資料(版本鍵)).join(補充欄位(版本鍵), on="代號")))
 
 
 @st.cache_data(ttl=3600, max_entries=64, show_spinner=False)
@@ -459,7 +519,24 @@ def 選股條件區():
             if st.checkbox("合約負債能見度下限", key="條_合約負債能見度下限",
                            help="合約負債 ÷ 近四季營收 × 12，約等於手上預收款夠做幾個月營收。"):
                 條件["能見度月下限"] = st.number_input("能見度(月) ≥", value=3.0, step=0.5, key="條_能見度(月) ≥")
-            st.caption("月營收、EPS、負債比、現金流、合約負債只有最新一期，組合回測時不會套用。")
+            if st.checkbox("預估本益比上限（今年）", key="條_預估本益比上限",
+                           help="今年預估 EPS（使用者匯出的全市場預估，A、B 兩源中位數）÷ 今天收盤。預估 EPS ≤ 0 的股票會被排除。"):
+                條件["預估本益比上限"] = st.number_input("預估本益比 ≤", value=15.0, step=1.0, key="條_預估本益比 ≤")
+            if st.checkbox("明年預估本益比上限", key="條_明年預估本益比上限",
+                           help="明年預估 EPS 只有約 500 檔有（多半是有法人研究的中大型股）。"):
+                條件["明年預估本益比上限"] = st.number_input("明年預估本益比 ≤", value=12.0, step=1.0, key="條_明年預估本益比 ≤")
+            if st.checkbox("明年 EPS 成長率下限", key="條_明年EPS成長下限"):
+                條件["明年EPS成長下限"] = st.number_input("明年 EPS 成長(%) ≥", value=20.0, step=5.0, key="條_明年EPS成長(%) ≥")
+            if st.checkbox("預估 EPS 上修下限（跟上一份快照比）", key="條_預估上修下限",
+                           help="要上傳過至少兩份預估 EPS 快照（04 選股的「📐 預估 EPS」分頁）才有資料。"):
+                條件["預估修正下限"] = st.number_input("今年預估上修(%) ≥", value=5.0, step=1.0, key="條_預估上修(%) ≥")
+            if st.checkbox("預估業外占比上限（要本業賺錢）", key="條_預估業外占比上限",
+                           help="（A、B 共識 − Vera 本業 EPS）÷ 共識。業外（匯兌、投資、處分利益）不容易預估也不一定會再出現，占比越低越看本業。"):
+                條件["預估業外占比上限"] = st.number_input("預估業外占比(%) ≤", value=20.0, step=5.0, key="條_預估業外占比(%) ≤")
+            if st.checkbox("排除預估分歧大的股票", key="條_排除預估分歧",
+                           help="A、B 兩個來源的今年預估差超過 30% 就排除（只有一個來源的不受影響）。"):
+                條件["排除預估分歧"] = True
+            st.caption("月營收、EPS、負債比、現金流、合約負債、預估 EPS 只有最新一期，組合回測時不會套用。")
         with 格[1].container(border=True):
             st.markdown("**籌碼面**")
             if st.checkbox("外資連續買超", key="條_外資連續買超"):
@@ -482,6 +559,11 @@ def 選股條件區():
             if st.checkbox("個股融資維持率上限（估算）", key="條_融資維持率上限"):
                 條件["融資維持率上限"] = st.number_input("融資維持率(%) ≤", value=150.0, step=5.0, key="條_融資維持率(%) ≤",
                                                     help="網站自己估算，可能偏高 2～15 個百分點；130% 以下券商會追繳")
+            if st.checkbox("排除融資佔股本最高的股票（籌碼不安定）", key="條_融資佔股本排除",
+                           help="融資佔股本＝融資餘額 × 1,000 ÷ 發行股數。股癌 EP712：融資高的標的殺盤時是重災區；"
+                                "2026-11 回測 9 次急跌，融資佔股本最高 1/5 平均多跌約 5 個百分點（但大多是高波動股的另一面）"):
+                條件["融資佔股本排名上限"] = st.slider("保留融資佔股本排名百分位 ≤（80＝排除最高的 20%）", 50, 100, 80, 5,
+                                                key="條_融資佔股本排名上限")
             if st.checkbox("外資持股比下限", key="條_外資持股比下限"):
                 條件["外資持股比下限"] = st.number_input("外資持股比(%) ≥", value=30.0, step=5.0, key="條_外資持股比(%) ≥")
             if st.checkbox("外資持股比 20 日增加", key="條_外資持股比 20 日增加"):
@@ -598,15 +680,20 @@ if "已計來訪" not in st.session_state:  # 每個瀏覽階段記一次來客�
     _碼 = hashlib.sha256(f"{_秘.get('password', '')}|{_ip}".encode()).hexdigest()[:8] if _ip else ""
     threading.Thread(target=engine.記錄來訪, args=(_秘, bool(st.session_state.get("已解鎖")), _碼), daemon=True).start()
 
-if "s" in st.query_params:  # 排行榜的連結：?s=2330
-    前往(st.query_params["s"])
-    del st.query_params["s"]
-if "p" in st.query_params:  # 卡片換頁的連結：?p=07
-    st.session_state["頁面"] = next((x for x in 頁面們 if x.startswith(str(st.query_params["p"]))), 頁面們[0])
-    del st.query_params["p"]
+# ---------- 網址記住目前頁面與股票（?p=03&s=2330）：重新整理、加書籤、分享連結都會回到同一個畫面 ----------
+_網址股 = st.query_params.get("s")
+if _網址股 and _網址股 != st.session_state.get("_網址s"):  # 排行榜、LINE 的連結：?s=2330
+    st.session_state["_網址s"] = _網址股
+    前往(_網址股)
+_網址頁 = st.query_params.get("p")
+if _網址頁 and _網址頁 != st.session_state.get("_網址p"):  # 卡片換頁的連結：?p=07
+    st.session_state["_網址p"] = _網址頁
+    st.session_state["頁面"] = next((x for x in 頁面們 if x.startswith(str(_網址頁))), 頁面們[0])
 st.session_state.pop("要跳轉", None)
 if st.session_state.get("頁面") not in 頁面們:
     st.session_state["頁面"] = 頁面們[0]
+
+個股分頁們 = ["📋 總覽", "💰 籌碼", "📊 基本面", "📈 技術", "🤖 AI 分析", "⚖️ 比較"]
 
 
 def _搜尋跳轉():
@@ -616,11 +703,144 @@ def _搜尋跳轉():
     st.session_state["全站搜尋"] = None
 
 
+def 切換清單():
+    """↑ ↓ 快捷鍵依序切換的股票：自選股 → 最近看過 → 今天成交值前 30 檔。"""
+    清單 = []
+    try:
+        if "自選股" in st.session_state or 可編輯():
+            清單 = [c for v in 自選股清單().values() for c in v]
+    except Exception:
+        清單 = []
+    if not 清單:
+        清單 = [c for c in st.query_params.get("r", "").split(",") if c]
+    if not 清單:
+        值欄 = "成交值億" if "成交值億" in 今日 else "成交張數"
+        清單 = 今日.nlargest(30, 值欄)["代號"].tolist()
+    return list(dict.fromkeys(清單))
+
+
+def _站內導航():
+    """瀏覽器那邊攔下來的站內連結點擊與快捷鍵（不重新載入整頁，畫面與登入狀態都保留）。"""
+    值 = st.session_state.get("站內導航") or {}
+    去, 鍵 = 值.get("go"), 值.get("key")
+    if 去:
+        類, _, 碼 = str(去).partition("=")
+        if 類 == "s":
+            前往(碼)
+        elif 類 == "p":
+            st.session_state["頁面"] = next((x for x in 頁面們 if x.startswith(碼)), st.session_state.get("頁面"))
+        return
+    if not 鍵 or st.session_state.get("頁面") != 頁面們[2]:
+        return
+    動作 = str(鍵).split("|")[0]
+    if 動作 in ("next", "prev"):
+        目前 = str(st.session_state.get("個股查詢") or "").split(" ")[0]
+        清單 = st.session_state.get("_切換清單") or []
+        if 目前 not in 清單:  # 清單固定下來，「最近看過」重新排序也不會來回跳
+            有 = {v.split()[0] for v in 股票選項}
+            清單 = st.session_state["_切換清單"] = [c for c in 切換清單() if c in 有]
+        if 清單:
+            i = 清單.index(目前) if 目前 in 清單 else -1
+            前往(清單[(i + (1 if 動作 == "next" else -1)) % len(清單)] if i >= 0 else 清單[0])
+    elif 動作 in ("tab+", "tab-"):
+        目前 = st.session_state.get("個股分頁") if st.session_state.get("個股分頁") in 個股分頁們 else 個股分頁們[0]
+        st.session_state["個股分頁"] = 個股分頁們[(個股分頁們.index(目前) + (1 if 動作 == "tab+" else -1)) % len(個股分頁們)]
+    elif 動作 in ("日", "週", "月"):
+        st.session_state["個股週期"] = 動作
+        st.session_state["個股分頁"] = "📈 技術"
+
+
+_導航程式 = r"""
+export default function(component) {
+  const { setTriggerValue } = component;
+  window.__twNav = setTriggerValue;          // 每次重畫都換成最新的回傳函式
+  if (window.__twNavInit) return;
+  window.__twNavInit = true;
+  const 送 = (名, 值) => { try { window.__twNav(名, 值); } catch (e) {} };
+  // 1. 站內連結（?s=2330、?p=07）改成站內切換，不重新載入整頁；按住 Ctrl／⌘ 點仍然另開分頁
+  document.addEventListener('click', (e) => {
+    if (e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+    const a = e.target.closest && e.target.closest('a[href]');
+    if (!a || (a.target && a.target !== '_self')) return;
+    const href = a.getAttribute('href') || '';
+    if (!href.startsWith('?')) return;
+    const q = new URLSearchParams(href.slice(1));
+    const s = q.get('s'), p = q.get('p');
+    if (!s && !p) return;
+    e.preventDefault(); e.stopPropagation();
+    送('go', s ? 's=' + s : 'p=' + p);
+  }, true);
+  // 2. 快捷鍵：/ 搜尋、↑ ↓ 切換股票、[ ] 切換分頁、1 2 3 日週月 K（打字中不作用）
+  document.addEventListener('keydown', (e) => {
+    const t = e.target || {}, tag = (t.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select' || t.isContentEditable || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === '/') {
+      const i = document.querySelector('input[aria-label*="搜尋股票"], input[aria-label*="輸入代號或名稱查詢"]');
+      if (i) { e.preventDefault(); i.focus(); i.click && i.click(); }
+      return;
+    }
+    const 對照 = {ArrowUp: 'prev', ArrowDown: 'next', '[': 'tab-', ']': 'tab+', '1': '日', '2': '週', '3': '月'};
+    const 動作 = 對照[e.key];
+    if (!動作) return;
+    if ((動作 === 'prev' || 動作 === 'next') && !document.querySelector('input[aria-label*="輸入代號或名稱查詢"]')) return;  // 只在個股頁，其他頁照常捲動
+    e.preventDefault();
+    送('key', 動作 + '|' + Date.now());
+  });
+  // 3. 族群熱力圖：點個股方塊直接切到那檔
+  const 掛 = () => document.querySelectorAll('.js-plotly-plot').forEach((g) => {
+    if (g.__twHooked || typeof g.on !== 'function') return;
+    g.__twHooked = true;
+    g.on('plotly_click', (ev) => {
+      const pt = ev && ev.points && ev.points[0];
+      const m = pt && typeof pt.id === 'string' && /\/([0-9A-Z]{4,6})$/.exec(pt.id);
+      if (m) 送('go', 's=' + m[1]);
+    });
+  });
+  new MutationObserver(掛).observe(document.body, {childList: true, subtree: true});
+  掛();
+}
+"""
+_導航元件 = st.components.v2.component("tw_nav", js=_導航程式)
+with st.container(key="navjs"):
+    _導航元件(key="站內導航", on_go_change=_站內導航, on_key_change=_站內導航)
+
 if st.session_state.get("頁面") != 頁面們[2]:  # 個股查詢頁本身就有搜尋框
     st.selectbox("搜尋股票", 股票選項, index=None, key="全站搜尋", on_change=_搜尋跳轉, label_visibility="collapsed",
-                 placeholder="🔍 輸入代號或名稱，直接跳到個股查詢（例如 2330、台積電）")
+                 placeholder="🔍 輸入代號或名稱，直接跳到個股查詢（例如 2330、台積電；電腦可按 / 快速搜尋）")
 with st.container(key="nav"):
     頁面 = st.segmented_control("頁面", 頁面們, key="頁面", label_visibility="collapsed") or 頁面們[0]
+if st.query_params.get("p") != 頁面[:2]:
+    st.query_params["p"] = 頁面[:2]
+st.session_state["_網址p"] = 頁面[:2]
+
+
+# ---------- 足跡列：最近去過的頁面與股票，一點就回去（取代上一頁） ----------
+def _目前位置():
+    if 頁面 == 頁面們[2]:
+        股 = st.session_state.get("個股查詢")
+        股 = 股 if 股 in 股票選項 else next((v for v in 股票選項 if v.startswith("2330 ")), 股票選項[0])
+        return f"📈 {股}"
+    return f"📄 {頁面.replace(' / ', ' ')}"
+
+
+def _回足跡():
+    選 = st.session_state.get("足跡")
+    st.session_state["足跡"] = None
+    if not 選:
+        return
+    選 = 選.removeprefix("↩ ")
+    if 選.startswith("📈 "):
+        前往(選[2:].split()[0])
+    else:
+        st.session_state["頁面"] = next((x for x in 頁面們 if x.startswith(選[2:4])), 頁面們[0])
+
+
+_足跡 = [x for x in st.session_state.get("_足跡", []) if x != _目前位置()] + [_目前位置()]
+st.session_state["_足跡"] = _足跡[-8:]
+_回去 = [x for x in reversed(_足跡[:-1]) if 頁面 != 頁面們[2] or x.startswith("📄")][:5]
+if _回去:
+    with st.container(key="trail"):
+        st.pills("剛剛去過", [f"↩ {x}" for x in _回去], key="足跡", on_change=_回足跡, label_visibility="collapsed")
 
 
 def 加代號(資料, 參數):
@@ -722,6 +942,33 @@ def AI紀錄快取(代號, _權杖):
 def 評分資料(版本鍵):
     return engine.今昨評分(指標[指標["date"] >= 指標["date"].max() - pd.Timedelta(days=20)],
                          基本面資料(版本鍵), 加權)
+
+
+# ---------- 順勢做多（RS、均線多頭、VCP 突破、法人連買、交易計畫）：全市場最新一天，所有人共用 ----------
+@st.cache_resource(max_entries=1, show_spinner="計算順勢做多訊號中…")
+def 動能資料(版本鍵):
+    欄 = ["date", "代號", "名稱", "市場", "open", "high", "low", "收盤", "還原價", "volume", "成交值億", "漲跌幅",
+         "MA10", "MA20", "外資連買", "投信連買", "法人5日買超", "產業"]
+    t = momentum.加上動能欄位(指標[[c for c in 欄 if c in 指標.columns]])
+    今, 遮 = momentum.今日訊號(t, 最新日, 加權)
+    del t
+    for k, v in 遮.items():
+        今[k] = v
+    計畫們 = [momentum.交易計畫(列) for _, 列 in 今.iterrows()]
+    for 欄名 in ("買點", "停損", "停損%", "目標1", "目標2", "已突破"):
+        今[欄名] = [c.get(欄名) if c else None for c in 計畫們]
+    engine.釋放記憶體()
+    return 今.set_index("代號")
+
+
+def 訊號回測表(實測):
+    """momentum_backtest.json → 顯示用表格（含全部樣本當基準）。"""
+    if not 實測:
+        return None
+    列們 = [dict(實測["基準"], 訊號="（基準）全部股票")] + 實測["訊號"]
+    表 = pd.DataFrame(列們)
+    表["說明"] = 表["訊號"].map(momentum.訊號說明).fillna("同期間所有股票隨便買的平均")
+    return 表[["訊號", "次數", "5日勝率%", "5日平均%", "20日勝率%", "20日平均%", "20日超額%", "20日內平均最大回撤%", "說明"]]
 
 
 def ETF版本():
@@ -852,12 +1099,117 @@ def 前後期表(歷史, 欄位, 比較們, 期名, 反向=(), 即時=None):
     表格(pd.DataFrame(列們), hide_index=True, width="stretch")
 
 
-@st.cache_data(ttl=30, show_spinner=False)
-def 分鐘線(代號, 市場="上市", 間隔="1m", 範圍="5d"):
+# ---------- 盤中自動更新與外部資料快取（盤中 30 秒、盤前 60 秒、收盤後停；抓不到時先顯示上一筆） ----------
+@st.cache_data(ttl=3600, show_spinner=False)
+def _休市日(月份):
+    """證交所確認休市的日子（data/status/YYYY-MM.txt 標 closed 的），平日颱風假、國定假日就不會一直抓即時資料。"""
+    f = engine.資料夾 / "status" / f"{月份}.txt"
     try:
-        return engine.盤中K線(代號, 市場, 間隔, 範圍)
+        return {行.split(",")[0] for 行 in f.read_text().split() if 行.endswith(",closed")}
     except Exception:
+        return set()
+
+
+def 盤中階段():
+    """台灣時間的交易階段：盤前（08:30～09:00）、盤中（09:00～13:35）、盤後、休市（週末或已確認休市）。"""
+    現在 = pd.Timestamp.now(tz="Asia/Taipei")
+    if 現在.weekday() >= 5 or f"{現在:%Y%m%d}" in _休市日(f"{現在:%Y-%m}"):
+        return "休市"
+    if engine.盤中時間():
+        return "盤中"
+    return "盤前" if (8, 30) <= (現在.hour, 現在.minute) < (9, 0) else "盤後"
+
+
+def 刷新秒(秒=30):
+    """給 @st.fragment(run_every=…) 用：盤中每 秒 秒、盤前每 60 秒（等開盤）、收盤後與休市不自動更新。"""
+    階段 = 盤中階段()
+    return 秒 if 階段 == "盤中" else (60 if 階段 == "盤前" else None)
+
+
+def 輪詢檢查():
+    """放在會自動更新的區塊開頭：開盤或收盤那一刻整頁重跑一次，自動更新的頻率才會跟著換（收盤後就停止抓）。"""
+    if st.session_state.get("_輪詢階段") not in (None, 盤中階段()):
+        st.rerun()
+
+
+st.session_state["_輪詢階段"] = 盤中階段()
+
+
+@st.cache_resource
+def _留底():
+    """每個外部資料最後一次成功抓到的結果（所有人共用），抓不到時先拿出來顯示。"""
+    return {}
+
+
+def 抓取留底(鍵, 抓, 冷卻秒=60):
+    """先試著抓新的；失敗（429 太頻繁、逾時、空資料）就回傳上一次成功的資料，並標記 attrs["過期"]=抓到的時間。
+    失敗後 冷卻秒 內不再重抓，避免被對方網站擋得更久。"""
+    底 = _留底()
+    舊 = 底.get(鍵) or {}
+    值 = None
+    if not (舊.get("失敗") and time.time() - 舊["失敗"] < 冷卻秒):
+        try:
+            值 = 抓()
+        except Exception:
+            值 = None
+    if 值 is not None and len(值):
+        底[鍵] = {"值": 值, "時間": time.time()}
+        if len(底) > 300:  # 只留最近 300 筆，避免記憶體越長越大
+            for k in sorted(底, key=lambda k: 底[k].get("時間", 0))[:50]:
+                底.pop(k, None)
+        return 值
+    底[鍵] = {**舊, "失敗": time.time()}
+    if 舊.get("值") is None:
         return None
+    值 = 舊["值"].copy()
+    值.attrs = {**舊["值"].attrs, "過期": pd.Timestamp(舊["時間"], unit="s", tz="UTC").tz_convert("Asia/Taipei").strftime("%H:%M")}
+    return 值
+
+
+def 時段鍵(秒=30):
+    """快取分段：盤中每 秒 秒換一段（資料會更新）；其他時間整段一樣（盤後資料不會變，不用 30 秒就重抓）。"""
+    階段 = 盤中階段()
+    return int(time.time() // 秒) if 階段 == "盤中" else f"{pd.Timestamp.now():%Y%m%d}{階段}"
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False, max_entries=300)
+def _分鐘線(代號, 市場, 間隔, 範圍, 時段):
+    表 = engine.盤中K線(代號, 市場, 間隔, 範圍)
+    if 表 is None or 表.empty:
+        raise ValueError("沒有分鐘線")  # 失敗不快取，下次再試
+    return 表
+
+
+def 分鐘線(代號, 市場="上市", 間隔="1m", 範圍="5d"):
+    """Yahoo 分鐘線；抓不到時回傳上一次成功的資料（attrs["過期"] 有值），都沒有才回傳 None。"""
+    return 抓取留底(("分鐘線", 代號, 市場, 間隔, 範圍), lambda: _分鐘線(代號, 市場, 間隔, 範圍, 時段鍵()))
+
+
+def 過期提示(表):
+    """資料是先前留底的就提醒一下。"""
+    if 表 is not None and getattr(表, "attrs", {}).get("過期"):
+        st.caption(f"⚠️ 即時資料暫時抓不到（可能是對方網站限制次數），先顯示 {表.attrs['過期']} 抓到的資料，稍後會自動重試。")
+
+
+class 區塊防護:
+    """with 區塊防護("籌碼")：裡面出錯只在這一塊顯示提示並記錄，同一頁其他區塊照常顯示。
+    （st.rerun、st.stop 不是 Exception，會照常往外傳。）"""
+
+    def __init__(self, 名稱):
+        self.名稱 = 名稱
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, 類, 值, 追):
+        if 類 is None or not issubclass(類, Exception):
+            return False
+        import traceback
+        st.warning(f"「{self.名稱}」這一塊暫時無法顯示（{類.__name__}），已自動記錄；其他區塊不受影響，可稍後重新整理再試。")
+        threading.Thread(target=engine.記錄錯誤, daemon=True,
+                         args=(_設定(), f"{st.session_state.get('頁面', '')} {self.名稱}", 值,
+                               "".join(traceback.format_exception(類, 值, 追)))).start()
+        return True
 
 
 def _設定():
@@ -1280,6 +1632,11 @@ def 執行頁面(索引):
         threading.Thread(target=engine.記錄錯誤, args=(_設定(), 頁面們[索引], e, traceback.format_exc()), daemon=True).start()
 
 
+if 新手 and 頁面 == 頁面們[0]:
+    st.markdown('<div class="sec">BEGINNER // 新手三步驟看盤</div><div class="steps">' + "".join(
+        f'<a href="?p={碼}" target="_self"><b>{標}</b><span>{說}</span></a>' for 標, 說, 碼 in beginner.三步驟) + "</div>",
+        unsafe_allow_html=True)
+    st.caption("網站的設計順序就是這三步：大盤好不好 → 誰最強 → 哪裡買、哪裡停損。名詞旁的 ❓ 可以看白話說明；不想看可以關掉上方「🔰 新手模式」。")
 執行頁面(頁面們.index(頁面))
 
 

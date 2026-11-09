@@ -1,0 +1,41 @@
+name: 自動收件（網紅影片＋券商報告）
+
+on:
+  # 錯開整點；重跑安全（處理過的影片／檔案會記在 ai-reports 的 intake_seen.json）
+  schedule:
+    - cron: "27 13 * * 1-5"   # 台灣時間 21:27
+    - cron: "52 14 * * 1-5"   # 22:52 補收晚上才傳的檔案
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "all＝影片＋券商、videos＝只影片、brokers＝只券商、usage＝傳用量小卡"
+        default: all
+      urls:
+        description: "要立刻處理的 YouTube 網址（空白分隔，可留空）"
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency: intake
+
+jobs:
+  intake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pandas numpy requests pyarrow pypinyin youtube-transcript-api
+      - run: python -u auto_intake.py ${{ github.event.inputs.mode || 'all' }}
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
+          VIDEO_URLS: ${{ github.event.inputs.urls }}
+          LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
