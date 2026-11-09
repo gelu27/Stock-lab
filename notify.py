@@ -1,5 +1,5 @@
 # LINE 推播：每天收盤摘要、盤中到價提醒（由 GitHub Actions 執行）
-#   python notify.py daily   收盤摘要（大盤、強弱族群、自選股、庫存損益、到價）
+#   python notify.py daily   收盤摘要（大盤、強弱族群、自選股、庫存損益、到價、80 分以上名單與新增／剔除）
 #   python notify.py alert   盤中檢查到價提醒（同一個提醒一天只通知一次）
 #   python notify.py test    傳一則測試訊息
 #   python notify.py health  檢查各資料來源有沒有正常更新，有問題才通知（休市日不算問題）
@@ -132,7 +132,15 @@ def 推播(文字):
         return
     對象 = 清理(os.environ.get("LINE_USER_ID"))
     網址 = "https://api.line.me/v2/bot/message/" + ("push" if 對象 else "broadcast")
-    內容 = {"messages": [{"type": "text", "text": 文字[:4900]}]}
+    # 一則最多 5000 字，太長就照換行切成多則（一次送最多 5 則，只算 1 次推播額度）
+    段們, 段 = [], ""
+    for 行 in 文字.split("\n"):
+        if len(段) + len(行) + 1 > 4900 and 段:
+            段們.append(段)
+            段 = ""
+        段 = (段 + "\n" + 行) if 段 else 行[:4900]
+    段們.append(段)
+    內容 = {"messages": [{"type": "text", "text": t} for t in 段們[:5]]}
     if 對象:
         內容["to"] = 對象
     r = requests.post(網址, headers={"Authorization": f"Bearer {權杖}"}, json=內容, timeout=15)
@@ -795,7 +803,64 @@ def 評分摘要(持股, 自選們=()):
         行們.append("🆕 新進 75 分以上：" + "、".join(f"{r['名稱']} {r['總分']:.1f}" for _, r in 新.head(15).iterrows()))
     高 = 可.sort_values("總分", ascending=False).head(10)
     行們.append("🔝 高分前 10：" + "、".join(f"{r['名稱']} {r['總分']:.1f}" for _, r in 高.iterrows()))
+    try:
+        行們 += 八十分名單(可, 分, 庫存們, list(自選們), 大.get("日期"))
+    except Exception as e:
+        print("80 分名單失敗：", repr(e))
     行們.append("（規則計分，僅供參考，非投資建議）")
+    return 行們
+
+
+高分門檻 = 80
+高分名單檔 = "score80_list.json"
+
+
+def 高分名單變化(分, 日期, 存檔, 門檻=高分門檻, 庫存們=(), 自選們=(), 全=None):
+    """總分 ≥ 門檻 的名單，跟「前一交易日推播的名單」比對新增與剔除。
+    存檔 = {"日期", "名單": {代號: [名稱, 總分]}, "前一日": {...}}；同一天重跑時跟「前一日」比，不會把自己當成昨天。
+    沒有存檔（第一次跑）就用評分的「較昨日」推算昨天分數。分＝有入選資格的股票，全＝全部（查剔除股現在幾分）。
+    回傳 (訊息行們, 新存檔)。"""
+    日 = f"{pd.Timestamp(日期):%Y-%m-%d}"
+    今 = 分[分["總分"] >= 門檻].sort_values("總分", ascending=False)
+    今名單 = {c: [str(r["名稱"]), round(float(r["總分"]), 1)] for c, r in 今.iterrows()}
+    前 = None
+    if 存檔.get("日期") and 存檔["日期"] < 日:
+        前 = 存檔
+    elif 存檔.get("日期") == 日 and 存檔.get("前一日"):
+        前 = 存檔["前一日"]
+    if 前 is not None:
+        前名單, 前日 = 前.get("名單", {}), 前.get("日期", "")
+    else:   # 第一次：用今昨評分推回昨天的分數
+        昨分 = 分["總分"] - 分["較昨日"]
+        前名單 = {c: [str(分.at[c, "名稱"]), round(float(v), 1)] for c, v in 昨分.items() if pd.notna(v) and v >= 門檻}
+        前日 = ""
+    標 = lambda c: ("💼" if c in 庫存們 else "⭐" if c in 自選們 else "")
+    新增 = [c for c in 今名單 if c not in 前名單]
+    剔除 = sorted((c for c in 前名單 if c not in 今名單), key=lambda c: -前名單[c][1])
+    比對 = f"（比 {前日[5:].replace('-', '/')}）" if 前日 else "（比前一交易日）"
+    行們 = ["", f"🏅 {門檻} 分以上 {len(今名單)} 檔"]
+    if 今名單:
+        行們.append("、".join(f"{標(c)}{c} {v[0]} {v[1]:.1f}" for c, v in 今名單.items()))
+    行們.append(f"🟢 新增 {len(新增)} 檔{比對}" + ("：" + "、".join(
+        f"{標(c)}{今名單[c][0]} {今名單[c][1]:.1f}" for c in 新增) if 新增 else ""))
+    def 剔(c):
+        現 = (分 if 全 is None else 全)["總分"].get(c)
+        return f"{標(c)}{前名單[c][0]} {前名單[c][1]:.1f}→" + (f"{現:.1f}" if pd.notna(現) else "無資料")
+    行們.append(f"🔴 剔除 {len(剔除)} 檔{比對}" + ("：" + "、".join(剔(c) for c in 剔除) if 剔除 else ""))
+    新存檔 = {"日期": 日, "門檻": 門檻, "名單": 今名單}
+    if 前 is not None:
+        新存檔["前一日"] = {"日期": 前.get("日期", ""), "名單": 前.get("名單", {})}
+    return 行們, 新存檔
+
+
+def 八十分名單(可, 全, 庫存們, 自選們, 日期):
+    存檔, sha = 讀設定(高分名單檔)
+    行們, 新存檔 = 高分名單變化(可, 日期 if 日期 is not None else dt.date.today(), 存檔 or {},
+                       庫存們=set(庫存們), 自選們=set(自選們), 全=全)
+    try:
+        寫設定(高分名單檔, 新存檔, sha)
+    except Exception as e:
+        print("80 分名單存檔失敗（明天會改用分數推算比對）：", repr(e))
     return 行們
 
 
