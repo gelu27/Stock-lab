@@ -1756,7 +1756,8 @@ def 抓可轉債():
 
 def 抓公司簡介(每次=250):
     """公司主要業務（公開資訊觀測站）與營收比重（MoneyDJ）→ data/company_profile.csv。
-    一檔約 2 秒，所以每天只補 每次 檔：先補還沒有的，再更新超過 60 天的，約 10 天全部跑過一輪。"""
+    一檔約 2 秒，所以每天只補 每次 檔：先補還沒有的，再重試「主要業務是空的」（公開資訊觀測站偶爾擋掉，3 天後重試），
+    最後更新超過 60 天的。全部跑完一輪後，到 60 天後才會再有東西要更新，這段期間更新日不動是正常的。"""
     import engine
     f = 資料夾 / "company_profile.csv"
     舊 = pd.read_csv(f, dtype=str).fillna("") if f.exists() else pd.DataFrame(columns=engine.公司簡介欄)
@@ -1764,7 +1765,11 @@ def 抓公司簡介(每次=250):
     代號們 = [c for c in 股本["code"].astype(str).str.strip() if re.fullmatch(r"[1-9]\d{3}", c)]
     更新日 = dict(zip(舊["code"], 舊["更新日"]))
     期限 = (dt.datetime.now(台北時區) - dt.timedelta(days=60)).strftime("%Y-%m-%d")
-    待 = [c for c in 代號們 if c not in 更新日] + sorted((c for c in 代號們 if c in 更新日 and 更新日[c] < 期限), key=更新日.get)
+    沒業務 = set(舊.loc[舊["業務"].str.strip() == "", "code"])
+    重試限 = (dt.datetime.now(台北時區) - dt.timedelta(days=3)).strftime("%Y-%m-%d")
+    待 = ([c for c in 代號們 if c not in 更新日]
+          + sorted((c for c in 代號們 if c in 沒業務 and 更新日[c] < 重試限), key=更新日.get)
+          + sorted((c for c in 代號們 if c in 更新日 and c not in 沒業務 and 更新日[c] < 期限), key=更新日.get))
     待 = 待[:每次]
     if not 待:
         print("公司簡介：都是最新的")

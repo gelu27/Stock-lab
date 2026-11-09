@@ -925,8 +925,9 @@ def 健康檢查():
     公司 = 資料夾 / "company_profile.csv"
     if 公司.exists():
         更 = pd.read_csv(公司, usecols=["更新日"])["更新日"].dropna()
-        if len(更) and (今天 - pd.Timestamp(更.max()).date()).days > 7:
-            問題.append(f"公司介紹資料：最新更新 {pd.Timestamp(更.max()):%m/%d}，已超過 7 天沒輪抓")
+        # 輪抓是補空缺、每 60 天更新一輪，跑完一輪後最新更新日本來就會停很久；只在最舊的一筆快超過 60 天還沒輪到時才報
+        if len(更) and (今天 - pd.Timestamp(更.min()).date()).days > 75:
+            問題.append(f"公司介紹資料：最舊一筆更新於 {pd.Timestamp(更.min()):%m/%d}，已超過 75 天沒輪抓")
 
     def 太舊(名稱, 最新, 容許天數):
         if 最新 is None:
