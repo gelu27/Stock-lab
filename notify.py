@@ -364,6 +364,10 @@ def 提醒事項(代號們):
     except Exception as e:
         print("自選重訊失敗：", repr(e))
     try:
+        行們 += 預估修正提醒(代號們, 狀態)
+    except Exception as e:
+        print("預估修正提醒失敗：", repr(e))
+    try:
         行們 += 跌深融資提醒(狀態)
     except Exception as e:
         print("跌深融資提醒失敗：", repr(e))
@@ -375,6 +379,14 @@ def 提醒事項(代號們):
         行們 += 台幣提醒(狀態)
     except Exception as e:
         print("台幣提醒失敗：", repr(e))
+    try:
+        行們 += 季線VIX提醒(狀態)
+    except Exception as e:
+        print("季線／VIX 提醒失敗：", repr(e))
+    try:
+        行們 += 領頭站回提醒(狀態)
+    except Exception as e:
+        print("領頭站回提醒失敗：", repr(e))
     if 狀態 != 舊狀態:
         try:
             寫設定("alert_state.json", 狀態, sha)
@@ -414,6 +426,61 @@ def 台幣提醒(狀態):
     return (["", "💱 台幣與外資"] + 新) if 新 else []
 
 
+def 領頭站回提醒(狀態):
+    """data/leader_groups.csv 的領頭股今天站回月線（前 10 天都在月線下）就通知一次，附同組跟隨股。"""
+    import engine
+    組 = engine.讀取領頭連動()
+    if 組.empty:
+        return []
+    代們 = set(組["領頭"]) | {c for x in 組["跟隨"] for c in x.split()}
+    表 = engine.讀取資料庫(最近天數=60, 代號=list(代們))
+    if 表 is None or not len(表):
+        return []
+    t = 表.rename(columns={"code": "代號", "close": "收盤"})[["代號", "date", "收盤"]]
+    行們 = []
+    日 = f"{pd.to_datetime(t['date']).max():%Y-%m-%d}"
+    for 名, 頭, 跟 in engine.今日領頭站回(組, t):
+        鍵 = f"領頭站回_{頭}"
+        if 狀態.get(鍵) == 日:
+            continue
+        狀態[鍵] = 日
+        行們 += ["", f"🚩 {名}：領頭股 {頭} 今天站回月線，同組 {跟} 可以留意是否跟上（只是連動觀察，不是買進訊號）"]
+    return 行們
+
+
+def 季線VIX提醒(狀態):
+    """股癌 EP712：加權季線保衛戰狀態改變（等站上 → 站上第 N 天 → 站穩／又跌破）、VIX 單日跳升 ≥ 30% 時通知。
+    季線狀態只在「燈」改變時通知（第一次執行只記錄）；VIX 同一天只通知一次。"""
+    import engine
+    行們 = []
+    K = engine.讀取指數K線("TAIEX")
+    狀 = engine.季線狀態(K)
+    if 狀:
+        舊 = 狀態.get("季線燈")
+        狀態["季線燈"] = 狀["燈"]
+        if 舊 and 舊 != 狀["燈"] and 狀["燈"] != "⚪":
+            行們 += ["", f"📏 季線保衛戰：{狀['燈']} {狀['狀態']}（季線 {狀['季線']:,.0f}、乖離 {狀['乖離%']:+.1f}%）", 狀["說明"]]
+    v = engine.讀取VIX長線()
+    for d, 名, 值, 變 in engine.VIX今日觸發(v, 最近天數=1):
+        鍵 = f"{d:%Y-%m-%d}"
+        if 狀態.get("VIX跳升_最後") == 鍵:
+            break
+        狀態["VIX跳升_最後"] = 鍵
+        f = engine.資料夾 / "sox_long.csv"
+        話 = ""
+        if f.exists():
+            t = pd.read_csv(f, parse_dates=["date"])
+            標 = t[t["symbol"] == "^GSPC"].set_index("date")["close"]
+            表, _ = engine.VIX跳升統計(v, 標)
+            r = 表[表["條件"] == 名]
+            if len(r) and r["次數"].iloc[0]:
+                r = r.iloc[0]
+                話 = f"1994 年來（含這次）{r['次數']:.0f} 次，S&P 500 之後 20 日上漲 {r['20日上漲%']:.0f}%、平均 {r['20日平均%']:+.1f}%；250 日 {r['250日平均%']:+.1f}%"
+        行們 += ["", f"😨 {d:%m/%d} {名}：VIX {值:.1f}（單日 {變:+.0f}%）", 話 or "短線常是好買點，但先想清楚是做反彈還是長抱。"]
+        break
+    return 行們
+
+
 def 營收新高提醒(代號們, 狀態):
     """庫存、自選股公布月營收就通知（每檔每個月只通知一次），創近 5 年新高的加 🏆。
     月初上個月和上上個月都可能還在公布，兩個月都看。第一次執行只記下已公布的，不通知，免得一次洗版。"""
@@ -451,6 +518,12 @@ def 條件訂閱提醒(狀態, 最多=15):
     指標 = engine.計算指標(engine.讀取資料庫(最近天數=130))
     最新 = 指標["date"].max()
     今日 = engine.加基本面(指標[指標["date"] == 最新], engine.讀取基本面())
+    try:  # 選股條件可能用到預估本益比（網站今日表也有加）
+        預 = engine.預估EPS表()
+        if 預 is not None:
+            今日 = engine.加預估本益比(今日.join(預, on="代號"))
+    except Exception as e:
+        print("預估 EPS 加入失敗：", repr(e))
     名 = dict(zip(今日["代號"], 今日["名稱"]))
     日 = f"{最新:%Y-%m-%d}"
     行們 = []
@@ -473,6 +546,35 @@ def 條件訂閱提醒(狀態, 最多=15):
             if 出:
                 行們.append("　👋 剛剔除：" + "、".join(f"{c} {名.get(c, '')}" for c in 出[:最多]) + (f" 等 {len(出)} 檔" if len(出) > 最多 else ""))
     return (["", "🔔 選股訂閱變動"] + 行們) if 行們 else []
+
+
+def 預估修正提醒(代號們, 狀態, 門檻=5.0, 最多=15):
+    """上傳新一份預估 EPS 快照後，庫存＋自選股的今年預估跟上一份比上修／下修超過 門檻% 就通知（每份快照只通知一次）。"""
+    import engine
+    t = engine.預估EPS表()
+    if t is None or "預估修正%" not in t.columns:
+        return []
+    日 = f"{pd.Timestamp(t['預估資料日'].iloc[0]):%Y-%m-%d}"
+    if 狀態.get("預估修正_日") == 日:
+        return []
+    狀態["預估修正_日"] = 日
+    t = t.reindex([c for c in dict.fromkeys(代號們) if c in t.index])
+    修 = t["預估修正%"].dropna()
+    下, 上 = 修[修 <= -門檻].sort_values(), 修[修 >= 門檻].sort_values(ascending=False)
+    if not len(下) and not len(上):
+        return []
+    try:
+        _, 行情 = 最新行情()
+        名表 = dict(zip(行情["code"], 行情["name"]))
+    except Exception:
+        名表 = {}
+    前 = pd.Timestamp(t["前期資料日"].dropna().iloc[0]) if t["前期資料日"].notna().any() else None
+    def 行(c, v):
+        r = t.loc[c]
+        return f"{'🔻' if v < 0 else '🔺'} {c} {名表.get(c, '')} 今年預估 EPS {r['前期預估EPS今年']:.2f} → {r['預估EPS今年']:.2f}（{v:+.1f}%）"
+    行們 = ["", f"📐 預估 EPS 修正（庫存＋自選，{前:%m/%d} → {日[5:].replace('-', '/')}）" if 前 else "📐 預估 EPS 修正（庫存＋自選）"]
+    行們 += [行(c, v) for c, v in 下.head(最多).items()] + [行(c, v) for c, v in 上.head(最多).items()]
+    return 行們
 
 
 def 跌深融資提醒(狀態, 冷卻天數=30):
@@ -823,8 +925,9 @@ def 健康檢查():
     公司 = 資料夾 / "company_profile.csv"
     if 公司.exists():
         更 = pd.read_csv(公司, usecols=["更新日"])["更新日"].dropna()
-        if len(更) and (今天 - pd.Timestamp(更.max()).date()).days > 7:
-            問題.append(f"公司介紹資料：最新更新 {pd.Timestamp(更.max()):%m/%d}，已超過 7 天沒輪抓")
+        # 輪抓是補空缺、每 60 天更新一輪，跑完一輪後最新更新日本來就會停很久；只在最舊的一筆快超過 60 天還沒輪到時才報
+        if len(更) and (今天 - pd.Timestamp(更.min()).date()).days > 75:
+            問題.append(f"公司介紹資料：最舊一筆更新於 {pd.Timestamp(更.min()):%m/%d}，已超過 75 天沒輪抓")
 
     def 太舊(名稱, 最新, 容許天數):
         if 最新 is None:
@@ -909,6 +1012,25 @@ def 網站錯誤():
     return [f"{v['頁面']}：{v['類型']} {v['訊息'][:80]}（{v.get('位置', '')}，共 {v['次數']} 次，最近 {v['最近']}）" for _, v in 新]
 
 
+def 主動ETF月報(迄):
+    """上個月、今年以來，主動式 ETF 對同 beta 組合（台股型＝0050＋正 2）的超額前 3、後 3 名。"""
+    import engine
+    import etf_perf
+    月起 = (迄.replace(day=1) - pd.DateOffset(months=1)).normalize()
+    月迄 = 迄.replace(day=1) - pd.Timedelta(days=1)
+    年起 = pd.Timestamp(f"{月迄.year}-01-01")
+    原始 = engine.讀取資料庫(起日=min(年起, 月起) - pd.Timedelta(days=30))
+    指標 = engine.計算指標(原始)
+    del 原始
+    主 = etf_perf.主動式代號(指標["code"].unique())
+    寬 = etf_perf.報酬寬表(指標, 主 + ["0050", etf_perf.正2代號] + sorted(set(etf_perf.基準名) - {"0050"}))
+    名 = 指標.drop_duplicates("code", keep="last").set_index("code")["名稱"].str.replace("主動", "", regex=False).to_dict()
+    行們 = etf_perf.月報文字(寬, 主, 月起, 月迄, 年起, 名)
+    if 行們:
+        行們[1] = 行們[1].replace("📊 主動式 ETF", f"📊 主動式 ETF {月起:%m} 月報")
+    return 行們
+
+
 def 週報():
     """這週（最近 5 個交易日）的大盤、庫存、自選股表現，主動式 ETF 一週加減碼，下週日程。"""
     import engine
@@ -967,6 +1089,12 @@ def 週報():
     except Exception as e:
         print("ETF 週統計失敗：", repr(e))
 
+    if 迄.day <= 7 or os.environ.get("ETF_MONTHLY") == "1":   # 每月第一份週報附上個月主動式 ETF 績效（月報）
+        try:
+            行們 += 主動ETF月報(迄)
+        except Exception as e:
+            print("主動式 ETF 月報失敗：", repr(e))
+
     日程 = engine.重要日程(set(庫存們 + 自選們), 天數=9)
     if len(日程):
         行們 += ["", "📅 下週日程"] + [f"{r['日期']:%m/%d} {r['類型']} {r['股票'] if r['代號'] else ''} {r['說明'][:40]}".replace("  ", " ")
@@ -1011,6 +1139,10 @@ def 大盤解讀(模式):
     print(摘要)
     內容, 模型 = engine.AI大盤解讀(摘要, 模式, 設定)
     try:
+        engine.AI用量紀錄(設定, "大盤解讀")
+    except Exception as e:
+        print("用量紀錄失敗：", repr(e))
+    try:
         engine.儲存大盤解讀(設定, 模式, 內容, 模型)
     except Exception as e:
         print("存檔失敗：", repr(e))
@@ -1035,9 +1167,17 @@ def 個股查詢(問, 完整=True):
     代, 名 = str(r["code"]), str(r["name"])
     import line_report
     今, 個股史 = line_report.準備(代)
+    即時 = None
+    if 今 is not None:   # 盤中（或收盤後到晚上更新前）用證交所即時價，AI 報告與 PDF 也跟著用
+        今, 即時 = engine.套用即時價(今, 代, r["date"])
     指標 = 個股史.tail(400) if 個股史 is not None else engine.計算指標(engine.讀取資料庫(最近天數=400, 代號=[代]))
-    行們 = [f"🔍 {代} {名}　{r['date']:%m/%d}", f"收盤 {r['close']:,.2f}（{符號(r['change'])}{abs(r['change']):,.2f}）"
-          + (f"，本益比 {r['pe']:.1f}" if pd.notna(r.get("pe")) and r["pe"] > 0 else "")]
+    if 即時:
+        行們 = [f"🔍 {代} {名}　{即時}", f"現價 {今['收盤']:,.2f}（{符號(今['漲跌'])}{abs(今['漲跌']):,.2f}，{今['漲跌幅']:+.2f}%）"
+              + (f"，本益比 {今['本益比']:.1f}" if pd.notna(今.get("本益比")) and 今["本益比"] > 0 else "")
+              + f"\n（籌碼、評分、技術是 {r['date']:%m/%d} 收盤資料）"]
+    else:
+        行們 = [f"🔍 {代} {名}　{r['date']:%m/%d}", f"收盤 {r['close']:,.2f}（{符號(r['change'])}{abs(r['change']):,.2f}）"
+              + (f"，本益比 {r['pe']:.1f}" if pd.notna(r.get("pe")) and r["pe"] > 0 else "")]
     try:
         全 = engine.計算指標(engine.讀取資料庫(最近天數=40))
         分, _, _ = engine.今昨評分(全, engine.讀取基本面(), engine.讀取加權指數())
@@ -1062,11 +1202,15 @@ def 個股查詢(問, 完整=True):
             行們.append("⬇️ 支撐 " + "、".join(f"{x['價位']:,.2f}（{x['名稱']}）" for _, x in 撐.iterrows()))
     try:
         報告們 = [x for x in (讀設定("broker_reports.json")[0] or {}).get("報告", []) if str(x.get("代號")) == 代]
-        字 = engine.共識文字(engine.券商共識(報告們, float(r["close"])))
+        字 = engine.共識文字(engine.券商共識(報告們, float(今["收盤"] if 即時 else r["close"])))
         if 字:
             行們.append("🏦 " + 字)
     except Exception as e:
         print("券商共識失敗：", repr(e))
+    try:
+        行們 += line_report.公司新聞文字(line_report.公司資料(代), line_report.近期新聞(代, 名, 筆數=4))
+    except Exception as e:
+        print("公司介紹／新聞失敗：", repr(e))
     轉 = engine.讀取內部人轉讓()
     if 轉 is not None:
         近 = 轉[(轉["code"] == 代) & (轉["date"] >= 轉["date"].max() - pd.Timedelta(days=30))]

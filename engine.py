@@ -29,6 +29,10 @@ def 稅率(代號):
     "法人5日買超 多→少": ("法人5日買超", False),
     "投信連買天數 多→少": ("投信連買", False),
     "週轉率 高→低": ("週轉率", False),
+    "預估本益比 低→高": ("預估本益比", True),
+    "明年預估本益比 低→高": ("明年預估本益比", True),
+    "明年 EPS 成長 高→低": ("明年EPS成長%", False),
+    "預估 EPS 上修 多→少": ("預估修正%", False),
 }
 
 
@@ -484,6 +488,22 @@ def _連續天數(條件, 代號):
     return 條件.astype(int).groupby([代號, 斷點]).cumsum()
 
 
+@lru_cache(maxsize=2)
+def _讀參考價(_更新時間):
+    t = pd.read_csv(資料夾 / "fundamental" / "dividend.csv", dtype={"code": str}, usecols=["code", "date", "ref"])
+    t["date"] = pd.to_datetime(t["date"])
+    t["ref"] = pd.to_numeric(t["ref"], errors="coerce")
+    return t.dropna().drop_duplicates(["code", "date"], keep="last")
+
+
+def 除權息參考價():
+    """除權息（含面額分割）當天的參考價：code、date、ref。"""
+    f = 資料夾 / "fundamental" / "dividend.csv"
+    if not f.exists():
+        return pd.DataFrame(columns=["code", "date", "ref"])
+    return _讀參考價(f.stat().st_mtime)
+
+
 def 計算指標(原始):
     表 = 原始.rename(columns={
         "name": "名稱", "close": "收盤", "change": "漲跌", "pe": "本益比",
@@ -495,11 +515,20 @@ def 計算指標(原始):
     # 日報酬：交易所的「漲跌」是跟參考價比，除權息當天不會誤算成大跌
     前一天 = 表["收盤"] - 表["漲跌"]
     表["日報酬"] = (表["漲跌"] / 前一天).where(前一天 > 0)
+    # 除權息當天交易所的漲跌欄是「X」（讀進來是空值），以前會改用收盤價推算，股利就沒補回去；
+    # 改用除權息表的參考價：日報酬 ＝ 收盤 ÷ 參考價 − 1（2026-11-08 修正，0050 今年少算約 3 個百分點）
+    參考 = 除權息參考價()
+    if len(參考):
+        參考價 = 表[["code", "date"]].merge(參考, on=["code", "date"], how="left")["ref"].to_numpy()
+        補 = 表["日報酬"].isna() & (參考價 > 0)
+        表.loc[補, "日報酬"] = (表.loc[補, "收盤"].to_numpy() / 參考價[補.to_numpy()] - 1).astype(表["日報酬"].dtype)
     # 沒有漲跌資料（例如減資、暫停交易後恢復）時才用收盤價推算；
     # 超過 10% 漲跌停限制的變動通常是減資等公司行動，不算成真正的漲跌
+    # 槓桿型 ETF（代號結尾 L，例如 00631L 正2）漲跌幅限制是倍數 × 10%，不能截在 10.5%，否則還原價會失真
+    上限 = pd.Series(np.where(表["code"].astype(str).str.fullmatch(r"00\d{3,4}L"), 0.21, 0.105), index=表.index)
     推算 = 群["收盤"].pct_change()
-    推算 = 推算.where(推算.abs() <= 0.105, 0)
-    表["日報酬"] = 表["日報酬"].fillna(推算).fillna(0).clip(-0.105, 0.105)
+    推算 = 推算.where(推算.abs() <= 上限, 0)
+    表["日報酬"] = 表["日報酬"].fillna(推算).fillna(0).clip(-上限, 上限)
     # 還原股價：把除權息的影響補回去，回測才準
     表["還原價"] = np.exp(np.log1p(表["日報酬"]).groupby(表["code"]).cumsum())
 
@@ -719,6 +748,17 @@ def 選股(當日, 條件):
     for 鍵, 欄 in (("合約負債年增下限", "合約負債年增"), ("能見度月下限", "能見度月")):
         if c.get(鍵) is not None and 欄 in 結果.columns:
             結果 = 結果[結果[欄] >= c[鍵]]
+    for 鍵, 欄 in (("預估本益比上限", "預估本益比"), ("明年預估本益比上限", "明年預估本益比")):
+        if c.get(鍵) is not None and 欄 in 結果.columns:
+            結果 = 結果[結果[欄] <= c[鍵]]
+    if c.get("預估修正下限") is not None:
+        結果 = 結果[結果["預估修正%"] >= c["預估修正下限"]] if "預估修正%" in 結果.columns else 結果.iloc[0:0]
+    if c.get("明年EPS成長下限") is not None and "明年EPS成長%" in 結果.columns:
+        結果 = 結果[結果["明年EPS成長%"] >= c["明年EPS成長下限"]]
+    if c.get("預估業外占比上限") is not None and "預估業外占比%" in 結果.columns:
+        結果 = 結果[結果["預估業外占比%"] <= c["預估業外占比上限"]]
+    if c.get("排除預估分歧") and "預估分歧%" in 結果.columns:
+        結果 = 結果[~(結果["預估分歧%"] > 預估分歧門檻)]
     if c.get("自由現金流為正") and "近四季自由現金流億" in 結果.columns:
         結果 = 結果[結果["近四季自由現金流億"] > 0]
     for 鍵, 欄 in (("外資連買下限", "外資連買"), ("投信連買下限", "投信連買"), ("法人5日買超下限", "法人5日買超"),
@@ -729,6 +769,8 @@ def 選股(當日, 條件):
         結果 = 結果[結果["融資洗完"].astype(bool)]
     if c.get("融資維持率上限") is not None and "融資維持率" in 結果.columns:
         結果 = 結果[結果["融資維持率"] <= c["融資維持率上限"]]
+    if c.get("融資佔股本排名上限") is not None and "融資佔股本排名%" in 結果.columns:
+        結果 = 結果[結果["融資佔股本排名%"].fillna(0) <= c["融資佔股本排名上限"]]
     if c.get("融資5日增減上限") is not None and "融資5日增減" in 結果.columns:
         結果 = 結果[結果["融資5日增減"] <= c["融資5日增減上限"]]
     # ----- 烏賊課程用到的條件 -----
@@ -1422,6 +1464,46 @@ def 即時報價(代號們, 市場對照):
     return pd.DataFrame(結果)
 
 
+def 套用即時價(r, 代號, 資料日, 現在=None, 抓報價=None):
+    """個股報告用：資料庫最新一天之後有成交（盤中，或收盤後到晚上更新資料庫前），就用證交所即時價
+    更新現價、漲跌、本益比、殖利率、淨值比、成交量；法人、融資、營收、均線等還是資料庫最近一天的。
+    r 是個股那一列（pd.Series，要有 收盤、市場），資料日是資料庫最新日期。
+    回傳 (新的 r, 說明文字)；不需要或抓不到回傳 (原本的 r, None)。說明例如「盤中 11/09 10:35 即時價」。
+    抓報價：函式 (代號, 市場) → 即時報價() 格式的 DataFrame（網站用來加快取、測試用來不上網），預設直接抓證交所。"""
+    現在 = 現在 or pd.Timestamp.now(tz="Asia/Taipei").tz_localize(None)
+    資料日 = pd.Timestamp(資料日).normalize()
+    if 現在.weekday() >= 5 or 現在.hour < 9 or 現在.normalize() <= 資料日 or str(r.get("市場")) not in ("上市", "上櫃"):
+        return r, None
+    try:
+        市場 = str(r.get("市場"))
+        t = 抓報價(代號, 市場) if 抓報價 else 即時報價([代號], {代號: 市場})
+        x = t[t["code"] == 代號].iloc[0]
+    except Exception:
+        return r, None
+    新, 舊 = float(x["close"]), float(r["收盤"])
+    if pd.isna(新) or 新 <= 0 or not 舊 or pd.isna(x["date"]) or pd.Timestamp(x["date"]).normalize() <= 資料日:
+        return r, None
+    倍 = 新 / 舊
+    r = r.copy()
+    昨收 = 新 - float(x["change"])
+    r["收盤"], r["漲跌"] = 新, float(x["change"])
+    r["漲跌幅"] = r["漲跌"] / 昨收 * 100 if 昨收 > 0 else np.nan
+    for 欄 in ("本益比", "淨值比", "還原價"):   # 還原價跟著調，均線換回原始股價的比例才不會變
+        if 欄 in r and pd.notna(r[欄]):
+            r[欄] = r[欄] * 倍
+    if "殖利率" in r and pd.notna(r["殖利率"]):
+        r["殖利率"] = r["殖利率"] / 倍
+    if pd.notna(x.get("volume")) and "成交張數" in r:
+        r["成交張數"] = float(x["volume"])
+        if "volume" in r:
+            r["volume"] = float(x["volume"]) * 1000
+    時 = str(x.get("time") or "")[:5]
+    盤中 = 現在.strftime("%H:%M") < "13:30" and (not 時 or 時 < "13:30")
+    說明 = f"{'盤中' if 盤中 else '今日收盤'} {pd.Timestamp(x['date']):%m/%d} {時} 即時價".replace("  ", " ")
+    r["即時說明"] = 說明
+    return r, 說明
+
+
 def _數(值):
     try:
         return float(值)
@@ -1513,6 +1595,7 @@ M. 引用券商用中位數與區間（數據摘要的「券商共識」），�
 N. 券商前次目標價低於報告前收盤價的上修，標「追價上修」，不當成新的看多訊號；近 3 天 3 家以上同方向改目標價要寫在結論。
 O. 循環股（記憶體、面板、航運、鋼鐵、塑化等）說明現在是景氣高峰還是谷底，低本益比要提醒「可能是獲利高峰」，改用股價淨值比或全周期平均 EPS。
 P. 「看錯條件」要用網站能自動對答案的數字（月營收年增率、收盤價位、毛利率）；資料不足就說不足，不自己推測數字；不複製券商原文。
+Q. 目標價要跟現價對得上：合理價比現價高 50% 以上、或高於近三年最高價、或預估本益比是目前本益比的 1.4 倍以上時，要在「目標價與評價」說清楚為什麼市場會給這個倍數（例如獲利翻倍、產業重新評價），說不出理由就把倍數降到近三年本益比中位數附近；json 的「支撐」「壓力」填波段價位（數據摘要的月線、季線、共振區、箱頂箱底），不要只填離現價 1% 內的當日價位。
 
 資料紀律：
 - 使用者提供的股價、基本面、籌碼、技術面、支撐壓力數據是正確的，以它為準；價位名稱（月線、季線、共振區等）只用數據摘要裡的。
@@ -1590,17 +1673,36 @@ def AI分析(代號, 名稱, 數據摘要, api_key, 模型="claude-opus-5-5", �
 
 
 def 拆解AI建議(文字):
-    """把報告最後的 json 區塊拆出來做卡片；回傳 (給人看的內文, 建議 dict 或 None)。舊報告沒有 json 就只抓一句話結論。"""
+    """把報告裡的 json 區塊拆出來做卡片；回傳 (給人看的內文, 建議 dict 或 None)。舊報告沒有 json 就只抓一句話結論。
+    支援 ```json、``` 沒標語言、以及手動貼上時只貼了一段裸 json（整份或在最後）的情況，內文就不會印出原始 json。"""
     import json, re
     建議 = None
-    配 = re.search(r"```json\s*(\{.*?\})\s*```", 文字, re.S)
-    if 配:
+    文字 = 文字 if isinstance(文字, str) else ""
+
+    def 讀(片段):
         try:
-            建議 = json.loads(配.group(1))
+            值 = json.loads(片段)
         except Exception:
-            建議 = None
-        文字 = (文字[: 配.start()] + 文字[配.end():]).strip()
-    if 建議 is None and isinstance(文字, str):
+            return None
+        return 值 if isinstance(值, dict) else None
+
+    for 樣式 in (r"```\s*json\s*(\{.*?\})\s*```", r"```\s*(\{.*?\})\s*```"):
+        配 = re.search(樣式, 文字, re.S | re.I)
+        if 配:
+            建議 = 讀(配.group(1))
+            文字 = (文字[: 配.start()] + 文字[配.end():]).strip()
+            break
+    if 建議 is None:
+        # 裸 json：整份就是 json，或報告最後接一段 { ... }（沒有包 ```）
+        乾 = 文字.strip()
+        if 乾.startswith("{") and 讀(乾) is not None:
+            建議, 文字 = 讀(乾), ""
+        else:
+            配 = re.search(r"(?:^|\n)\s*(\{[^{}]*\"看法\"[^{}]*\})\s*$", 文字, re.S)
+            if 配 and 讀(配.group(1)) is not None:
+                建議 = 讀(配.group(1))
+                文字 = 文字[: 配.start()].strip()
+    if 建議 is None and 文字:
         結 = re.search(r"###\s*一句話結論\s*\n+(.+?)(?:\n\s*\n|\n#|$)", 文字, re.S)
         if 結:
             一句 = 結.group(1).strip()
@@ -1608,6 +1710,98 @@ def 拆解AI建議(文字):
             建議 = {"一句話": 一句, "看法": 看法}
     return 文字, 建議
 
+
+def 檢查AI目標價(建議, 收盤, 本益比=None, 三年高=None, 三年低=None, 共識=None):
+    """AI 給的目標價、支撐壓力有沒有自相矛盾或離現價太遠。不改 AI 的數字，只回傳提醒清單（繁體中文）。
+    收盤：現價；本益比：目前本益比；三年高／三年低：近三年收盤最高／最低（可省略）。
+    共識：預估EPS表() 的一列（dict，有 預估EPS今年、預估EPS明年、預估年度），用來比 AI 的 EPS 和隱含本益比。"""
+    import re
+    def 數(k):
+        v = (建議 or {}).get(k)
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return None
+        return v if v == v else None
+    提醒 = []
+    try:
+        收盤 = float(收盤)
+    except (TypeError, ValueError):
+        return 提醒
+    if not 收盤 or 收盤 != 收盤:
+        return 提醒
+    保守, 合理, 樂觀 = 數("目標價保守"), 數("目標價合理"), 數("目標價樂觀")
+    支撐, 壓力, 停損 = 數("支撐"), 數("壓力"), 數("停損")
+    倍數 = 數("預估本益比")
+    # 1. 評價方法寫的「N 倍 × EPS X」要等於合理價
+    方法 = str((建議 or {}).get("評價方法") or "")
+    配 = re.search(r"([\d.]+)\s*倍.*?([\d]+\.\d+|\d+)\s*(?:元)?\s*$", 方法)
+    if 配 and 合理:
+        try:
+            算 = float(配.group(1)) * float(配.group(2))
+            if 算 > 0 and abs(算 / 合理 - 1) > 0.05:
+                提醒.append(f"評價方法「{方法}」算出 {算:,.1f}，與合理價 {合理:,.1f} 不一致")
+        except ValueError:
+            pass
+    if 保守 and 合理 and 樂觀 and not (保守 <= 合理 <= 樂觀):
+        提醒.append("保守／合理／樂觀三檔目標價順序不對")
+    # 2. 合理價離現價太遠
+    if 合理:
+        空間 = (合理 / 收盤 - 1) * 100
+        if 空間 >= 50:
+            提醒.append(f"合理價 {合理:,.1f} 比現價 {收盤:,.2f} 高 {空間:.0f}%，假設偏樂觀，請看清楚依據再參考")
+        elif 空間 <= -40:
+            提醒.append(f"合理價 {合理:,.1f} 比現價低 {-空間:.0f}%，與現價落差很大")
+    if 保守 and 保守 / 收盤 - 1 >= 0.3:
+        提醒.append(f"連保守價 {保守:,.1f} 都比現價高 {(保守 / 收盤 - 1) * 100:.0f}%")
+    # 3. 漲幅主要來自本益比拉高（不是獲利成長）
+    try:
+        本益比 = float(本益比) if 本益比 is not None else None
+    except (TypeError, ValueError):
+        本益比 = None
+    if 倍數 and 本益比 and 本益比 > 0 and 倍數 / 本益比 >= 1.4:
+        提醒.append(f"預估本益比 {倍數:.1f} 倍遠高於目前 {本益比:.1f} 倍，大部分上漲空間來自「倍數拉高」而不是獲利成長")
+    if 合理 and 三年高 and 合理 > float(三年高) * 1.1:
+        提醒.append(f"合理價高於近三年最高收盤 {float(三年高):,.2f}")
+    提醒 += _對照共識EPS(建議, 合理, 共識)
+    # 4. 支撐壓力停損
+    if 支撐 and 壓力 and 支撐 > 壓力:
+        提醒.append(f"支撐 {支撐:,.2f} 高於壓力 {壓力:,.2f}，數字可能填反")
+    if 停損 and 停損 >= 收盤:
+        提醒.append(f"停損 {停損:,.2f} 不低於現價，請確認")
+    if 支撐 and 壓力 and 合理 and (壓力 - 支撐) / 收盤 < 0.05 and (合理 / 收盤 - 1) >= 0.3:
+        提醒.append("支撐／壓力只是短線幾天的區間，跟中長期目標價不是同一個時間尺度，不能直接當成「會漲到目標價」")
+    return 提醒
+
+
+
+def _對照共識EPS(建議, 合理, 共識, 門檻=20):
+    """AI 的今年／明年 EPS 跟全市場預估共識（A、B 中位數）差超過 門檻% 就提醒；合理價換算成共識明年 EPS 的本益比也列出。"""
+    if not 共識:
+        return []
+    def 數(v):
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return None
+        return v if v == v else None
+    提醒 = []
+    年 = 共識.get("預估年度")
+    年 = int(年) if 數(年) else None
+    for 鍵, 共鍵, 名 in (("今年EPS", "預估EPS今年", f"{年} 年" if 年 else "今年"), ("明年EPS", "預估EPS明年", f"{年 + 1} 年" if 年 else "明年")):
+        ai, 共 = 數((建議 or {}).get(鍵)), 數(共識.get(共鍵))
+        if ai is None or 共 is None or abs(共) < 0.3:
+            continue
+        差 = (ai / 共 - 1) * 100
+        if abs(差) > 門檻:
+            提醒.append(f"AI 的{名} EPS {ai:,.2f} 比市場預估共識 {共:,.2f} {'高' if 差 > 0 else '低'} {abs(差):.0f}%，"
+                       f"{'偏樂觀' if 差 > 0 else '偏保守'}，請看 AI 的理由")
+    明 = 數(共識.get("預估EPS明年")) or 數(共識.get("預估EPS今年"))
+    if 合理 and 明 and 明 > 0:
+        倍 = 合理 / 明
+        if 倍 >= 40:
+            提醒.append(f"合理價 {合理:,.1f} 換算成市場預估 EPS {明:,.2f} 是 {倍:.0f} 倍本益比，偏高")
+    return 提醒
 
 def AI補卡片(報告, 引擎, 金鑰, 模型):
     """舊報告沒有卡片資料：請 AI 只從報告內容整理出卡片用的 json（不上網，很快）。"""
@@ -1796,31 +1990,37 @@ def 規則判讀(r):
 
 
 Gemini備用模型 = ["gemini-flash-latest", "gemini-3.5-flash", "gemini-flash-lite-latest"]
+Gemini本次呼叫 = {"成功": 0, "失敗": 0}   # 這個程序裡呼叫 Gemini 的次數，排程結束時寫進 ai_usage.json
 
 
-def Gemini呼叫(內容, api_key, 模型="gemini-flash-latest", 每個試幾次=2):
+def Gemini呼叫(內容, api_key, 模型="gemini-flash-latest", 每個試幾次=2, 逾時=180, 換模型=True, 等429秒=0):
     """呼叫 Gemini；遇到「忙線」(500/503/504) 或逾時會稍等重試，還是不行就換備用模型。回傳 (回應, 實際模型)。"""
     import time
     import requests
 
     最後錯誤 = None
-    for m in dict.fromkeys([模型] + Gemini備用模型):
+    for m in dict.fromkeys([模型] + (Gemini備用模型 if 換模型 else [])):
         網址 = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent"
         for 次 in range(每個試幾次):
             try:
-                回應 = requests.post(網址, headers={"x-goog-api-key": api_key}, json=內容, timeout=180)
+                回應 = requests.post(網址, headers={"x-goog-api-key": api_key}, json=內容, timeout=逾時)
             except requests.RequestException as 錯:
                 最後錯誤 = f"連線逾時或中斷（{type(錯).__name__}）"
                 time.sleep(3)
                 continue
             if 回應.status_code == 200:
+                Gemini本次呼叫["成功"] += 1
                 return 回應, m
+            Gemini本次呼叫["失敗"] += 1
             try:
                 訊息 = 回應.json()["error"]["message"]
             except Exception:
                 訊息 = 回應.text[:200]
             if 回應.status_code == 429:
-                最後錯誤 = "今天的 Gemini 免費額度用完了，明天再試。"
+                最後錯誤 = "Gemini 額度或每分鐘字數上限用完了（免費額度對長影片很容易超過，可到 Google AI Studio 開啟付費）。"
+                if 等429秒 and 次 + 1 < 每個試幾次:
+                    time.sleep(等429秒)   # 可能只是「每分鐘」上限，等一下再試
+                    continue
                 break  # 這個模型額度用完，換下一個
             if 回應.status_code in (500, 503, 504):
                 最後錯誤 = "Gemini 目前使用的人太多（忙線），已自動重試和換模型仍失敗，請過幾分鐘再按一次。"
@@ -1835,6 +2035,58 @@ def Gemini呼叫(內容, api_key, 模型="gemini-flash-latest", 每個試幾次=
 
 會診角色 = {"技術面": "只看 K 線、均線、支撐壓力、量價", "籌碼面": "只看三大法人、融資券、大戶與主動式 ETF",
           "基本面": "只看營收、毛利率、EPS、評價", "唱反調": "專門找這檔的空方理由與最可能看錯的地方"}
+
+
+def AI用量紀錄(設定, 流程, 保留天數=60):
+    """把這個程序呼叫 Gemini 的次數累加進 ai-reports 的 ai_usage.json（{日期: {流程: {成功, 失敗}}}）。"""
+    n = dict(Gemini本次呼叫)
+    if not (n["成功"] or n["失敗"]):
+        return
+    日 = pd.Timestamp.now(tz="Asia/Taipei").strftime("%Y-%m-%d")
+    表 = 讀取設定檔(設定, "ai_usage.json") or {}
+    格 = 表.setdefault(日, {}).setdefault(流程, {"成功": 0, "失敗": 0})
+    格["成功"] += n["成功"]
+    格["失敗"] += n["失敗"]
+    截止 = (pd.Timestamp.now(tz="Asia/Taipei") - pd.Timedelta(days=保留天數)).strftime("%Y-%m-%d")
+    儲存設定檔(設定, "ai_usage.json", {k: v for k, v in sorted(表.items()) if k >= 截止}, f"AI 用量 {日} {流程}")
+    Gemini本次呼叫.update({"成功": 0, "失敗": 0})
+
+
+def AI今日呼叫數(設定, 流程=None):
+    日 = pd.Timestamp.now(tz="Asia/Taipei").strftime("%Y-%m-%d")
+    今 = (讀取設定檔(設定, "ai_usage.json") or {}).get(日, {})
+    return sum(v["成功"] + v["失敗"] for k, v in 今.items() if 流程 in (None, k))
+
+
+def AI用量小卡(設定, 天數=7):
+    """近 N 天各流程 Gemini 呼叫次數的 LINE 文字（失敗次數另列）。"""
+    表 = 讀取設定檔(設定, "ai_usage.json") or {}
+    起 = (pd.Timestamp.now(tz="Asia/Taipei") - pd.Timedelta(days=天數)).strftime("%Y-%m-%d")
+    合 = {}
+    for 日, 流們 in 表.items():
+        if 日 >= 起:
+            for 流, v in 流們.items():
+                格 = 合.setdefault(流, [0, 0])
+                格[0] += v["成功"]
+                格[1] += v["失敗"]
+    if not 合:
+        return f"📊 近 {天數} 天沒有 Gemini 呼叫紀錄。"
+    行們 = [f"　{k}：{a} 次" + (f"（失敗 {b}）" if b else "") for k, (a, b) in sorted(合.items(), key=lambda x: -x[1][0])]
+    總 = sum(a for a, _ in 合.values())
+    return f"📊 近 {天數} 天 Gemini 呼叫 {總} 次\n" + "\n".join(行們) + "\n（免費額度內不用錢；超過才依 Google 計價）"
+
+
+def 初步查核網紅(影片, 名表):
+    """程式化初步查核（不用 AI）：代號存在嗎？名稱和代號對得上嗎？回傳紅旗文字清單，空＝沒發現問題。
+    名表＝{代號: 名稱}。有紅旗的才需要人（或 Claude）再看。"""
+    旗 = []
+    for x in 影片.get("股票", []):
+        代, 名 = str(x.get("代號") or ""), str(x.get("名稱") or "")
+        if 代 and 代 in 名表 and 名 and 名 not in 名表[代] and 名表[代] not in 名:
+            旗.append(f"{代} 影片寫「{名}」，資料庫是「{名表[代]}」")
+        elif 代 and 名表 and 代 not in 名表 and not 代.isalpha():
+            旗.append(f"{代}{名} 在資料庫找不到")
+    return 旗
 
 
 def AI多角色會診(代號, 名稱, 數據摘要, api_key, 模型="gemini-flash-latest"):
@@ -1906,6 +2158,16 @@ def 族群資料(今日, 期間="今日", 大小="市值", 每族群=15):
     })
     領 = 表.loc[群["幅度"].idxmax()].set_index("產業")
     族群["領漲股"] = 領["名稱"] + " " + 領["幅度"].map("{:+.1f}%".format)
+    # 族群預估本益比＝有正的預估 EPS 那些股票的合計市值 ÷ 合計預估獲利（大型股影響較大，虧損股不算）
+    for 欄, 新 in (("預估EPS今年", "預估本益比"), ("預估EPS明年", "明年預估本益比")):
+        if 欄 in 表.columns:
+            e = pd.to_numeric(表[欄], errors="coerce")
+            有 = e > 0
+            獲利 = (e * 表["發行股數"]).where(有).groupby(表["產業"]).sum(min_count=1)
+            市值 = (表["收盤"] * 表["發行股數"]).where(有).groupby(表["產業"]).sum(min_count=1)
+            族群[新] = (市值 / 獲利).round(1)
+            if 新 == "預估本益比":
+                族群["預估涵蓋"] = 有.groupby(表["產業"]).sum().astype(int)
     族群 = 族群.astype({"漲跌幅": float, "成交值億": float, "市值億": float}).round({"漲跌幅": 2, "成交值億": 1, "市值億": 0}).sort_values("漲跌幅", ascending=False)
     表 = 表.sort_values("權重", ascending=False)
     前段 = 表.groupby("產業").head(每族群)
@@ -2118,6 +2380,27 @@ def 本益比河流(歷史, 倍數個數=5):
     目前 = h["本益比"].iloc[-1]
     百分位 = (h["本益比"] < 目前).mean() * 100
     return h, 倍數們, 百分位
+
+
+def 預估河流位置(h, 收盤, 預估們):
+    """本益比河流（h＝本益比河流() 的表）＋預估 EPS：用預估 EPS 換算的本益比落在過去 5 年本益比的哪裡，
+    以及「預估 EPS × 過去本益比低標／中位數／高標」的價格。預估們＝{"2026": EPS, "2027": EPS}（≤ 0 或缺值略過）。
+    回傳 list of dict（年度、EPS、預估本益比、歷史百分位、低標價、中位價、高標價）。"""
+    倍 = h["本益比"]
+    低, 中, 高 = 倍.quantile([0.1, 0.5, 0.9])
+    結果 = []
+    for 年, e in 預估們.items():
+        try:
+            e = float(e)
+        except (TypeError, ValueError):
+            continue
+        if not e > 0:
+            continue
+        pe = float(收盤) / e
+        結果.append({"年度": 年, "EPS": e, "預估本益比": round(pe, 1), "歷史百分位": round((倍 < pe).mean() * 100),
+                   "低標價": round(e * 低, 1), "中位價": round(e * 中, 1), "高標價": round(e * 高, 1),
+                   "低標倍": round(低, 1), "中位倍": round(中, 1), "高標倍": round(高, 1)})
+    return 結果
 
 
 def 同族群(今日, 代號, 檔數=10):
@@ -2798,6 +3081,196 @@ def 讀取借券(代號, 天數=120):
         if len(t):
             表們.append(t.assign(date=pd.Timestamp(f.name[:8])))
     return pd.concat(表們, ignore_index=True) if 表們 else None
+
+# ---------- 網紅摘要 11/07 建議 W1～W4：止跌訊號（指數 vs 融資、全市場借券、賣壓消散、破低不破） ----------
+def 讀取全部借券(天數=120):
+    """全市場每天每檔的借券賣出餘額（張）：date、code、sbl_sell、sbl_return、sbl_balance。"""
+    表們 = []
+    for f in sorted((資料夾 / "sbl").glob("*.csv.gz"))[-天數:]:
+        t = pd.read_csv(f, dtype={"code": str}, usecols=["code", "sbl_sell", "sbl_return", "sbl_balance"])
+        表們.append(t.assign(date=pd.Timestamp(f.name[:8])))
+    return pd.concat(表們, ignore_index=True) if 表們 else None
+
+
+def 指數融資對照(K, 融資, 起日=None, 窗=60):
+    """W1（雪寶學院）：把加權收盤和上市融資金額都從同一天＝100 畫在一起，看融資有沒有跟上指數跌幅。
+    K：加權日 K（date、close）；融資：讀取融資金額()（index＝date，單位千元）。起日沒給就用近 窗 日收盤最高那天。
+    回傳 dict(表＝DataFrame(index＝date；指數、融資 兩欄都是 100 基期), 起日, 指數跌幅%, 融資減幅%, 同步還要減億)；資料不夠回 None。"""
+    if K is None or 融資 is None or not len(K) or not len(融資):
+        return None
+    c = K.set_index("date")["close"].astype(float)
+    m = 融資.astype(float)
+    共 = c.index.intersection(m.index)
+    if len(共) < 5:
+        return None
+    c, m = c.loc[共], m.loc[共]
+    if 起日 is None:
+        近 = c.tail(窗)
+        起日 = 近.idxmax()
+    起日 = pd.Timestamp(起日)
+    c, m = c[c.index >= 起日], m[m.index >= 起日]
+    if len(c) < 2:
+        return None
+    表 = pd.DataFrame({"指數": c / c.iloc[0] * 100, "融資": m / m.iloc[0] * 100}).round(2)
+    跌, 減 = 表["指數"].iloc[-1] - 100, 表["融資"].iloc[-1] - 100
+    # 融資要減到跟指數同比例：起點金額 ×（1＋指數跌幅），和現在差多少（千元 → 億）
+    還要 = (m.iloc[-1] - m.iloc[0] * (1 + 跌 / 100)) / 1e5 if 跌 < 減 else 0.0
+    return {"表": 表, "起日": 表.index[0], "指數跌幅%": round(float(跌), 2), "融資減幅%": round(float(減), 2),
+            "同步還要減億": round(float(還要))}
+
+
+def 大盤借券趨勢(借, 價):
+    """W3（關我什麼事）：全市場借券賣出餘額走勢與「由增轉減」燈號。
+    借：讀取全部借券()；價：date、code、close（用來把張數換成金額）。
+    每天的變化用「餘額張數變化 × 當天收盤」÷ 前一天餘額市值，跟大盤融資變化同一種算法，不受股價漲跌影響。
+    回傳 DataFrame(index＝date；餘額億、借券賣出張、還券張、變化%、指數＝前一天累積 100 基期)。"""
+    if 借 is None or 價 is None or not len(借):
+        return pd.DataFrame()
+    t = 借.merge(價[["date", "code", "close"]], on=["date", "code"], how="inner")
+    t = t[t["close"] > 0].sort_values(["code", "date"])
+    t["前餘額"] = t.groupby("code")["sbl_balance"].shift()
+    t["市值"] = t["sbl_balance"] * t["close"] * 1000
+    t["前市值"] = t["前餘額"] * t["close"] * 1000
+    t["變化值"] = (t["sbl_balance"] - t["前餘額"]) * t["close"] * 1000
+    群 = t.groupby("date")
+    表 = pd.DataFrame({"餘額億": 群["市值"].sum() / 1e8, "借券賣出張": 群["sbl_sell"].sum(), "還券張": 群["sbl_return"].sum(),
+                       "變化%": 群["變化值"].sum() / 群["前市值"].sum() * 100})
+    表 = 表.iloc[1:] if len(表) > 1 else 表   # 第一天沒有前一天可比
+    表["指數"] = (1 + 表["變化%"].fillna(0) / 100).cumprod() * 100
+    return 表.round(2)
+
+
+def 借券轉向燈(表, 短=3, 長=10):
+    """近 短 天餘額指數都在減少、而且再往前 長 天是增加的 → 🟢 由增轉減；還在增加 → 🔴；其他 🟡。回傳 (燈, 說)。"""
+    if 表 is None or len(表) < 短 + 長:
+        return "🟡", "資料還不夠"
+    s = 表["指數"]
+    近 = s.diff().tail(短)
+    前段 = s.iloc[-短 - 1] / s.iloc[-短 - 1 - 長] - 1
+    五日 = (s.iloc[-1] / s.iloc[-6] - 1) * 100 if len(s) > 5 else np.nan
+    if (近 < 0).all() and 前段 > 0:
+        return "🟢", f"連 {短} 天減少、之前 {長} 天是增加的：由增轉減（近 5 日 {五日:+.1f}%）"
+    if (近 < 0).all():
+        return "🟡", f"連 {短} 天減少，但之前就在減，不算轉向（近 5 日 {五日:+.1f}%）"
+    if 五日 > 0:
+        return "🔴", f"空方還在加碼：近 5 日餘額 {五日:+.1f}%"
+    return "🟡", f"增減互見（近 5 日 {五日:+.1f}%）"
+
+
+def 賣壓消散燈號(匯率, 期貨, K, 天數=2, 影線門檻=0.6):
+    """W4（宏爺）：① 台幣連 天數 天沒有再貶（USD/TWD 沒有比前一天高）② 外資台指期淨空單連 天數 天減少
+    ③ 加權連 天數 天收下影線（下影線 ≥ 收盤 影線門檻%，而且比實體長）。
+    匯率：讀取匯率()（date、usdtwd）；期貨：讀取期貨未平倉()（index＝date、foreign_oi）；K：加權日 K。
+    回傳 dict(燈們=[(名, 燈, 說)], 亮幾個)；資料不夠的項目給 🟡。"""
+    燈們 = []
+    if 匯率 is not None and len(匯率) > 天數:
+        s = 匯率.set_index("date")["usdtwd"].astype(float).dropna()
+        差 = s.diff().tail(天數)
+        亮 = bool((差 <= 0).all())
+        燈們.append(("① 台幣不再貶", "🟢" if 亮 else "🔴",
+                     f"USD/TWD {s.iloc[-1]:.3f}，近 {天數} 天" + ("都沒有比前一天高" if 亮 else f"還有貶值（{'、'.join(f'{v:+.3f}' for v in 差)}）")))
+    else:
+        燈們.append(("① 台幣不再貶", "🟡", "沒有匯率資料"))
+    if 期貨 is not None and "foreign_oi" in 期貨 and len(期貨) > 天數:
+        s = 期貨["foreign_oi"].astype(float).dropna()
+        差 = s.diff().tail(天數)
+        亮 = bool((差 > 0).all()) and s.iloc[-1] < 0
+        燈們.append(("② 外資期貨空單減少", "🟢" if 亮 else "🔴",
+                     f"淨未平倉 {s.iloc[-1]:+,.0f} 口，近 {天數} 天變化 " + "、".join(f"{v:+,.0f}" for v in 差)
+                     + ("：空單在回補" if 亮 else "：還沒連續回補")))
+    else:
+        燈們.append(("② 外資期貨空單減少", "🟡", "沒有期貨資料"))
+    if K is not None and len(K) > 天數 and {"open", "low", "close"} <= set(K.columns):
+        k = K.tail(天數).astype({"open": float, "low": float, "close": float})
+        下影 = (k[["open", "close"]].min(axis=1) - k["low"])
+        實體 = (k["close"] - k["open"]).abs()
+        條 = (下影 >= k["close"] * 影線門檻 / 100) & (下影 > 實體)
+        亮 = bool(條.all())
+        燈們.append(("③ 大盤連續下影線", "🟢" if 亮 else "🔴",
+                     "近 {} 天下影線 {}".format(天數, "、".join(f"{v:,.0f} 點" for v in 下影))
+                     + ("：低檔有買盤承接" if 亮 else f"：要連 {天數} 天下影線 ≥ {影線門檻:g}% 且比實體長")))
+    else:
+        燈們.append(("③ 大盤連續下影線", "🟡", "沒有開高低資料"))
+    return {"燈們": 燈們, "亮幾個": sum(1 for _, 燈, _ in 燈們 if 燈 == "🟢")}
+
+
+def 賣壓消散回測(匯率, 期貨, K, 天數=2, 影線門檻=0.6, 後=(5, 20), 間隔=10):
+    """過去三個燈同時亮（只看有期貨資料的期間）之後加權 N 日漲跌，對照任何一天。回傳 dict(次數, 起, 統計, 事件)。"""
+    if 匯率 is None or 期貨 is None or K is None or "foreign_oi" not in 期貨:
+        return None
+    k = K.set_index("date")[["open", "low", "close"]].astype(float)
+    fx = 匯率.set_index("date")["usdtwd"].astype(float).reindex(k.index).ffill()
+    oi = 期貨["foreign_oi"].astype(float).reindex(k.index)
+    k = k[oi.notna()]
+    fx, oi = fx.reindex(k.index), oi.reindex(k.index)
+    if len(k) < 60:
+        return None
+    下影 = k[["open", "close"]].min(axis=1) - k["low"]
+    影 = ((下影 >= k["close"] * 影線門檻 / 100) & (下影 > (k["close"] - k["open"]).abs())).astype(int)
+    台 = (fx.diff() <= 0).astype(int)
+    期 = ((oi.diff() > 0) & (oi < 0)).astype(int)
+    全 = (影.rolling(天數).sum() == 天數) & (台.rolling(天數).sum() == 天數) & (期.rolling(天數).sum() == 天數)
+    位們, 上次 = [], -10 ** 9
+    for i in np.flatnonzero(全.to_numpy()):
+        if i - 上次 > 間隔:
+            位們.append(i)
+            上次 = i
+    c = k["close"]
+    統計 = []
+    for n in 後:
+        報 = (c.shift(-n) / c - 1) * 100
+        x = 報.iloc[位們].dropna()
+        統計.append({"天數": n, "次數": int(len(x)), "平均%": round(float(x.mean()), 2) if len(x) else None,
+                   "上漲機率%": round(float((x > 0).mean() * 100)) if len(x) else None,
+                   "基準平均%": round(float(報.mean()), 2), "基準上漲機率%": round(float((報.dropna() > 0).mean() * 100))})
+    事件 = [{"日期": f"{k.index[i]:%Y-%m-%d}", "收盤": round(float(c.iloc[i])),
+             **{f"{n}日後%": (round(float(c.iloc[i + n] / c.iloc[i] * 100 - 100), 1) if i + n < len(c) else None) for n in 後}}
+            for i in 位們]
+    return {"次數": len(位們), "起": f"{k.index[0]:%Y-%m-%d}", "統計": 統計, "事件": 事件}
+
+
+def 破低不破榜(價, K, 高點窗=60, 前波窗=60, 近期=20, 前後=3, 最低成交值億=2.0):
+    """W2（關我什麼事）：大盤近 近期 日低點跌破前波低點時，
+    列出自己近 近期 日低點還高於「大盤前波低點那幾天（±前後 日）自己的低點」的股票。
+    價：指標表（代號、名稱、date、low、收盤、成交值億 可有可無）；K：加權日 K。
+    前波低點＝這一段下跌的起點（近 高點窗 日收盤最高那天）之前 前波窗 日內的最低點，例如 10/06 高點之前的 7/29 低點。
+    回傳 (表, 資訊 dict(前波日, 前波低, 近期低, 大盤破了, 大盤距前低%))；資料不夠回 (空表, None)。"""
+    if K is None or len(K) < 高點窗 + 前波窗 or 價 is None or not len(價):
+        return pd.DataFrame(), None
+    K = K.reset_index(drop=True)
+    低 = K["low"].astype(float)
+    高位 = len(K) - 高點窗 + int(np.argmax(K["close"].astype(float).tail(高點窗).to_numpy()))
+    段 = K.iloc[max(0, 高位 - 前波窗):高位]
+    if not len(段):
+        return pd.DataFrame(), None
+    前位 = int(段["low"].astype(float).idxmin())
+    前日, 前低 = K["date"].iloc[前位], float(低.iloc[前位])
+    近低 = float(低.tail(近期).min())
+    資訊 = {"前波日": 前日, "前波低": 前低, "近期低": 近低, "大盤破了": 近低 < 前低,
+            "大盤距前低%": round((近低 / 前低 - 1) * 100, 2)}
+    日們 = K["date"].iloc[max(0, 前位 - 前後):前位 + 前後 + 1]
+    低欄 = "low" if "low" in 價.columns else "收盤"
+    p = 價[價["代號"].astype(str).str.fullmatch(r"\d{4}")]
+    舊 = p[p["date"].isin(日們)].groupby("代號")[低欄].min()
+    近日 = K["date"].tail(近期)
+    近 = p[p["date"].isin(近日)]
+    最新日 = p["date"].max()
+    今 = p[p["date"] == 最新日].set_index("代號")
+    t = pd.DataFrame({"前波時低點": 舊, "近期低點": 近.groupby("代號")[低欄].min()}).dropna()
+    t = t[t["前波時低點"] > 0]
+    t["高於前低%"] = ((t["近期低點"] / t["前波時低點"] - 1) * 100).round(1)
+    t = t[t["高於前低%"] > 0]
+    if "成交值億" in 近.columns:
+        量 = 近.groupby("代號")["成交值億"].mean()
+        t = t[量.reindex(t.index).fillna(0) >= 最低成交值億]
+    for 欄 in ("名稱", "收盤", "產業"):
+        if 欄 in 今.columns:
+            t[欄] = 今[欄].reindex(t.index)
+    if "收盤" in t:
+        t["收盤距近期低%"] = ((t["收盤"] / t["近期低點"] - 1) * 100).round(1)
+    t = t.reset_index().rename(columns={"index": "代號"})
+    欄 = [c for c in ["代號", "名稱", "產業", "收盤", "前波時低點", "近期低點", "高於前低%", "收盤距近期低%"] if c in t.columns]
+    return t[欄].sort_values("高於前低%", ascending=False).reset_index(drop=True), 資訊
 
 
 def 重要日程(代號們=None, 天數=30, 今天=None):
@@ -5854,6 +6327,245 @@ def 合約負債表():
     return 結果
 
 
+def 預估檔們():
+    """data/forecast/ 底下所有預估 EPS 快照，依資料日由舊到新：[(日期, 檔案), ...]。"""
+    結果 = []
+    for f in (資料夾 / "forecast").glob("eps_forecast_*.csv"):
+        try:
+            結果.append((pd.Timestamp(f.stem.split("_")[-1]), f))
+        except ValueError:
+            continue
+    return sorted(結果)
+
+
+def 讀取預估EPS(第幾份=-1):
+    """取一份預估 EPS 快照（預設最新；-2＝前一份）。使用者匯出的全市場預估 EPS，三個來源。
+    欄位：code、A_年、B_年、Vera_年（今年）、A_年+1、B_年+1（明年）。回傳 (DataFrame, 資料日 Timestamp) 或 (None, None)。"""
+    檔們 = 預估檔們()
+    if not 檔們 or -len(檔們) > 第幾份 or 第幾份 >= len(檔們):
+        return None, None
+    日, f = 檔們[第幾份]
+    t = pd.read_csv(f, dtype={"code": str})
+    return (t if len(t) else None), 日
+
+
+def 轉換預估檔(原始):
+    """使用者匯出的原始 CSV（股號、A_2026E_EPS、B_2027E_EPS、Vera_2026E_EPS…）→ 網站格式（code、A_2026…）。
+    也接受已經是網站格式的檔。代號欄可叫 股號／代號／code。回傳 DataFrame；認不出欄位就丟 ValueError。"""
+    代號欄 = next((c for c in ("code", "股號", "代號", "證券代號") if c in 原始.columns), None)
+    if 代號欄 is None:
+        raise ValueError("找不到代號欄（股號／代號／code）")
+    欄們 = {}
+    for c in 原始.columns:
+        m = re.fullmatch(r"\s*(A|B|Vera)_(\d{4})E?(?:_EPS)?\s*", str(c), flags=re.I)
+        if m:
+            來源 = {"a": "A", "b": "B", "vera": "Vera"}[m.group(1).lower()]
+            欄們[c] = f"{來源}_{m.group(2)}"
+    if not 欄們:
+        raise ValueError("找不到預估 EPS 欄（例如 A_2026E_EPS、B_2027E_EPS、Vera_2026E_EPS）")
+    t = 原始[[代號欄] + list(欄們)].rename(columns={代號欄: "code", **欄們})
+    t["code"] = t["code"].astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
+    for c in 欄們.values():
+        t[c] = pd.to_numeric(t[c], errors="coerce").round(2)
+    return t.dropna(how="all", subset=list(欄們.values())).drop_duplicates("code", keep="last")
+
+
+def 存預估檔(t, 日期, 設定=None):
+    """存成 data/forecast/eps_forecast_YYYYMMDD.csv。有 GITHUB_TOKEN 就直接寫到 main 分支（網站會自動重新部署），
+    否則只存在網站本機（重啟會消失）。回傳是否已永久保存。"""
+    import base64, requests
+    檔名 = f"eps_forecast_{pd.Timestamp(日期):%Y%m%d}.csv"
+    內容 = t.to_csv(index=False)
+    f = 資料夾 / "forecast" / 檔名
+    f.parent.mkdir(exist_ok=True)
+    f.write_text(內容, "utf-8")
+    權杖, 網址, _, 標頭 = _GitHub設定(設定 or {}, "x")
+    if not 權杖:
+        return False
+    網址 = 網址.split("/contents/")[0] + f"/contents/data/forecast/{檔名}"
+    現有 = requests.get(網址, params={"ref": "main"}, headers=標頭, timeout=15)
+    資料 = {"message": f"更新預估 EPS {pd.Timestamp(日期):%Y-%m-%d}", "branch": "main",
+            "content": base64.b64encode(內容.encode("utf-8")).decode()}
+    if 現有.status_code == 200:
+        資料["sha"] = 現有.json()["sha"]
+    requests.put(網址, headers=標頭, json=資料, timeout=30).raise_for_status()
+    return True
+
+
+def _預估共識(t):
+    """一份快照 → 以代號為索引的 A、B、Vera 今年／明年，與 A、B 中位數（預估EPS今年、預估EPS明年）、預估年度。"""
+    年們 = sorted({int(c.split("_")[1]) for c in t.columns if "_" in c and c.split("_")[1].isdigit()})
+    if not 年們:
+        return None
+    今年 = 年們[0]
+    t = t.drop_duplicates("code", keep="last").set_index("code")
+    g = lambda c: pd.to_numeric(t[c], errors="coerce") if c in t.columns else pd.Series(np.nan, index=t.index)
+    A, B, V = g(f"A_{今年}"), g(f"B_{今年}"), g(f"Vera_{今年}")
+    A2, B2 = g(f"A_{今年 + 1}"), g(f"B_{今年 + 1}")
+    結果 = pd.DataFrame(index=t.index)
+    結果["預估EPS今年"] = pd.concat([A, B], axis=1).median(axis=1).round(2)
+    結果["預估EPS明年"] = pd.concat([A2, B2], axis=1).median(axis=1).round(2)
+    結果["預估A今年"], 結果["預估B今年"], 結果["預估Vera今年"] = A, B, V
+    結果["預估A明年"], 結果["預估B明年"] = A2, B2
+    結果["預估年度"] = 今年
+    return 結果
+
+
+def _修正幅度(新, 舊):
+    """預估 EPS 修正 %：分母用 |舊|，舊值太小（< 0.3 元）不算，避免 0.05 → 0.2 變成 +300%。"""
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return ((新 - 舊) / 舊.abs() * 100).where(舊.abs() >= 0.3).round(1)
+
+
+預估分歧門檻 = 30  # A、B 兩源差超過 30% 視為分歧
+
+
+def 預估EPS表():
+    """每檔的預估 EPS 整理（以代號為索引）：
+    預估EPS今年／預估EPS明年＝A、B 兩源中位數（含業外的完整 EPS，跟財報 EPS 同口徑）。
+    Vera 是使用者說的 AI 角色，只預估本業（業內），不含業外，所以口徑不同、不納入共識、不能拿去跟已公布 EPS 比；
+    另列 預估本業EPS（＝Vera）、預估業外占比%（＝（共識 − 本業）÷ 共識，估計業外占今年預估多少）。
+    另算 預估分歧%（A、B 差）、明年EPS成長%、隱含剩餘EPS（今年預估 − 已公布累計）、隱含季成長%（剩下幾季平均 vs 最新單季）、
+    預估低於累計（今年預估比已公布累計還低，可能是舊預估或預期後面虧損）。
+    有前一份快照時，再加 前期預估EPS今年、預估修正%、明年預估修正%、前期資料日（同一年度才比今年；跨年時拿舊的明年比新的今年）。"""
+    t, 日 = 讀取預估EPS()
+    if t is None:
+        return None
+    結果 = _預估共識(t)
+    if 結果 is None:
+        return None
+    今年 = int(結果["預估年度"].iloc[0])
+    A, B = 結果["預估A今年"], 結果["預估B今年"]
+    結果["預估來源數"] = A.notna().astype(int) + B.notna().astype(int)
+    結果["預估本業EPS"] = 結果["預估Vera今年"]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        分母 = ((A.abs() + B.abs()) / 2).where(lambda s: s >= 0.3)
+        結果["預估分歧%"] = ((A - B).abs() / 分母 * 100).round(0)
+        今 = 結果["預估EPS今年"]
+        結果["明年EPS成長%"] = ((結果["預估EPS明年"] / 今 - 1) * 100).where(今 >= 0.3).round(1)
+        結果["預估業外占比%"] = ((今 - 結果["預估本業EPS"]) / 今.abs() * 100).where(今 >= 0.3).round(0)
+    結果["預估資料日"] = 日
+    # 跟前一份快照比：上修／下修
+    舊表, 舊日 = 讀取預估EPS(-2)
+    舊 = _預估共識(舊表) if 舊表 is not None else None
+    if 舊 is not None:
+        舊 = 舊.reindex(結果.index)
+        舊年 = int(舊["預估年度"].dropna().iloc[0]) if 舊["預估年度"].notna().any() else 今年
+        if 舊年 == 今年:
+            結果["前期預估EPS今年"] = 舊["預估EPS今年"]
+            結果["預估修正%"] = _修正幅度(結果["預估EPS今年"], 舊["預估EPS今年"])
+            結果["明年預估修正%"] = _修正幅度(結果["預估EPS明年"], 舊["預估EPS明年"])
+        elif 舊年 == 今年 - 1:
+            結果["前期預估EPS今年"] = 舊["預估EPS明年"]
+            結果["預估修正%"] = _修正幅度(結果["預估EPS今年"], 舊["預估EPS明年"])
+        結果["前期資料日"] = 舊日
+    # 跟已公布的今年累計 EPS 對照
+    e = 近四季EPS表()
+    if len(e):
+        e = e.reindex(結果.index)
+        同年 = e["EPS季度"].astype(str).str[:4] == str(今年)
+        季 = pd.to_numeric(e["EPS季度"].astype(str).str[-1], errors="coerce")
+        累計 = e["累計EPS"].where(同年)
+        結果["已公布累計EPS"] = 累計
+        結果["累計至"] = e["EPS季度"].where(同年)
+        結果["隱含剩餘EPS"] = (今 - 累計).round(2)
+        剩 = (4 - 季).where(同年 & (季 < 4))
+        with np.errstate(divide="ignore", invalid="ignore"):
+            季均 = 結果["隱含剩餘EPS"] / 剩
+            單 = e["單季EPS"].where(同年)
+            結果["隱含季成長%"] = ((季均 / 單 - 1) * 100).where(單 >= 0.2).round(0)
+        結果["預估低於累計"] = (今 < 累計 * 0.95) & (累計 > 0.5)
+    結果.index.name = "代號"
+    return 結果
+
+
+def 預估EPS查詢(代號):
+    """單檔的預估 EPS 那一列（dict）；沒有回傳 {}。給 LINE／PDF 報告這類不經過網站今日表的地方用。"""
+    try:
+        t = 預估EPS表()
+    except Exception:
+        return {}
+    if t is None or str(代號) not in t.index:
+        return {}
+    return t.loc[str(代號)].to_dict()
+
+
+def 預估修正驗證(價=None, 天數=20, 門檻=2.0, 最少檔數=10):
+    """每兩份相鄰快照：預估上修（≥ 門檻%）和下修（≤ −門檻%）的股票，之後 天數 個交易日的平均報酬減全體平均。
+    價＝寬表（日期 × 代號，還原價），測試用；不給就從資料庫算。快照不到兩份、或後面還不夠 天數 天時回傳 None 和原因。
+    回傳 (DataFrame 每一期一列, 說明文字)。"""
+    檔們 = 預估檔們()
+    if len(檔們) < 2:
+        return None, f"目前只有 {len(檔們)} 份預估快照，至少要兩份才能比上修下修，再過 {天數} 個交易日才能驗證。"
+    if 價 is None:
+        指 = 計算指標(讀取資料庫(最近天數=400))
+        價 = 指.pivot(index="date", columns="代號", values="還原價").sort_index()
+        del 指
+        釋放記憶體()
+    列們 = []
+    for (舊日, 舊檔), (新日, 新檔) in zip(檔們[:-1], 檔們[1:]):
+        舊 = _預估共識(pd.read_csv(舊檔, dtype={"code": str}))
+        新 = _預估共識(pd.read_csv(新檔, dtype={"code": str}))
+        if 舊 is None or 新 is None:
+            continue
+        同年 = 新["預估年度"].iloc[0] == 舊["預估年度"].iloc[0]
+        修 = _修正幅度(新["預估EPS今年"], 舊.reindex(新.index)["預估EPS今年" if 同年 else "預估EPS明年"]).dropna()
+        進 = 價.index.searchsorted(新日, side="right")
+        if 進 + 天數 >= len(價.index):
+            continue
+        碼 = [c for c in 修.index if c in 價.columns]
+        報 = (價.iloc[進 + 天數][碼] / 價.iloc[進][碼] - 1).dropna() * 100
+        修 = 修.reindex(報.index)
+        上, 下 = 報[修 >= 門檻], 報[修 <= -門檻]
+        if len(上) < 最少檔數 or len(下) < 最少檔數:
+            continue
+        列們.append({"前期": 舊日, "本期": 新日, "上修檔數": len(上), "下修檔數": len(下),
+                   "上修超額%": round(上.mean() - 報.mean(), 2), "下修超額%": round(下.mean() - 報.mean(), 2),
+                   "上修減下修%": round(上.mean() - 下.mean(), 2)})
+    if not 列們:
+        return None, (f"已有 {len(檔們)} 份快照，但最新一期之後還不到 {天數} 個交易日（或上修、下修檔數太少），還不能驗證。")
+    t = pd.DataFrame(列們)
+    return t, f"{len(t)} 期平均：上修減下修 {t['上修減下修%'].mean():+.2f}%（{天數} 個交易日），勝率 {(t['上修減下修%'] > 0).mean() * 100:.0f}%。"
+
+
+def 加預估本益比(t):
+    """t 要有 收盤、預估EPS今年、預估EPS明年 → 加 預估本益比、明年預估本益比（EPS ≤ 0 不算；每天用最新收盤重算）。"""
+    if "預估EPS今年" not in t.columns:
+        return t
+    t = t.copy()
+    for 欄, 新 in (("預估EPS今年", "預估本益比"), ("預估EPS明年", "明年預估本益比")):
+        e = pd.to_numeric(t[欄], errors="coerce")
+        t[新] = (t["收盤"] / e).where(e > 0).round(1)
+    if "預估本業EPS" in t.columns:
+        e = pd.to_numeric(t["預估本業EPS"], errors="coerce")
+        t["本業預估本益比"] = (t["收盤"] / e).where(e > 0).round(1)
+    return t
+
+
+def 預估EPS文字(r):
+    """給 AI 用的一行文字；r 是今日表的一列（dict 或 Series）。沒有資料回傳空字串。"""
+    g = lambda k: r.get(k, np.nan)
+    今 = g("預估EPS今年")
+    if not isinstance(今, (int, float)) or pd.isna(今):
+        return ""
+    年 = int(g("預估年度")) if pd.notna(g("預估年度")) else ""
+    日 = g("預估資料日")
+    說 = [f"市場預估 EPS（使用者匯出的全市場預估，A、B 兩源中位數，資料日 {pd.Timestamp(日):%Y-%m-%d}）：{年} 年 {今:.2f}"]
+    if pd.notna(g("預估EPS明年")):
+        說.append(f"{年 + 1 if 年 else '明'} 年 {g('預估EPS明年'):.2f}")
+    if pd.notna(g("預估本益比")):
+        說.append(f"預估本益比 {g('預估本益比'):.1f} 倍" + (f"／明年 {g('明年預估本益比'):.1f} 倍" if pd.notna(g("明年預估本益比")) else ""))
+    if pd.notna(g("預估本業EPS")):
+        說.append(f"本業（業內）預估 EPS {g('預估本業EPS'):.2f}"
+                  + (f"，預估業外約占 {g('預估業外占比%'):.0f}%" if pd.notna(g("預估業外占比%")) else ""))
+    if pd.notna(g("預估分歧%")) and g("預估分歧%") > 預估分歧門檻:
+        說.append(f"兩源差 {g('預估分歧%'):.0f}%（分歧大）")
+    if pd.notna(g("隱含剩餘EPS")):
+        說.append(f"已公布累計 {g('已公布累計EPS'):.2f}（至 {g('累計至')}），全年預估隱含後面還要賺 {g('隱含剩餘EPS'):.2f}"
+                  + (f"，平均每季比最新一季 {g('隱含季成長%'):+.0f}%" if pd.notna(g("隱含季成長%")) else ""))
+    return "，".join(說)
+
+
 def 合約負債驗證(價=None, 天數=60, 最少成交值=2e7):
     """全市場驗證合約負債：每季財報公告後（季底＋45 天，第四季＋90 天）持有 天數 個交易日的超額報酬，
     依合約負債年增率／能見度／近兩季營收年增各分三組，比較高組減低組；也看合約負債年增能不能預告未來兩季營收。
@@ -6889,18 +7601,31 @@ def 大盤本益比(天數=None):
 def _大盤本益比(天數=None):
     """上市加權本益比＝Σ市值 ÷ Σ(市值 ÷ 本益比)，只算本益比 > 0 的（虧損股證交所不給本益比）。
     股數用 fundamental/capital.csv 目前的股數（歷史會有一點誤差）。每月取最後一個交易日，加上最近 天數 個交易日。
-    回傳 DataFrame(date, 本益比)。"""
+    另算 半導體（capital.csv 產業＝半導體）與 半導體不含台積電 的本益比，以及兩者對大盤的比值。
+    回傳 DataFrame(date, 本益比, 半導體, 半導體不含台積電, 半導體相對, 不含台積電相對)。"""
     股 = _讀("fundamental/capital.csv", dtype={"code": str})
+    欄們 = ["date", "本益比", "半導體", "半導體不含台積電", "半導體相對", "不含台積電相對"]
     if 股 is None or not len(股):
-        return pd.DataFrame(columns=["date", "本益比"])
+        return pd.DataFrame(columns=欄們)
+    產業 = 股.set_index("code")["industry"] if "industry" in 股.columns else pd.Series(dtype=str)
     股 = 股.set_index("code")["shares"]
-    列們 = []
 
     def 算(t):
         t = t[(t["market"] == "上市") & t["code"].isin(股.index) & (t["pe"] > 0)]
         市 = t["close"] * t["code"].map(股)
-        return float(市.sum() / (市 / t["pe"]).sum()) if len(t) > 100 else np.nan
+        if len(t) <= 100:
+            return {"本益比": np.nan}
+        大 = float(市.sum() / (市 / t["pe"]).sum())
+        半 = t["code"].map(產業).eq("半導體")
+        結果 = {"本益比": 大}
+        if 半.sum() >= 20:
+            a = float(市[半].sum() / (市[半] / t["pe"][半]).sum())
+            非 = 半 & (t["code"] != "2330")
+            b = float(市[非].sum() / (市[非] / t["pe"][非]).sum())
+            結果.update({"半導體": a, "半導體不含台積電": b, "半導體相對": a / 大, "不含台積電相對": b / 大})
+        return 結果
 
+    列們 = []
     for f in sorted((資料夾 / "monthly").glob("prices_*.parquet")):
         try:
             t = pd.read_parquet(f, columns=["market", "code", "close", "pe", "date"])
@@ -6908,11 +7633,12 @@ def _大盤本益比(天數=None):
             continue
         t["date"] = pd.to_datetime(t["date"])
         末 = t["date"].max()
-        列們.append({"date": 末, "本益比": 算(t[t["date"] == 末])})
+        列們.append({"date": 末, **算(t[t["date"] == 末])})
     for f in sorted((資料夾 / "prices").glob("*/*.csv.gz"))[-(天數 or 1):]:
         t = pd.read_csv(f, dtype={"code": str})
-        列們.append({"date": pd.to_datetime(f.name[:8]), "本益比": 算(t)})
-    return pd.DataFrame(列們).dropna().drop_duplicates("date", keep="last").sort_values("date").reset_index(drop=True)
+        列們.append({"date": pd.to_datetime(f.name[:8]), **算(t)})
+    結果 = pd.DataFrame(列們).reindex(columns=欄們)
+    return 結果.dropna(subset=["本益比"]).drop_duplicates("date", keep="last").sort_values("date").reset_index(drop=True)
 
 
 def 週線連跌統計(K, 連跌=3, 乖離門檻=-5.0, 週數=(1, 2, 4)):
@@ -7072,7 +7798,8 @@ def 更新大盤融資洗盤(強制=False, 間隔天數=25):
     檔 = 資料夾 / "margin_flush.json"
     if 檔.exists() and not 強制:
         舊 = json.loads(檔.read_text())
-        if (pd.Timestamp.now() - pd.Timestamp(舊.get("計算日", "2000-01-01"))).days < 間隔天數:
+        if (pd.Timestamp.now() - pd.Timestamp(舊.get("計算日", "2000-01-01"))).days < 間隔天數 and "恐慌日" in 舊 \
+                and "正2背離" in 舊:
             print("大盤融資洗盤：還不用重算")
             return
     表 = 讀取資料庫()
@@ -7083,7 +7810,11 @@ def 更新大盤融資洗盤(強制=False, 間隔天數=25):
     結果 = {"計算日": f"{pd.Timestamp.now():%Y-%m-%d}", "起": f"{變.index.min():%Y-%m-%d}", "迄": f"{變.index.max():%Y-%m-%d}",
             "最大單日減%": round(float(變.min()), 2),
             "分位": {f"{q:g}": round(float(變.quantile(q)), 2) for q in (0.01, 0.05, 0.1)},
-            "洗盤": 融資洗盤統計(變, K, -1.5), "大洗盤": 融資洗盤統計(變, K, -2.5)}
+            "洗盤": 融資洗盤統計(變, K, -1.5), "大洗盤": 融資洗盤統計(變, K, -2.5),
+            "減幅比": 融資減幅比回測(融資減幅比序列(變, K), K),
+            "恐慌日": 恐慌日統計(K, 變)}
+    正2每日, _ = 正2融資明細(讀取資料庫(代號=list(台股正2)))
+    結果["正2背離"] = 正2背離統計(變, 正2每日, K)
     檔.write_text(json.dumps(結果, ensure_ascii=False, indent=1))
     print(f"大盤融資洗盤：{結果['洗盤']['次數']} 次（≤ −1.5%）")
 
@@ -7386,3 +8117,1308 @@ def 讀取跌停打開事件(代號們=None, 拉回門檻=5.0):
     if 名 is not None and len(事):
         事.insert(2, "名稱", 事["代號"].map(名))
     return 事, 基準
+
+
+# ========== 31. 網紅摘要 11/04 建議：止跌三階段、融資減幅比、三條件抄底、摘要混稿偵測 ==========
+def 止跌三階段(K, 低點天數=20, 確認天數=3):
+    """通勤族（阿信）的大盤止跌三階段：① 不再創新低 → ② 收盤站回 5 日線 → ③ 5 日線往上穿過 10 日線。
+    K：date、low、close（原始價，依日期排）。回傳 dict(階段們=[(名, 燈, 說)], 已到第幾階段, 站回5日需, 金叉需, 低點, 低點日)；資料不夠回 None。
+    「站回5日需」＝下一個交易日收盤要高於多少，收盤才會在 5 日線之上；「金叉需」＝收多少 5 日線才會高過 10 日線。"""
+    if K is None or len(K) < max(低點天數, 10) + 1:
+        return None
+    K = K.reset_index(drop=True)
+    c = K["close"].astype(float)
+    低 = (K["low"] if "low" in K.columns else K["close"]).astype(float)
+    近 = 低.tail(低點天數)
+    低點, 低點位 = float(近.min()), int(近.idxmin())
+    沒破天數 = len(K) - 1 - 低點位
+    ma5, ma10 = float(c.tail(5).mean()), float(c.tail(10).mean())
+    收 = float(c.iloc[-1])
+    S4, S9 = float(c.tail(4).sum()), float(c.tail(9).sum())
+    站回需 = S4 / 4                 # 明天收 X：X > (S4+X)/5 ⇔ X > S4/4
+    金叉需 = S9 - 2 * S4            # (S4+X)/5 > (S9+X)/10 ⇔ X > S9 − 2·S4
+    一 = 沒破天數 >= 確認天數
+    二 = 收 > ma5
+    三 = ma5 > ma10
+    日 = K["date"].iloc[低點位]
+    階段們 = [
+        ("① 不再創新低", "🟢" if 一 else ("🟡" if 沒破天數 >= 1 else "🔴"),
+         f"近 {低點天數} 日低點 {低點:,.0f}（{日:%m/%d}），" + (f"已經 {沒破天數} 天沒跌破" if 沒破天數 else "今天剛創新低")
+         + ("" if 一 else f"，要連 {確認天數} 天不破才算")),
+        ("② 站回 5 日線", "🟢" if 二 else "🔴",
+         f"收盤 {收:,.0f}、5 日線 {ma5:,.0f}" + ("，已站上" if 二 else f"；下個交易日收 {站回需:,.0f} 以上才站回（差 {(站回需 / 收 - 1) * 100:+.1f}%）")),
+        ("③ 5 日線穿過 10 日線", "🟢" if 三 else "🔴",
+         f"5 日線 {ma5:,.0f}、10 日線 {ma10:,.0f}" + ("，已在上方" if 三 else (
+             f"；下個交易日收 {金叉需:,.0f} 以上才會交叉" if 金叉需 <= 收 * 1.1 else "；差距還大，一天內不可能交叉，要等幾天均線扣抵下來"))),
+    ]
+    已到 = 3 if (一 and 二 and 三) else (2 if (一 and 二) else (1 if 一 else 0))
+    return {"階段們": 階段們, "已到": 已到, "站回5日需": round(站回需, 2), "金叉需": round(金叉需, 2),
+            "低點": 低點, "低點日": 日}
+
+
+def 止跌三階段回測(K, 跌深=-8.0, 窗=60, 天數=(5, 20, 60), 間隔=20):
+    """過去「指數距 60 日高點跌超過 跌深%」之後，第一次三階段全部成立那天買進，之後 N 日加權漲跌，對照任何一天。
+    回傳 dict(次數, 統計=[{天數, 次數, 平均%, 上漲機率%, 基準平均%, 基準上漲機率%}], 事件=[...])。"""
+    if K is None or len(K) < 120:
+        return None
+    K = K.reset_index(drop=True)
+    c = K["close"].astype(float)
+    低 = (K["low"] if "low" in K.columns else K["close"]).astype(float)
+    跌幅 = (c / c.rolling(窗, min_periods=20).max() - 1) * 100
+    低點位 = 低.rolling(20).apply(lambda s: len(s) - 1 - int(np.argmin(s)), raw=True)
+    ma5, ma10 = c.rolling(5).mean(), c.rolling(10).mean()
+    全 = (低點位 >= 3) & (c > ma5) & (ma5 > ma10)
+    # 跌深條件看「最近 20 天內曾經跌深」，止跌當天通常已經反彈一點
+    曾深 = (跌幅.rolling(20, min_periods=1).min() <= 跌深)
+    事件, 上次 = [], -10 ** 9
+    for i in np.flatnonzero((全 & 曾深).to_numpy()):
+        if i - 上次 > 間隔:
+            事件.append(i)
+            上次 = i
+    統計 = []
+    for n in 天數:
+        後 = (c.shift(-n) / c - 1) * 100
+        x = 後.iloc[事件].dropna()
+        統計.append({"天數": n, "次數": int(len(x)), "平均%": round(float(x.mean()), 2) if len(x) else None,
+                   "上漲機率%": round(float((x > 0).mean() * 100)) if len(x) else None,
+                   "基準平均%": round(float(後.mean()), 2), "基準上漲機率%": round(float((後.dropna() > 0).mean() * 100))})
+    明細 = [{"date": f"{K['date'].iloc[i]:%Y-%m-%d}", "收盤": round(float(c.iloc[i])),
+             **{f"{n}日後%": (round(float(c.iloc[i + n] / c.iloc[i] * 100 - 100), 1) if i + n < len(c) else None) for n in 天數}}
+            for i in 事件]
+    return {"次數": len(事件), "跌深": 跌深, "統計": 統計, "事件": 明細}
+
+
+def 融資減幅比序列(變化, K, 窗=60, 前置=5):
+    """鄭廳宜／吳嘉隆：「大盤跌 10%，融資餘額要減 7～8% 才算洗乾淨」。
+    變化：大盤融資變化()（每天 %，張數 × 收盤加權，不受股價漲跌影響）；K：加權日 K。
+    每天算：指數距近 窗 日收盤高點跌幅%、融資（從那個高點前 前置 天起算的最高）減幅%、比例＝融資減幅 ÷ 指數跌幅。
+    回傳 DataFrame(index＝date；指數跌幅、融資減幅、比例、高點日)。"""
+    if 變化 is None or K is None or not len(變化):
+        return pd.DataFrame()
+    c = K.set_index("date")["close"].astype(float)
+    c = c[c.index >= 變化.index.min() - pd.Timedelta(days=1)]
+    L = (1 + 變化.reindex(c.index).fillna(0) / 100).cumprod()
+    列們 = []
+    值c, 值L, 日們 = c.to_numpy(), L.to_numpy(), c.index
+    for i in range(len(c)):
+        a = max(0, i - 窗 + 1)
+        p = a + int(np.argmax(值c[a:i + 1]))
+        跌 = (值c[i] / 值c[p] - 1) * 100
+        b = max(0, p - 前置)
+        減 = (值L[i] / 值L[b:i + 1].max() - 1) * 100
+        列們.append((日們[i], round(跌, 2), round(減, 2), round(減 / 跌, 2) if 跌 < -0.5 else np.nan, 日們[p]))
+    return pd.DataFrame(列們, columns=["date", "指數跌幅", "融資減幅", "比例", "高點日"]).set_index("date")
+
+
+def 融資減幅燈(列, 跌深=-8.0, 門檻=0.7):
+    """融資減幅比的燈號與白話。列：融資減幅比序列() 的一列。"""
+    跌, 減, 比 = 列["指數跌幅"], 列["融資減幅"], 列["比例"]
+    if 跌 > 跌深:
+        return "🟡", f"加權距高點只跌 {跌:+.1f}%（還沒到 {跌深:.0f}%），這個指標先不看"
+    if 比 >= 門檻:
+        return "🟢", f"加權跌 {跌:+.1f}%、融資減 {減:+.1f}%，比例 {比:.0%}，融資已經跟上跌幅（≥ {門檻:.0%}）"
+    return "🔴", f"加權跌 {跌:+.1f}%、融資只減 {減:+.1f}%，比例 {比:.0%}，還沒到 {門檻:.0%}（融資約還要再減 {跌 * 門檻 - 減:+.1f} 個百分點）"
+
+
+def 融資減幅比回測(序列, K, 跌深=-8.0, 門檻=0.7, 天數=(5, 20, 60), 間隔=20):
+    """融資減幅比第一次亮綠燈（指數跌超過 跌深%、比例 ≥ 門檻）那天買進加權，之後 N 日漲跌，對照任何一天。"""
+    if 序列 is None or not len(序列):
+        return None
+    c = K.set_index("date")["close"].astype(float)
+    綠 = (序列["指數跌幅"] <= 跌深) & (序列["比例"] >= 門檻)
+    事件, 上次 = [], None
+    位 = {d: i for i, d in enumerate(c.index)}
+    for d in 綠[綠].index:
+        if d not in 位:
+            continue
+        if 上次 is None or 位[d] - 上次 > 間隔:
+            事件.append(d)
+            上次 = 位[d]
+    統計 = []
+    for n in 天數:
+        後 = (c.shift(-n) / c - 1) * 100
+        後 = 後[後.index >= 序列.index.min()]
+        x = 後.reindex(事件).dropna()
+        統計.append({"天數": n, "次數": int(len(x)), "平均%": round(float(x.mean()), 2) if len(x) else None,
+                   "上漲機率%": round(float((x > 0).mean() * 100)) if len(x) else None,
+                   "基準平均%": round(float(後.mean()), 2), "基準上漲機率%": round(float((後.dropna() > 0).mean() * 100))})
+    明細 = [{"date": f"{d:%Y-%m-%d}", "指數跌幅%": float(序列.at[d, "指數跌幅"]), "融資減幅%": float(序列.at[d, "融資減幅"]),
+             **{f"{n}日後%": (round(float(c.shift(-n).get(d) / c[d] * 100 - 100), 1) if pd.notna(c.shift(-n).get(d)) else None)
+                for n in 天數}} for d in 事件]
+    return {"門檻": 門檻, "跌深": 跌深, "次數": len(事件), "統計": 統計, "事件": 明細}
+
+
+def 長均線距離(歷史):
+    """每檔最新一天距 年線（240 日）、月線 10MA（10 個月底收盤平均，含本月）、72 週線（72 個週收盤平均，含本週）的 %。
+    歷史：讀取資料庫() 的原始表（code、date、close），要有 1 年半以上。回傳 DataFrame(index＝代號)。"""
+    t = 歷史[["code", "date", "close"]].dropna()
+    t = t[t["close"] > 0].sort_values(["code", "date"])
+    列們 = {}
+    for code, g in t.groupby("code", sort=False):
+        s = g.set_index("date")["close"].astype(float)
+        if len(s) < 240:
+            continue
+        收 = float(s.iloc[-1])
+        年 = float(s.tail(240).mean())
+        月 = s.resample("ME").last().dropna()
+        週 = s.resample("W").last().dropna()
+        列們[code] = {"收盤": 收, "年線": round(年, 2),
+                    "月10MA": round(float(月.tail(10).mean()), 2) if len(月) >= 10 else np.nan,
+                    "72週線": round(float(週.tail(72).mean()), 2) if len(週) >= 72 else np.nan}
+    表 = pd.DataFrame.from_dict(列們, orient="index")
+    for 欄 in ("年線", "月10MA", "72週線"):
+        if 欄 in 表:
+            表[f"距{欄}%"] = ((表["收盤"] / 表[欄] - 1) * 100).round(1)
+    return 表
+
+
+def 抄底三條件(今日, 距離, 營收年增, 距離上限=3.0, 融資減門檻=-10.0):
+    """通勤族（阿信）選股法：① 技術面跌到長均線支撐（距 年線／月 10MA／72 週線 ±距離上限% 內，任一條）、
+    ② 基本面沒壞（近 3 個月營收年增 > 0）、③ 籌碼面融資已洗（🧹 融資洗完，或融資 20 日減少 ≥ 10%）。
+    今日：最新一天指標（代號、名稱、收盤、融資20日增減、融資洗完…）；距離：長均線距離()；營收年增：{代號: 近3月年增%}。"""
+    if 今日 is None or 距離 is None or not len(距離):
+        return pd.DataFrame()
+    t = 今日[今日["代號"].isin(距離.index)].copy()
+    t = t.join(距離.drop(columns=["收盤"], errors="ignore"), on="代號")
+    t["近3月營收年增"] = t["代號"].map(營收年增)
+    支撐們 = []
+    for _, r in t.iterrows():
+        近 = [名 for 名 in ("年線", "月10MA", "72週線") if pd.notna(r.get(f"距{名}%")) and abs(r[f"距{名}%"]) <= 距離上限]
+        支撐們.append("、".join(近))
+    t["靠近支撐"] = 支撐們
+    洗 = t["融資洗完"].astype(bool) if "融資洗完" in t.columns else False
+    減 = t["融資20日增減"] <= 融資減門檻 if "融資20日增減" in t.columns else False
+    量 = t["融資餘額"] >= 200 if "融資餘額" in t.columns else True
+    t["融資"] = np.where(洗, "🧹 融資洗完", np.where(減, "融資 20 日減 10% 以上", ""))
+    t = t[(t["靠近支撐"] != "") & (t["近3月營收年增"] > 0) & (洗 | 減) & 量]
+    欄 = [c for c in ["代號", "名稱", "產業", "收盤", "靠近支撐", "距年線%", "距月10MA%", "距72週線%", "近3月營收年增",
+                     "融資", "融資20日增減", "融資維持率", "本益比"] if c in t.columns]
+    return t[欄].sort_values("近3月營收年增", ascending=False).reset_index(drop=True)
+
+
+def 摘要混稿偵測(影片們, 天數差=1, 最少共同=3, 相似門檻=0.55):
+    """同一天（前後 天數差 天）不同頻道的摘要，點名的股票重疊很多、理由句子又很像，可能是同一支影片被重複整理，
+    或 Gemini 把兩支影片混在一起（2026-11-04 優分析 × 賺錢放大術）。這種要只算一次，否則「網紅共識」會灌水。
+    回傳 [{日期, 頻道A, 頻道B, 共同檔數, 共同股票, 理由相似度}]，相似度 0～1（兩字一組的重疊比例）。"""
+    結果 = []
+    影們 = [v for v in 影片們 if v.get("股票")]
+    for i, a in enumerate(影們):
+        for b in 影們[i + 1:]:
+            if a.get("頻道") == b.get("頻道"):
+                continue
+            try:
+                差 = abs((pd.Timestamp(a.get("日期")) - pd.Timestamp(b.get("日期"))).days)
+            except (TypeError, ValueError):
+                continue
+            if 差 > 天數差:
+                continue
+            A = {str(x.get("代號")): str(x.get("理由") or "") for x in a["股票"]}
+            B = {str(x.get("代號")): str(x.get("理由") or "") for x in b["股票"]}
+            共 = [k for k in A if k in B]
+            if len(共) < 最少共同:
+                continue
+            分們 = []
+            for k in 共:
+                x, y = _字組(A[k]), _字組(B[k])
+                if x and y:
+                    分們.append(len(x & y) / min(len(x), len(y)))
+            分 = float(np.mean(分們)) if 分們 else 0.0
+            if 分 >= 相似門檻:
+                名 = {str(x.get("代號")): x.get("名稱") or "" for x in a["股票"]}
+                結果.append({"日期": max(str(a.get("日期")), str(b.get("日期"))), "頻道A": a.get("頻道"), "頻道B": b.get("頻道"),
+                           "共同檔數": len(共), "共同股票": "、".join(名.get(k) or k for k in 共[:6]),
+                           "理由相似度": round(分, 2)})
+    return sorted(結果, key=lambda r: r["日期"], reverse=True)
+
+
+# ========== 網紅摘要 2026-11-03：光通訊美台對照、全年 EPS 反推第四季、大盤恐慌日回測、漲跌停說法查核 ==========
+光通訊美股 = ["Lumentum", "Coherent", "邁威爾"]
+光通訊台股 = {"3081": "聯亞", "2455": "全新", "3105": "穩懋", "4979": "華星光", "3363": "上詮", "3450": "聯鈞",
+          "4977": "眾達-KY", "6442": "光聖"}
+
+
+def 光通訊美台對照(指標, 美股=None, 天數=120, 名單=光通訊台股):
+    """通勤族 11/03：Lumentum 前一晚跌 18.6%，隔天聯亞、全新、穩懋全部跌停。
+    每檔台股光通訊：今天漲跌、近 天數 天跟「前一晚」各美股光通訊的相關係數、Lumentum 漲 1% 隔天平均跟漲幾 %。
+    回傳 (表, 美股最新 {名稱: (日期, 漲跌%)})。"""
+    if 美股 is None:
+        美股 = 讀取美股()
+    if 美股 is None:
+        return pd.DataFrame(), {}
+    美報 = (美股[[c for c in 光通訊美股 if c in 美股]].pct_change(fill_method=None) * 100).dropna(how="all")
+    if 美報.empty:
+        return pd.DataFrame(), {}
+    t = 指標[指標["代號"].isin(list(名單))][["date", "代號", "日報酬"]]
+    台 = t.pivot_table(index="date", columns="代號", values="日報酬").sort_index() * 100
+    if 台.empty:
+        return pd.DataFrame(), {}
+    前晚 = pd.merge_asof(pd.DataFrame({"date": 台.index}), 美報.rename_axis("date").reset_index(), on="date",
+                       direction="backward", allow_exact_matches=False).set_index("date")
+    近, 前 = 台.tail(天數), 前晚.reindex(台.tail(天數).index)
+    列們 = []
+    for 代 in 近.columns:
+        y = 近[代]
+        列 = {"代號": 代, "名稱": 名單.get(代, 代), "今天%": round(float(y.iloc[-1]), 2) if pd.notna(y.iloc[-1]) else np.nan}
+        for c in 前.columns:
+            列[f"對{c}相關"] = round(float(y.corr(前[c])), 2) if 前[c].notna().sum() > 20 else np.nan
+        if "Lumentum" in 前 and 前["Lumentum"].var() > 0:
+            x = 前["Lumentum"]
+            列["Lumentum漲1%跟漲%"] = round(float(y.cov(x) / x.var()), 2)
+        列們.append(列)
+    表 = pd.DataFrame(列們)
+    最新 = {c: (美報[c].dropna().index[-1], round(float(美報[c].dropna().iloc[-1]), 2)) for c in 美報.columns if 美報[c].notna().any()}
+    if "Lumentum漲1%跟漲%" in 表 and "Lumentum" in 最新 and 最新["Lumentum"][0] >= 台.index[-1]:
+        表["依今晚Lumentum推估%"] = (表["Lumentum漲1%跟漲%"] * 最新["Lumentum"][1]).clip(-10, 10).round(1)
+    return 表.sort_values(表.columns[3] if len(表.columns) > 3 else "代號", ascending=False), 最新
+
+
+def 全年EPS反推(代號, 全年EPS):
+    """影片或券商說「今年 EPS 約 X 元」→ 用已公布的累計 EPS 算剩下的季度每季要賺多少（鈔錢部署 11/03：台達電 40.7 元）。
+    回傳 dict 或 None：年度、已公布季數、累計EPS、剩下季數、剩下每季要賺、今年平均每季、倍數（要賺 ÷ 平均）、
+    最近一季單季、去年全年、全年年增%。"""
+    f = 資料夾 / "fundamental" / "income.csv"
+    if not f.exists() or 全年EPS is None:
+        return None
+    t = pd.read_csv(f, dtype={"code": str})
+    t = 調整分割EPS(t[t["code"] == str(代號)]).dropna(subset=["eps"]).sort_values("quarter")
+    if t.empty:
+        return None
+    末 = t.iloc[-1]
+    年, 季 = int(末["quarter"][:4]), int(末["quarter"][-1])
+    if 季 >= 4:
+        return {"年度": 年, "已公布季數": 4, "累計EPS": float(末["eps"]), "說明": f"{年} 年四季都已公布，全年 EPS {末['eps']:.2f} 元"}
+    今年 = t[t["quarter"].str[:4] == str(年)].set_index("quarter")["eps"]
+    前季 = 今年.get(f"{年}Q{季 - 1}") if 季 > 1 else 0.0
+    單季 = float(末["eps"]) - float(前季) if 前季 is not None and pd.notna(前季) else np.nan
+    去年 = t[t["quarter"] == f"{年 - 1}Q4"]["eps"]
+    去年值 = float(去年.iloc[0]) if len(去年) else np.nan
+    累計, 剩 = float(末["eps"]), 4 - 季
+    要 = (float(全年EPS) - 累計) / 剩
+    平均 = 累計 / 季
+    return {"年度": 年, "已公布季數": 季, "累計EPS": round(累計, 2), "剩下季數": 剩, "剩下每季要賺": round(要, 2),
+            "今年平均每季": round(平均, 2), "倍數": round(要 / 平均, 2) if 平均 > 0 else np.nan,
+            "最近一季單季": round(單季, 2) if pd.notna(單季) else np.nan, "去年全年": 去年值,
+            "全年年增%": round((float(全年EPS) / 去年值 - 1) * 100, 1) if 去年值 and 去年值 > 0 else np.nan}
+
+
+def 恐慌日判斷(K, 跌幅=-2.0, 下影=0.3):
+    """大盤「恐慌日」：跌超過 跌幅%，而且收在當天最低點附近（下影線 ≤ 下影%，收盤離最低點很近）。
+    通勤族 11/03：前幾天開低會拉出下影線，今天一路殺到底、幾乎沒有下影線，才是真正的恐慌。回傳 DataFrame。"""
+    k = K.sort_values("date").reset_index(drop=True)
+    c, 低 = k["close"].astype(float), k["low"].astype(float)
+    開 = k["open"].astype(float) if "open" in k else c
+    k["漲跌%"] = ((c / c.shift() - 1) * 100).round(2)
+    k["下影線%"] = ((np.minimum(開, c) - 低) / c * 100).round(2)
+    k["恐慌日"] = (k["漲跌%"] <= 跌幅) & (k["下影線%"] <= 下影)
+    return k
+
+
+def 恐慌日統計(K, 融資變化=None, 跌幅=-2.0, 下影=0.3, 洗=-1.5, 天數=(5, 20, 60), 間隔天數=10):
+    """恐慌日之後大盤怎麼走，再分「當天＋隔天融資合計減超過 洗%」與「融資沒洗」兩組。
+    融資要等隔天晚上才知道，所以報酬一律從恐慌日「隔天收盤」算起，避免偷看。"""
+    k = 恐慌日判斷(K, 跌幅, 下影).set_index("date")
+    c = k["close"].astype(float)
+    日們 = list(c.index)
+    事件, 上次 = [], None
+    for d in k.index[k["恐慌日"]]:
+        if 上次 is not None and (d - 上次).days <= 間隔天數:
+            continue
+        上次 = d
+        i = 日們.index(d)
+        if i + 1 >= len(日們):
+            事件.append({"date": d, "漲跌%": float(k.at[d, "漲跌%"]), "融資兩日%": np.nan, "起算": None})
+            continue
+        隔 = 日們[i + 1]
+        融 = np.nan
+        if 融資變化 is not None and len(融資變化):
+            v = [融資變化.get(d), 融資變化.get(隔)]
+            融 = round(float(np.nansum([x for x in v if x is not None])), 2) if any(x is not None for x in v) else np.nan
+        事件.append({"date": d, "漲跌%": float(k.at[d, "漲跌%"]), "融資兩日%": 融, "起算": 隔})
+    def 統(組):
+        列們 = []
+        for n in 天數:
+            後 = (c.shift(-n) / c - 1) * 100
+            x = 後.reindex([e["起算"] for e in 組 if e["起算"] is not None]).dropna()
+            列們.append({"天數": n, "次數": int(len(x)), "平均%": round(float(x.mean()), 2) if len(x) else None,
+                       "上漲機率%": round(float((x > 0).mean() * 100)) if len(x) else None})
+        return 列們
+    基準 = []
+    for n in 天數:
+        後 = ((c.shift(-n) / c - 1) * 100).dropna()
+        基準.append({"天數": n, "平均%": round(float(後.mean()), 2), "上漲機率%": round(float((後 > 0).mean() * 100))})
+    已洗 = [e for e in 事件 if pd.notna(e["融資兩日%"]) and e["融資兩日%"] <= 洗]
+    沒洗 = [e for e in 事件 if pd.notna(e["融資兩日%"]) and e["融資兩日%"] > 洗]
+    明細 = [{"date": f"{e['date']:%Y-%m-%d}", "漲跌%": e["漲跌%"], "融資兩日%": None if pd.isna(e["融資兩日%"]) else e["融資兩日%"],
+             **{f"{n}日後%": (round(float(c.shift(-n).get(e["起算"]) / c[e["起算"]] * 100 - 100), 1)
+                            if e["起算"] is not None and pd.notna(c.shift(-n).get(e["起算"])) else None) for n in 天數}}
+            for e in 事件]
+    return {"條件": {"跌幅": 跌幅, "下影線": 下影, "融資洗": 洗}, "次數": len(事件), "全部": 統(事件), "融資有洗": 統(已洗),
+            "融資沒洗": 統(沒洗), "基準": 基準, "事件": 明細}
+
+
+漲跌停門檻 = 0.095
+
+
+def _拼音(字):
+    try:
+        from pypinyin import lazy_pinyin
+    except ImportError:
+        return list(字)
+    return [re.sub(r"ng$", "n", p) for p in lazy_pinyin(re.sub(r"[^一-鿿]", "", 字))]
+
+
+def 同音分數(甲, 乙):
+    """兩個名字念起來有多像（0～1）：逐字比拼音（不管聲調、ng／n 視為相同），取前面對齊的比例。
+    用來抓「字幕把旺玖聽成忘久、Gemini 又對成萬泰科」這種同音錯字。"""
+    a, b = _拼音(甲), _拼音(乙)
+    if not a or not b:
+        return 0.0
+    中 = sum(1 for x, y in zip(a, b) if x == y)
+    return round(中 / max(len(a), len(b)), 2)
+
+
+def _候選字詞(x):
+    """一則股票說法裡可能是「聽到的名字」的字詞：名稱本身＋括號裡「誤植為／口述為／字幕為」後面的字。"""
+    文 = " ".join(str(x.get(k) or "") for k in ("名稱", "理由", "原文看法"))
+    詞們 = [re.sub(r"[（(].*", "", str(x.get("名稱") or "")).strip()]
+    for m in re.finditer(r"(?:誤植為|口述為|字幕為|逐字稿為|辨識為|聽成)[「『]?([一-鿿]{2,4}(?:[／/、][一-鿿]{2,4})*)", 文):
+        詞們 += re.split(r"[／/、]", m.group(1))
+    詞們 += re.findall(r"[「『]([一-鿿]{2,4})[」』]", 文)
+    return [w for w in dict.fromkeys(詞們) if w]
+
+
+def 漲跌停查核(影片們, 日表, 天數=30, 今天=None):
+    """網紅說某檔「漲停／跌停」，拿影片日（或之前最近一個交易日）的實際漲跌對照；不符時，
+    從當天真的漲停（跌停）的股票裡找名字念起來最像的，當作「可能是」。
+    日表＝DataFrame（date, 代號, 名稱, 日報酬[小數]）。回傳 DataFrame。"""
+    if 日表 is None or 日表.empty:
+        return pd.DataFrame()
+    今天 = pd.Timestamp(今天 or pd.Timestamp.now().normalize())
+    交易日 = pd.DatetimeIndex(sorted(日表["date"].unique()))
+    列們 = []
+    for v in 影片們:
+        日 = pd.to_datetime(v.get("日期"), errors="coerce")
+        if pd.isna(日) or (今天 - 日).days > 天數:
+            continue
+        前 = 交易日[交易日 <= 日]
+        if not len(前):
+            continue
+        d = 前[-1]
+        當天 = 日表[日表["date"] == d]
+        for x in v.get("股票", []):
+            文 = f"{x.get('理由') or ''} {x.get('原文看法') or ''}"
+            if re.search(r"(沒有|沒|未|不)(?:漲停|跌停)", 文):
+                continue
+            說 = "漲停" if "漲停" in 文 else ("跌停" if "跌停" in 文 else None)
+            if not 說:
+                continue
+            代 = str(x.get("代號") or "")
+            實 = 當天[當天["代號"] == 代]["日報酬"]
+            實值 = float(實.iloc[0]) if len(實) else np.nan
+            對 = pd.notna(實值) and (實值 >= 漲跌停門檻 if 說 == "漲停" else 實值 <= -漲跌停門檻)
+            可能 = ""
+            if not 對:
+                池 = 當天[當天["日報酬"] >= 漲跌停門檻] if 說 == "漲停" else 當天[當天["日報酬"] <= -漲跌停門檻]
+                詞們 = _候選字詞(x)
+                最佳 = max(((max(同音分數(w, 名) for w in 詞們), 代2, 名) for 代2, 名 in zip(池["代號"], 池["名稱"])),
+                         default=(0, "", ""))
+                if 最佳[0] >= 0.5:
+                    可能 = f"{最佳[1]} {最佳[2]}（念起來像）"
+            列們.append({"影片日": 日, "頻道": v.get("頻道", ""), "股票": f"{代} {x.get('名稱', '')}".strip(), "說": 說,
+                       "交易日": d, "實際漲跌%": round(實值 * 100, 2) if pd.notna(實值) else np.nan,
+                       "結果": "✅ 相符" if 對 else "❌ 不符", "可能是": 可能})
+    return pd.DataFrame(列們)
+
+
+# ========== 股癌 EP712（2026-11-08）：國安基金、季線保衛戰、VIX 跳升、融資佔股本、Permit、砍單長鞭、說法查核 ==========
+def 讀取國安基金():
+    """data/stabilization_fund.csv：歷次國安基金進場（次, 決議日, 退場日, 事件, 投入億, 獲利億, 備註）。
+    決議日只寫到月份（例如 2000-03）的是網站資料以前的護盤，只列事件不算報酬。新的一次直接在 GitHub 加一列。"""
+    f = 資料夾 / "stabilization_fund.csv"
+    if not f.exists():
+        return pd.DataFrame(columns=["次", "決議日", "退場日", "事件", "投入億", "獲利億", "備註"])
+    return pd.read_csv(f, dtype=str).fillna("")
+
+
+def 國安基金統計(K, 紀錄=None, 天數=(1, 5, 20, 60, 120)):
+    """每次國安基金決議日（盤後決議，從當天收盤算）之後加權的表現，以及這次護盤到今天跟前幾次「同一天數」的比較。
+    回傳 (表, 本次)。表每列：次、決議日、事件、收盤、距一年高點%、季線乖離%、N日%、之後最低再跌%、最低日。"""
+    紀錄 = 讀取國安基金() if 紀錄 is None else 紀錄
+    if K is None or not len(K) or 紀錄.empty:
+        return pd.DataFrame(), None
+    k = K.set_index("date").sort_index()
+    c, 低 = k["close"], k["low"] if "low" in k else k["close"]
+    ma = c.rolling(60).mean()
+    高 = c.rolling(250, min_periods=120).max()
+    列們 = []
+    for _, r in 紀錄.iterrows():
+        日 = pd.to_datetime(r["決議日"], format="%Y-%m-%d", errors="coerce")
+        列 = {"次": r["次"], "決議日": r["決議日"], "事件": r["事件"], "退場日": r.get("退場日", ""),
+              "投入億": r.get("投入億", ""), "獲利億": r.get("獲利億", "")}
+        if pd.notna(日) and 日 >= c.index[0]:
+            前 = c.index[c.index <= 日]
+            if len(前):
+                i = c.index.get_loc(前[-1])
+                p = float(c.iloc[i])
+                列.update({"收盤": p, "距一年高點%": round((p / 高.iloc[i] - 1) * 100, 1) if pd.notna(高.iloc[i]) else np.nan,
+                          "季線乖離%": round((p / ma.iloc[i] - 1) * 100, 1) if pd.notna(ma.iloc[i]) else np.nan,
+                          "已過交易日": len(c) - 1 - i})
+                for n in 天數:
+                    列[f"{n}日%"] = round((c.iloc[i + n] / p - 1) * 100, 1) if i + n < len(c) else np.nan
+                後 = 低.iloc[i + 1:i + 121]
+                if len(後):
+                    列["之後最低再跌%"] = round((後.min() / p - 1) * 100, 1)
+                    列["最低日"] = 後.idxmin()
+        列們.append(列)
+    表 = pd.DataFrame(列們)
+    本次 = None
+    有 = 表[表.get("收盤", pd.Series(dtype=float)).notna()] if "收盤" in 表 else pd.DataFrame()
+    if len(有):
+        最後 = 有.iloc[-1]
+        if not str(最後.get("退場日") or "").strip():
+            n = int(最後["已過交易日"])
+            i0 = c.index.get_loc(c.index[c.index <= pd.Timestamp(最後["決議日"])][-1])
+            前幾次 = []
+            for _, r in 有.iloc[:-1].iterrows():
+                j = c.index.get_loc(c.index[c.index <= pd.Timestamp(r["決議日"])][-1])
+                if j + n < len(c):
+                    前幾次.append({"次": r["次"], "決議日": r["決議日"], "同天數%": round((c.iloc[j + n] / c.iloc[j] - 1) * 100, 1)})
+            本次 = {"次": 最後["次"], "決議日": 最後["決議日"], "已過交易日": n,
+                    "目前%": round((c.iloc[-1] / c.iloc[i0] - 1) * 100, 1), "最新日": c.index[-1], "前幾次": 前幾次}
+    return 表, 本次
+
+
+def 季線站上事件(收盤, 跌深=-10.0, 觀察=10):
+    """指數離一年高點跌超過 跌深% 之後，第一次收盤站上 60 日線；之後 觀察 個交易日內只要收盤跌回季線就算「又跌破」。
+    報酬從第 觀察 天收盤（已經知道站穩或跌破時）算起，避免偷看。回傳每次事件的表。"""
+    c = 收盤.dropna().astype(float)
+    ma = c.rolling(60).mean()
+    高 = c.rolling(250, min_periods=120).max()
+    列們, i, n, 待 = [], 61, len(c), False
+    while i < n - 1:
+        if c.iloc[i] / 高.iloc[i] - 1 <= 跌深 / 100 and c.iloc[i] < ma.iloc[i]:
+            待 = True
+        if 待 and c.iloc[i] > ma.iloc[i] and c.iloc[i - 1] <= ma.iloc[i - 1]:
+            j = i + 觀察
+            if j >= n:
+                break
+            破 = bool((c.iloc[i + 1:j + 1] < ma.iloc[i + 1:j + 1]).any())
+            後 = c.iloc[j + 1:j + 121]
+            f = lambda m: (c.iloc[j + m] / c.iloc[j] - 1) * 100 if j + m < n else np.nan
+            列們.append({"站上日": c.index[i], "又跌破": 破, "60日%": f(60), "120日%": f(120), "250日%": f(250),
+                       "再跌10%": (後.min() / c.iloc[j] - 1 <= -0.10) if len(後) >= 60 else np.nan})
+            待, i = False, j
+            continue
+        i += 1
+    return pd.DataFrame(列們, columns=["站上日", "又跌破", "60日%", "120日%", "250日%", "再跌10%"])
+
+
+def 季線站上統計(事件):
+    """季線站上事件 → 依「站穩／又跌破」分組的次數、平均報酬、上漲機率、之後 120 日內再跌 10% 的機率。"""
+    if 事件 is None or 事件.empty:
+        return pd.DataFrame()
+    列們 = []
+    for 破, g in 事件.groupby("又跌破"):
+        x = g["再跌10%"].dropna().astype(float)
+        六十 = g["60日%"].dropna()
+        列們.append({"分組": "又跌破" if 破 else "站穩", "次數": len(g),
+                   "60日平均%": round(六十.mean(), 1) if len(六十) else np.nan,
+                   "60日上漲機率%": round((六十 > 0).mean() * 100) if len(六十) else np.nan,
+                   "120日平均%": round(g["120日%"].mean(), 1), "250日平均%": round(g["250日%"].mean(), 1),
+                   "再跌10%機率": round(x.mean() * 100) if len(x) else np.nan})
+    return pd.DataFrame(列們).sort_values("分組", ascending=False).reset_index(drop=True)
+
+
+def 季線狀態(K, 跌深=-10.0, 觀察=10):
+    """加權現在在「季線保衛戰」的哪一段：
+    正常（離高點不到 跌深%）→ 等站上季線（跌深且在季線下）→ 站上第 N 天（觀察期）→ 站穩／又跌破。
+    回傳 dict：狀態、燈、說明、季線、收盤、乖離%、站上日、第幾天。"""
+    if K is None or len(K) < 80:
+        return None
+    k = K.set_index("date").sort_index()
+    c = k["close"].astype(float)
+    ma = c.rolling(60).mean()
+    高 = c.rolling(250, min_periods=120).max()
+    n = len(c)
+    深 = ((c / 高 - 1 <= 跌深 / 100) & (c < ma)).to_numpy()
+    基本 = {"季線": float(ma.iloc[-1]), "收盤": float(c.iloc[-1]), "乖離%": round((c.iloc[-1] / ma.iloc[-1] - 1) * 100, 1),
+            "距一年高點%": round((c.iloc[-1] / 高.iloc[-1] - 1) * 100, 1), "日期": c.index[-1]}
+    等 = {**基本, "狀態": "等站上季線", "燈": "🔴",
+          "說明": f"加權在季線（{ma.iloc[-1]:,.0f}）之下 {abs(基本['乖離%']):.1f}%，還沒彈回季線；別在還沒彈的時候急著加碼。"}
+    # 最近一次「跌深之後第一次站上季線」：跟 季線站上事件 同一套規則（跌深＋在季線下才「上膛」，站上一次就用掉）
+    上們, 待 = [], False
+    for j in range(61, n):
+        if 深[j]:
+            待 = True
+        elif 待 and c.iloc[j] > ma.iloc[j] and c.iloc[j - 1] <= ma.iloc[j - 1]:
+            上們.append(j)
+            待 = False
+    上們 = [j for j in 上們 if j >= n - 250]
+    if not 上們:
+        return 等 if 深[-1] else {**基本, "狀態": "正常", "燈": "⚪",
+                                  "說明": f"過去一年沒有跌離高點 {abs(跌深):.0f}% 以上又跌破季線，不在保衛戰。"}
+    j = 上們[-1]
+    第 = n - 1 - j
+    基本.update({"站上日": c.index[j], "第幾天": 第})
+    破們 = [k for k in range(j + 1, min(j + 1 + 觀察, n)) if c.iloc[k] < ma.iloc[k]]
+    if 破們:
+        k = 破們[0]
+        if c.iloc[-1] > ma.iloc[-1]:
+            return {**基本, "狀態": "重新站上季線", "燈": "🟡",
+                    "說明": f"{c.index[j]:%m/%d} 站上後 {c.index[k]:%m/%d} 跌回，現在又回到季線上，再觀察能不能守住。"}
+        if n - 1 - k > 20:
+            if 深[-1]:
+                return {**等, "說明": 等["說明"] + f"（上一次 {c.index[j]:%m/%d} 站上、{c.index[k]:%m/%d} 又跌破）"}
+            return {**基本, "狀態": "正常", "燈": "⚪", "說明": f"在季線下，但離一年高點不到 {abs(跌深):.0f}%，不在保衛戰。"}
+        return {**基本, "狀態": "又跌破", "燈": "🟠",
+                "說明": f"{c.index[j]:%m/%d} 站上季線，{c.index[k]:%m/%d} 又跌回去：風險偏高、先別加碼，"
+                        "但美股 30 年回測顯示這不等於大頭部。"}
+    if 第 < 觀察:
+        return {**基本, "狀態": f"站上第 {第} 天", "燈": "🟡",
+                "說明": f"{c.index[j]:%m/%d} 站上季線，觀察到第 {觀察} 天都沒跌回去才算站穩（還差 {觀察 - 第} 天）。"}
+    if 深[-1]:   # 站穩之後又跌深到季線下：新的一輪
+        return 等
+    if c.iloc[-1] < ma.iloc[-1]:
+        return {**基本, "狀態": "正常", "燈": "⚪", "說明": f"{c.index[j]:%m/%d} 那次站穩後，現在回到季線下但離高點不到 {abs(跌深):.0f}%。"}
+    return {**基本, "狀態": "站穩", "燈": "🟢",
+            "說明": f"{c.index[j]:%m/%d} 站上季線後 {觀察} 天都守住，主委說的「站穩再加碼」條件成立。"}
+
+
+def 季線乖離位置(K, 門檻=-10.0, 天數=(5, 20, 60)):
+    """目前季線乖離在資料期間排第幾（越低越超跌），以及過去乖離 ≤ 門檻% 每一段（間隔 40 天以上算新的一段）
+    第一次碰到門檻那天之後 N 日的加權表現。回傳 dict：乖離%、百分位、段落表。"""
+    if K is None or len(K) < 80:
+        return None
+    c = K.set_index("date").sort_index()["close"].astype(float)
+    乖 = (c / c.rolling(60).mean() - 1) * 100
+    x = 乖.dropna()
+    現 = float(x.iloc[-1])
+    列們, 上次 = [], None
+    for d in x[x <= 門檻].index:
+        if 上次 is not None and (d - 上次).days <= 40:
+            上次 = d
+            continue
+        上次 = d
+        i = c.index.get_loc(d)
+        段 = x.loc[d:d + pd.Timedelta(days=40)]
+        列 = {"開始日": d, "當天乖離%": round(float(x[d]), 1), "最低乖離%": round(float(段.min()), 1)}
+        for n in 天數:
+            列[f"{n}日%"] = round((c.iloc[i + n] / c.iloc[i] - 1) * 100, 1) if i + n < len(c) else np.nan
+        列們.append(列)
+    return {"乖離%": round(現, 1), "百分位": round(float((x < 現).mean() * 100), 1), "起": x.index[0],
+            "段落": pd.DataFrame(列們)}
+
+
+def 讀取VIX長線():
+    """data/vix_long.csv（date, close）：VIX 從 1990 年起的每日收盤。沒有這個檔時退回 us_daily.csv 的近兩年。"""
+    f = 資料夾 / "vix_long.csv"
+    if f.exists():
+        t = pd.read_csv(f, parse_dates=["date"])
+        s = t.set_index("date")["close"].sort_index()
+    else:
+        s = pd.Series(dtype=float)
+    美 = 讀取美股()
+    if 美 is not None and "VIX" in 美:
+        近 = 美["VIX"].dropna()
+        s = pd.concat([s, 近[近.index > (s.index.max() if len(s) else pd.Timestamp("1900-01-01"))]]).sort_index()
+    return s if len(s) else None
+
+
+VIX條件 = [  # 名稱, 函式(vix) → 布林序列
+    ("VIX 單日跳升 ≥ 50%", lambda v: v / v.shift(1) - 1 >= 0.5),
+    ("VIX 單日跳升 ≥ 30%", lambda v: v / v.shift(1) - 1 >= 0.3),
+    ("VIX 首次站上 30", lambda v: (v >= 30) & (v.shift(1) < 30)),
+    ("VIX 首次站上 40", lambda v: (v >= 40) & (v.shift(1) < 40)),
+]
+
+
+def VIX跳升統計(vix, 指數, 天數=(5, 20, 60, 250), 間隔=20, 隔天=False):
+    """VIX 條件出現之後 指數（S&P 500 或加權）N 日的平均報酬與上漲機率；同一個條件 間隔 個交易日內只算第一次。
+    S&P 500 用當天收盤進場；加權傳 隔天=True，用「美國那天之後的第一個台股交易日」收盤進場（美股收盤時台股已收盤）。
+    回傳 (表, 事件日 dict)。"""
+    if vix is None or 指數 is None or not len(vix) or not len(指數):
+        return pd.DataFrame(), {}
+    v = vix.dropna().astype(float)
+    p = 指數.dropna().astype(float).sort_index()
+    v = v[v.index >= p.index[0] - pd.Timedelta(days=5)]
+    fw = {n: p.shift(-n) / p - 1 for n in 天數}
+    列們 = [{"條件": "任意一天（基準）", "次數": len(p),
+            **{k: v2 for n in 天數 for k, v2 in ((f"{n}日平均%", round(fw[n].mean() * 100, 1)),
+                                                  (f"{n}日上漲%", round((fw[n].dropna() > 0).mean() * 100)))}}]
+    事件們 = {}
+    for 名, 規則 in VIX條件:
+        日們 = v.index[規則(v).fillna(False).to_numpy()]
+        進場 = []
+        for d in 日們:
+            後 = p.index[p.index > d] if 隔天 else p.index[p.index >= d]
+            if len(後) == 0:
+                continue
+            e = 後[0]
+            if 進場 and p.index.get_loc(e) - p.index.get_loc(進場[-1]) <= 間隔:
+                continue
+            進場.append(e)
+        事件們[名] = 日們
+        idx = pd.DatetimeIndex(進場)
+        列 = {"條件": 名, "次數": len(idx)}
+        for n in 天數:
+            x = fw[n].reindex(idx).dropna()
+            列[f"{n}日平均%"] = round(x.mean() * 100, 1) if len(x) else np.nan
+            列[f"{n}日上漲%"] = round((x > 0).mean() * 100) if len(x) else np.nan
+        列們.append(列)
+    return pd.DataFrame(列們), 事件們
+
+
+def VIX今日觸發(vix, 最近天數=3):
+    """最近 最近天數 個美股交易日有沒有符合任何 VIX 條件；回傳 [(日期, 條件, VIX, 單日變化%)]。"""
+    if vix is None or len(vix) < 3:
+        return []
+    v = vix.dropna().astype(float)
+    結果 = []
+    for 名, 規則 in VIX條件:
+        m = 規則(v).fillna(False)
+        for d in m.index[-最近天數:][m.iloc[-最近天數:].to_numpy()]:
+            結果.append((d, 名, float(v[d]), round((v[d] / v.shift(1)[d] - 1) * 100, 1)))
+    return 結果
+
+
+def 加融資佔股本(今日):
+    """今日表加「融資佔股本%」（融資餘額張數 × 1000 ÷ 發行股數）與「融資佔股本排名%」（全市場第幾 %，100＝最高）。"""
+    t = 今日
+    if "融資餘額" not in t.columns or "發行股數" not in t.columns:
+        return t
+    t = t.copy()
+    股 = pd.to_numeric(t["發行股數"], errors="coerce")
+    t["融資佔股本%"] = (pd.to_numeric(t["融資餘額"], errors="coerce") * 1000 / 股.where(股 > 0) * 100).round(2)
+    t["融資佔股本排名%"] = (t["融資佔股本%"].rank(pct=True) * 100).round(0)
+    return t
+
+
+def 個股beta(指標, K, 天數=120):
+    """近 天數 個交易日每檔股票對加權的 beta。指標要有 date、代號、日報酬。回傳 Series（代號 → beta）。"""
+    if K is None or 指標 is None or "日報酬" not in 指標.columns:
+        return pd.Series(dtype=float)
+    日們 = np.sort(指標["date"].unique())[-天數:]
+    r = 指標[指標["date"].isin(日們)].pivot_table(index="date", columns="代號", values="日報酬")
+    m = K.set_index("date")["close"].astype(float).pct_change().reindex(r.index)
+    ok = m.notna()
+    r, m = r[ok], m[ok]
+    if len(m) < 40:
+        return pd.Series(dtype=float)
+    rm = r.sub(r.mean())
+    mm = m - m.mean()
+    cov = rm.mul(mm, axis=0).sum() / (r.notna().mul(1).sum() - 1)
+    beta = cov / mm.var()
+    return beta.where(r.notna().sum() >= 40).round(2)
+
+
+def 籌碼不安定榜(今日, 指標=None, K=None, 檔數=50, 最少成交值億=0.5, 最少融資張=500):
+    """融資佔股本最高的股票（股癌 EP712：融資高的標的籌碼不安定，殺盤時是重災區）。附 beta 與近 5 日漲跌，
+    因為 2026-11 回測：融資高的股票 9 次急跌都跌更深，但同 beta 比只多跌 1～4 個百分點，主要是高波動股的另一面。"""
+    t = 加融資佔股本(今日) if "融資佔股本%" not in 今日.columns else 今日
+    if "融資佔股本%" not in t.columns:
+        return pd.DataFrame()
+    t = t[t["代號"].astype(str).str.fullmatch(r"\d{4}") & (t["融資餘額"] >= 最少融資張)]
+    if "成交值億" in t.columns:
+        t = t[t["成交值億"] >= 最少成交值億]
+    t = t.sort_values("融資佔股本%", ascending=False).head(檔數).copy()
+    if 指標 is not None and K is not None and len(t):
+        b = 個股beta(指標[指標["代號"].isin(t["代號"])], K)
+        t["beta"] = t["代號"].map(b)
+    return t.reset_index(drop=True)
+
+
+def 讀取Permit追蹤():
+    """data/permit_watch.csv（日期, 地區, 事件, 燈, 來源）：美國資料中心許可（建照、環保、電網併接）被卡住的紀錄。
+    燈：🔴 卡住擴大、🟡 部分暫停或審查中、🟢 恢復發放。最新一列的燈就是目前燈號，可以在 GitHub 直接加列。"""
+    f = 資料夾 / "permit_watch.csv"
+    if not f.exists():
+        return pd.DataFrame(columns=["日期", "地區", "事件", "燈", "來源"])
+    t = pd.read_csv(f, dtype=str).fillna("")
+    t["日期"] = pd.to_datetime(t["日期"], errors="coerce")
+    return t.iloc[::-1].sort_values("日期", ascending=False, kind="stable").reset_index(drop=True)  # 同一天：檔案後面的排前面
+
+
+Permit關鍵字 = '"data center" (permit OR moratorium OR pause OR "interconnection" OR ERCOT)'
+
+
+def Permit新聞(天數=14, 筆數=20):
+    """Google 新聞（英文）搜尋資料中心許可、暫停、併網審查的新聞。"""
+    import requests
+    import xml.etree.ElementTree as ET
+
+    回應 = requests.get("https://news.google.com/rss/search", timeout=20, headers={"User-Agent": "Mozilla/5.0"},
+                        params={"q": f"{Permit關鍵字} when:{天數}d", "hl": "en-US", "gl": "US", "ceid": "US:en"})
+    回應.raise_for_status()
+    列們 = []
+    for 項 in ET.fromstring(回應.content).iter("item"):
+        標題, 來源 = 項.findtext("title") or "", 項.findtext("source") or ""
+        if 來源 and 標題.endswith(" - " + 來源):
+            標題 = 標題[: -len(來源) - 3]
+        列們.append({"日期": pd.to_datetime(項.findtext("pubDate"), errors="coerce", utc=True), "標題": 標題,
+                   "來源": 來源, "連結": 項.findtext("link") or ""})
+    表 = pd.DataFrame(列們, columns=["日期", "標題", "來源", "連結"])
+    if 表.empty:
+        return 表
+    表["日期"] = 表["日期"].dt.tz_convert("Asia/Taipei").dt.tz_localize(None)
+    緊 = 表["標題"].str.contains(r"(?i)moratorium|pause|halt|block|ban|reject|deny|freeze", regex=True)
+    表["訊號"] = np.where(緊, "⚠️ 限制", "")
+    return 表.drop_duplicates("標題").sort_values("日期", ascending=False).head(筆數).reset_index(drop=True)
+
+
+長鞭族群 = [  # 名稱, 位置, 來源（概念 or 產業）, 值
+    ("被動元件", "小料件", "概念", "被動元件"),
+    ("電子零組件", "小料件", "產業", "電子零組件"),
+    ("電腦及週邊（組裝）", "中游", "產業", "電腦及週邊設備"),
+    ("半導體", "上游", "產業", "半導體"),
+    ("晶圓代工", "上游", "概念", "晶圓代工"),
+]
+
+
+def 砍單長鞭(營收=None, 月數=3):
+    """股癌 EP712：砍單通常先從違約代價低的小料件開始，再像甩長鞭往上傳。
+    各族群「近 月數 個月營收合計年增 < 0」的公司比例（%），月 × 族群。回傳 (表, 燈 dict)。
+    2022～2023 那次：被動元件 2023-02 衰退比例到 100%，晶圓代工晚約 2 個月（2023-04）才到 100%。"""
+    if 營收 is None:
+        f = 資料夾 / "fundamental" / "revenue_history.csv"
+        if not f.exists():
+            return pd.DataFrame(), None
+        營收 = pd.read_csv(f, dtype={"code": str})
+    p = 營收.pivot_table(index="month", columns="code", values="revenue").sort_index()
+    s = p.rolling(月數).sum()
+    yoy = s / s.shift(12) - 1
+    概 = 讀取概念()
+    產 = _股本表()["產業"]
+    欄們 = {}
+    for 名, _, 來源, 值 in 長鞭族群:
+        碼 = 概.loc[概["concept"] == 值, "code"].tolist() if 來源 == "概念" else 產[產 == 值].index.tolist()
+        碼 = [c for c in 碼 if c in yoy.columns]
+        if not 碼:
+            continue
+        y = yoy[碼]
+        欄們[名] = ((y < 0).sum(axis=1) / y.notna().sum(axis=1).replace(0, np.nan) * 100).round(0)
+    表 = pd.DataFrame(欄們).dropna(how="all")
+    if 表.empty:
+        return 表, None
+    表.index = pd.to_datetime(表.index)
+    最新 = 表.iloc[-1]
+    三月前 = 表.iloc[-4] if len(表) >= 4 else 表.iloc[0]
+    小 = [n for n, 位, *_ in 長鞭族群 if 位 == "小料件" and n in 表]
+    上 = [n for n, 位, *_ in 長鞭族群 if 位 == "上游" and n in 表]
+    小現 = float(最新[小].mean()) if 小 else np.nan
+    小升 = float((最新[小] - 三月前[小]).mean()) if 小 else np.nan
+    上現 = float(最新[上].mean()) if 上 else np.nan
+    if 小現 >= 50 and 上現 >= 50:
+        燈, 話 = "🔴", "小料件和上游都有一半以上公司營收年衰退，修正已經往上傳"
+    elif 小現 >= 50 or (小升 >= 15 and 小現 >= 35):
+        燈, 話 = "🟡", "小料件營收衰退比例升高，先觀察會不會往上游傳"
+    else:
+        燈, 話 = "🟢", "小料件營收大多還在成長，沒看到砍單從小東西開始"
+    return 表, {"燈": 燈, "說明": 話, "月份": 表.index[-1], "小料件%": round(小現), "小料件3月變化": round(小升),
+               "上游%": round(上現) if 上現 == 上現 else np.nan}
+
+
+def 讀取說法查核():
+    """data/claims.csv（來源, 日期, 編號, 說法, 查到的事實, 判定）：網紅、Podcast、講義說法的查核紀錄。"""
+    f = 資料夾 / "claims.csv"
+    if not f.exists():
+        return pd.DataFrame(columns=["來源", "日期", "編號", "說法", "查到的事實", "判定"])
+    return pd.read_csv(f, dtype=str).fillna("")
+
+
+# ========== 正2 融資斷頭論述（2026-11-08）：槓桿 ETF 融資追蹤、正2 融資維持率估算、期貨多空對手方、背離回測 ==========
+台股正2 = {"00631L": "元大台灣50正2", "00685L": "群益臺灣加權正2", "00663L": "國泰臺灣加權正2", "00675L": "富邦臺灣加權正2"}
+
+
+def 正2融資明細(表):
+    """台股 4 檔正2 每天的融資：表要有 code、date、close、margin（讀取資料庫(代號=台股正2) 即可）。
+    回傳 (每日, 每檔最新)：
+    每日（index＝date）：融資市值億、估借款億、單日增減億（張數變化 × 收盤）、估維持率；
+    每檔最新（list of dict）：代號、名稱、日期、融資張數、單日增減張、連增天數、收盤、融資市值億、估成本、估維持率、到130%大盤再跌%。
+    估成本：融資增加的張數以當天收盤計入加權平均成本（同 融資成本估算），面額分割（00631L 2026-03-31、00685L 2026-07-07）
+    從收盤跳動自動換算。融資成數 60%。維持率 ＝ 收盤 ÷（成本 × 60%）。"""
+    if 表 is None or not len(表) or "margin" not in 表:
+        return pd.DataFrame(), []
+    t = 表[表["code"].isin(list(台股正2))][["code", "date", "close", "margin"]].copy()
+    t = t.dropna(subset=["close"]).sort_values(["code", "date"], ignore_index=True)
+    if t.empty:
+        return pd.DataFrame(), []
+    t["close"] = t["close"].astype("float64")
+    t["margin"] = t["margin"].astype("float64")
+    比 = t["close"] / t.groupby("code")["close"].shift()
+    報 = (比 - 1).where((比 > 0.6) & (比 < 1.4), 0.0).fillna(0.0)   # 跳太多＝分割，報酬設 0 讓成本跟著換算
+    t["成本"] = 融資成本估算(t["code"].to_numpy(), t["close"].to_numpy(), 報.to_numpy(), t["margin"].to_numpy())
+    前 = t.groupby("code")["margin"].shift()
+    分割 = (比 <= 0.6) | (比 >= 1.4)
+    t["增減張"] = (t["margin"] - 前).where(~分割)
+    t["市值"] = t["margin"] * 1000 * t["close"] / 1e8
+    t["借款"] = t["margin"] * 1000 * t["成本"] * 0.6 / 1e8
+    t["增減億"] = t["增減張"] * 1000 * t["close"] / 1e8
+    群 = t.groupby("date")
+    每日 = pd.DataFrame({"融資市值億": 群["市值"].sum(min_count=1), "估借款億": 群["借款"].sum(min_count=1),
+                         "單日增減億": 群["增減億"].sum(min_count=1)})
+    每日["估維持率"] = (每日["融資市值億"] / 每日["估借款億"] * 100).round(1)
+    每檔 = []
+    for c, g in t.groupby("code"):
+        g = g.dropna(subset=["margin"])
+        if g.empty:
+            continue
+        x = g.iloc[-1]
+        連 = 0
+        for v in g["增減張"].iloc[1:][::-1]:
+            if pd.isna(v):          # 分割那天不算增減，也不打斷連增
+                continue
+            if v > 0:
+                連 += 1
+            else:
+                break
+        維 = x["close"] / (x["成本"] * 0.6) * 100 if x["成本"] > 0 else np.nan
+        每檔.append({"代號": c, "名稱": 台股正2[c], "日期": x["date"], "融資張數": int(x["margin"]),
+                     "單日增減張": None if pd.isna(x["增減張"]) else int(x["增減張"]), "連增天數": 連,
+                     "收盤": float(x["close"]), "融資市值億": round(float(x["市值"]), 1),
+                     "估成本": round(float(x["成本"]), 2), "估維持率": round(float(維), 1),
+                     "到130%大盤再跌%": round(float(min(0.0, 130 / 維 - 1) * 50), 1) if 維 == 維 else np.nan})
+    return 每日.round(2), sorted(每檔, key=lambda r: -r["融資市值億"])
+
+
+def 期貨多空對手(期):
+    """外資台指期淨空單 ÷ 投信淨多單。投信多單主要是正2 ETF 的期貨部位，外資空單有一大塊是它的對手方或現貨避險；
+    比值在平常水準時，外資空單創新高多半只是正2 規模變大。期：讀取期貨未平倉()。
+    回傳 dict(序列, 最新, 中位, 低, 高, 燈, 說明) 或 None。"""
+    if 期 is None or "foreign_oi" not in 期 or "trust_oi" not in 期:
+        return None
+    d = 期[["foreign_oi", "trust_oi"]].dropna()
+    d = d[d["trust_oi"] > 1000]
+    if len(d) < 20:
+        return None
+    s = (-d["foreign_oi"] / d["trust_oi"]).round(2)
+    中, 低, 高 = float(s.median()), float(s.quantile(0.1)), float(s.quantile(0.9))
+    v = float(s.iloc[-1])
+    if v > 高:
+        燈, 話 = "🟡", "外資空單明顯多於投信多單，超出正2 對手方的部分偏多，外資比平常更偏空"
+    elif v < 低:
+        燈, 話 = "🟢", "外資空單少於平常比例，偏空力道比數字看起來小"
+    else:
+        燈, 話 = "⚪", "比例在平常範圍：外資空單變大主要是跟著正2 期貨多單一起變大，不能單看口數說外資大舉作空"
+    return {"序列": s, "最新": v, "中位": round(中, 2), "低": round(低, 2), "高": round(高, 2), "燈": 燈, "說明": 話,
+            "外資": int(d["foreign_oi"].iloc[-1]), "投信": int(d["trust_oi"].iloc[-1]), "日期": d.index[-1]}
+
+
+def 正2背離統計(變, 正2每日, K, 大盤門檻=-1.5, 正2門檻=3.0, 間隔天數=14, 天數=(5, 20, 60)):
+    """「大盤融資單日減 ≥ 1.5%，正2 融資同日增 ≥ 3%」（散戶在大盤洗融資時用融資接正2）之後加權的漲跌，
+    對照任何一天買進。變：大盤融資變化()（%）；正2每日：正2融資明細() 的每日（要有 單日增減億、融資市值億）。
+    2026-11 實測（2021-11～2026-11）：18 次，20 日 +2.8%、60 日 +9.8%，都不比一般日子差，不是崩盤前兆。"""
+    if 正2每日 is None or not len(正2每日) or K is None:
+        return None
+    前市值 = 正2每日["融資市值億"].shift()
+    正2變 = (正2每日["單日增減億"] / 前市值.where(前市值 > 0) * 100)
+    d = pd.DataFrame({"大盤": 變, "正2": 正2變}).dropna()
+    條件 = d[(d["大盤"] <= 大盤門檻) & (d["正2"] >= 正2門檻)]
+    c = K.set_index("date")["close"].astype(float)
+    事件, 上次 = [], None
+    for 日, r in 條件.iterrows():
+        if 日 not in c.index:
+            continue
+        if 上次 is None or (日 - 上次).days > 間隔天數:
+            事件.append((日, r))
+            上次 = 日
+    統計 = []
+    for n in 天數:
+        後 = (c.shift(-n) / c - 1) * 100
+        x = 後.reindex([e[0] for e in 事件]).dropna()
+        基 = 後.loc[c.index >= d.index.min()].dropna()
+        統計.append({"天數": n, "次數": int(len(x)), "平均%": round(float(x.mean()), 2) if len(x) else None,
+                     "上漲機率%": round(float((x > 0).mean() * 100)) if len(x) else None,
+                     "基準平均%": round(float(基.mean()), 2), "基準上漲機率%": round(float((基 > 0).mean() * 100))})
+    列 = []
+    for 日, r in 事件:
+        項 = {"date": f"{日:%Y-%m-%d}", "大盤融資%": round(float(r["大盤"]), 2), "正2融資%": round(float(r["正2"]), 2)}
+        for n in 天數:
+            i = c.index.get_loc(日)
+            項[f"{n}日後%"] = round(float((c.iloc[i + n] / c.iloc[i] - 1) * 100), 1) if i + n < len(c) else None
+        列.append(項)
+    return {"大盤門檻": 大盤門檻, "正2門檻": 正2門檻, "次數": len(事件), "統計": 統計, "事件": 列}
+
+
+def 今日正2背離(大盤變化, 正2每日, 大盤門檻=-1.5, 正2門檻=3.0):
+    """最新一天是不是「大盤洗融資、正2 融資逆勢增」。回傳 (是否, 大盤%, 正2%) 或 None。"""
+    if 正2每日 is None or len(正2每日) < 2 or 大盤變化 is None or not len(大盤變化):
+        return None
+    日 = 正2每日.index[-1]
+    if 日 not in 大盤變化.index:
+        return None
+    前 = 正2每日["融資市值億"].iloc[-2]
+    正 = float(正2每日["單日增減億"].iloc[-1] / 前 * 100) if 前 > 0 and pd.notna(正2每日["單日增減億"].iloc[-1]) else np.nan
+    大 = float(大盤變化.loc[日])
+    return (大 <= 大盤門檻 and 正 >= 正2門檻), round(大, 2), round(正, 2)
+
+
+# ========== 市場評論查核（2026-11-09）：預估本益比情境、季節（做帳）統計、年線測試、反彈尺達成率、關注清單、領頭連動、AI 資本支出警示 ==========
+def 大盤預估本益比(今日, 龍頭="2330", 下修們=(0.9, 0.8)):
+    """上市（不含 ETF）用共識預估 EPS（A、B 中位數）算的大盤預估本益比＝Σ市值 ÷ Σ(預估EPS × 股數)，只算預估 EPS > 0 的。
+    回傳 dict：今年／明年 各有 本益比、不含龍頭、龍頭本益比、涵蓋%，以及 龍頭權重%、情境（龍頭或全部 EPS 下修）。"""
+    if 今日 is None or not len(今日) or "預估EPS明年" not in 今日.columns:
+        return None
+    t = 今日[(今日.get("市場", "上市") == "上市") & ~今日["代號"].str.startswith("00") & (今日["收盤"] > 0)
+            & (今日["發行股數"] > 0)].copy()
+    if t.empty:
+        return None
+    t["市值"] = t["收盤"] * t["發行股數"]
+    總市值 = t["市值"].sum()
+    結果 = {"龍頭": 龍頭, "龍頭權重%": round(float(t.loc[t["代號"] == 龍頭, "市值"].sum() / 總市值 * 100), 1)}
+    for 欄, 名 in (("預估EPS今年", "今年"), ("預估EPS明年", "明年")):
+        e = pd.to_numeric(t[欄], errors="coerce")
+        有 = e > 0
+        if 有.sum() < 100:
+            continue
+        獲 = (e * t["發行股數"]).where(有)
+        市 = t["市值"].where(有)
+        非 = t["代號"] != 龍頭
+        項 = {"本益比": float(市.sum() / 獲.sum()), "不含龍頭": float(市[非].sum() / 獲[非].sum()),
+             "涵蓋%": round(float(市.sum() / 總市值 * 100), 1)}
+        頭獲 = float(獲[~非].sum())
+        項["龍頭本益比"] = float(市[~非].sum() / 頭獲) if 頭獲 > 0 else np.nan
+        項["情境"] = []
+        for k in 下修們:
+            項["情境"].append({"情境": f"{t.loc[~非, '名稱'].iloc[0] if (~非).any() else 龍頭} EPS 下修 {round((1 - k) * 100)}%",
+                             "大盤預估本益比": round(float(市.sum() / (獲[非].sum() + 頭獲 * k)), 2)})
+        for k in 下修們:
+            項["情境"].append({"情境": f"全部 EPS 下修 {round((1 - k) * 100)}%", "大盤預估本益比": round(項["本益比"] / k, 2)})
+        結果[名] = 項
+    return 結果 if ("今年" in 結果 or "明年" in 結果) else None
+
+
+def 點位本益比換算(目前點位, 目前本益比, 目標點位=None, 目標本益比=None):
+    """指數跟本益比同比例：給目標點位回傳對應本益比，給目標本益比回傳對應點位（假設 EPS 不變）。"""
+    if not 目前點位 or not 目前本益比:
+        return None
+    if 目標點位:
+        return 目前本益比 * 目標點位 / 目前點位
+    if 目標本益比:
+        return 目前點位 * 目標本益比 / 目前本益比
+    return None
+
+
+def 季節統計(K, 起=(11, 30), 迄=(2, 5), 今天=None):
+    """每年 起（月, 日）收盤 → 隔年 迄 收盤的漲跌、12 月漲跌、期間最大回檔；跟「任意同樣長度期間」比。
+    回傳 (表, 基準 dict, 今年 dict 或 None)。K：date, close（指數日 K）。"""
+    if K is None or len(K) < 250:
+        return pd.DataFrame(), {}, None
+    c = K.set_index("date")["close"].sort_index()
+    最後 = c.index.max()
+    列們, 長度們 = [], []
+    for y in range(c.index.min().year, 最後.year + 1):
+        開 = pd.Timestamp(y, *起)
+        收 = pd.Timestamp(y + 1, *迄)
+        a = c[:開]
+        if len(a) == 0 or a.index[-1] < 開 - pd.Timedelta(days=10) or 開 > 最後:
+            continue
+        a0 = float(a.iloc[-1])
+        十二 = c[:pd.Timestamp(y, 12, 31)]
+        段 = c[開 + pd.Timedelta(days=1):收]
+        完整 = 最後 >= 收
+        列 = {"年度": f"{y}～{str(y + 1)[2:]}", "起點": round(a0, 2),
+             "區間%": round(float((段.iloc[-1] / a0 - 1) * 100), 1) if len(段) else np.nan,
+             "12月%": round(float((十二.iloc[-1] / a0 - 1) * 100), 1) if 最後 >= pd.Timestamp(y, 12, 31) else np.nan,
+             "最大回檔%": round(float(((段 / 段.cummax()).min() - 1) * 100), 1) if len(段) else np.nan,
+             "完整": 完整}
+        if 完整:
+            長度們.append(len(段))
+        列們.append(列)
+    表 = pd.DataFrame(列們)
+    基準 = {}
+    if 長度們:
+        n = int(np.median(長度們))
+        r = (c.pct_change(n).dropna() * 100)
+        完 = 表[表["完整"]]
+        基準 = {"天數": n, "平均%": round(float(r.mean()), 1), "上漲%": round(float((r > 0).mean() * 100)),
+              "區間平均%": round(float(完["區間%"].mean()), 1), "區間上漲次數": int((完["區間%"] > 0).sum()), "區間次數": int(len(完))}
+    今年 = None
+    if len(表) and not bool(表["完整"].iloc[-1]):
+        今年 = 表.iloc[-1].to_dict()
+    else:
+        y = 最後.year
+        開 = pd.Timestamp(y, *起)
+        if 最後 < 開:
+            今年 = {"年度": f"{y}～{str(y + 1)[2:]}", "還沒開始": True, "距開始天數": int((開 - 最後).days)}
+    return 表, 基準, 今年
+
+
+def 年線事件(K, 前置天數=60, 容忍=0.01, 年線天數=240):
+    """指數（或個股）前 前置天數 天收盤都在年線上，第一次盤中碰到年線（容忍 1% 內）的日子，之後 5／20／60／120 日漲跌。
+    回傳 (目前 dict, 事件表)。"""
+    if K is None or len(K) < 年線天數 + 前置天數:
+        return None, pd.DataFrame()
+    d = K.set_index("date").sort_index()
+    c, lo = d["close"], d["low"]
+    ma = c.rolling(年線天數).mean()
+    上 = (c > ma).astype(float).where(ma.notna())
+    前 = 上.rolling(前置天數).min().shift(1) == 1
+    碰 = (lo <= ma * (1 + 容忍)) & 前
+    碰 = 碰 & ~碰.shift(1, fill_value=False).rolling(20, min_periods=1).max().astype(bool)
+    列們 = []
+    for 日 in c.index[碰]:
+        i = c.index.get_loc(日)
+        列 = {"日期": 日, "收盤": round(float(c.iloc[i]), 2), "年線": round(float(ma.iloc[i]), 2),
+             "當天收破": bool(c.iloc[i] < ma.iloc[i])}
+        for n in (5, 20, 60, 120):
+            列[f"{n}日後%"] = round(float((c.iloc[i + n] / c.iloc[i] - 1) * 100), 1) if i + n < len(c) else np.nan
+        段 = lo.iloc[i:i + 60]
+        列["60日內最低距年線%"] = round(float((段.min() / ma.iloc[i] - 1) * 100), 1)
+        列們.append(列)
+    目前 = {"年線": float(ma.iloc[-1]), "收盤": float(c.iloc[-1]), "距年線%": float((c.iloc[-1] / ma.iloc[-1] - 1) * 100),
+          "低點距年線%": float((lo.iloc[-1] / ma.iloc[-1] - 1) * 100),
+          "年線方向": "上彎" if ma.iloc[-1] > ma.iloc[-21] else "下彎", "在年線上天數": int((上[::-1].cumprod()).sum())}
+    return 目前, pd.DataFrame(列們)
+
+
+def 反彈尺(K, 大段天數=120, 最近低點天數=30, 最小跌幅=0.10):
+    """下跌後的反彈目標：低點＝最近 60 日最低（要在最近 最近低點天數 天內），
+    大段高點＝低點前 大段天數 天內最高；小段高點＝低點前最後一個 2% 轉折高點（跟大段不同才列）。
+    回傳 dict（低、大段、小段：各有 高、0.382／0.5／0.618 價位、目前反彈%）或 None（不是跌深後的反彈）。"""
+    import macro
+    if K is None or len(K) < 大段天數 + 10:
+        return None
+    d = K.reset_index(drop=True)
+    近 = d.tail(60)
+    i低 = int(近["low"].idxmin())
+    低 = float(d.loc[i低, "low"])
+    if len(d) - 1 - i低 > 最近低點天數:
+        return None
+    前段 = d.iloc[max(0, i低 - 大段天數):i低]
+    i高 = int(前段["high"].idxmax())
+    高 = float(d.loc[i高, "high"])
+    if 高 < 低 * (1 + 最小跌幅):
+        return None
+    現 = float(d["close"].iloc[-1])
+
+    def 尺(h, 日):
+        幅 = h - 低
+        return {"高": h, "高日": 日, "價位": {f"{r:g}": 低 + 幅 * r for r in (0.382, 0.5, 0.618)},
+                "已反彈%": round((現 - 低) / 幅 * 100, 1)}
+    結果 = {"低": 低, "低日": d.loc[i低, "date"], "現價": 現, "大段": 尺(高, d.loc[i高, "date"])}
+    點 = [p for p in macro.轉折點(d.iloc[:i低 + 1].tail(大段天數 + 1).reset_index(drop=True), 0.02) if p[2] == "高" and p[0] < d.loc[i低, "date"]]
+    if 點 and 點[-1][1] < 高 * 0.995 and 點[-1][1] > 低 * 1.03:
+        結果["小段"] = 尺(float(點[-1][1]), 點[-1][0])
+    return 結果
+
+
+def 價位統計(表=None, 成交門檻=5e7):
+    """個股（4 碼、近 20 日均成交額 > 成交門檻）5 年資料：
+    ① 年線：前 60 天都在年線上、第一次盤中碰年線 1% 內 → 之後 20／60 日超額報酬（扣加權）vs 一般日子、20 天內收盤跌破年線 5% 的比率；
+    ② 反彈尺：60 日高點跌 ≥ 20% 的波段低點（前後 20 日最低）→ 40 日內最高反彈到 0.382／0.5／0.618／1 的比率與落點分布。"""
+    if 表 is None:
+        表 = _讀每日檔("prices")
+    t = 表[表["code"].astype(str).str.len() == 4][["code", "date", "close", "high", "low", "value"]].copy()
+    t = t[t["close"] > 0]
+    t["date"] = pd.to_datetime(t["date"])
+    C = t.pivot_table(index="date", columns="code", values="close")
+    H = t.pivot_table(index="date", columns="code", values="high").reindex_like(C)
+    L = t.pivot_table(index="date", columns="code", values="low").reindex_like(C)
+    V = t.pivot_table(index="date", columns="code", values="value").reindex_like(C)
+    del t
+    流 = V.rolling(20).mean() > 成交門檻
+    K = 讀取指數K線("TAIEX")
+    加 = K.set_index("date")["close"].reindex(C.index).ffill()
+    ma = C.rolling(240, min_periods=230).mean()
+    上 = (C > ma).astype(float).where(ma.notna())
+    前 = 上.rolling(60).min().shift(1) == 1
+    碰 = (L <= ma * 1.01) & 前 & 流
+    碰 = 碰 & ~碰.shift(1).rolling(20, min_periods=1).max().fillna(0).astype(bool)
+    年線 = {}
+    for n in (20, 60):
+        超 = (C.shift(-n) / C - 1) * 100 - ((加.shift(-n) / 加 - 1) * 100).to_numpy()[:, None]
+        絕 = (C.shift(-n) / C - 1) * 100
+        e = 超.where(碰).stack().dropna()
+        b = 超.where(流 & ma.notna()).stack().dropna()
+        年線[f"{n}日"] = {"次數": int(len(e)), "超額%": round(float(e.mean()), 2), "一般日超額%": round(float(b.mean()), 2),
+                        "上漲%": round(float((絕.where(碰).stack().dropna() > 0).mean() * 100), 1)}
+    破 = ((C / ma).rolling(20).min().shift(-19) < 0.95).where(碰).stack().dropna()
+    年線["20日內跌破5%比率"] = round(float(破.astype(float).mean() * 100), 1)
+    比們 = []
+    for c in [c for c in C.columns if 流[c].mean() > 0.3]:
+        s = C[c].dropna()
+        h, l = H[c].reindex(s.index).to_numpy(), L[c].reindex(s.index).to_numpy()
+        i = 60
+        while i < len(s) - 40:
+            hi = np.nanmax(h[i - 60:i])
+            if l[i] <= hi * 0.8 and l[i] == np.nanmin(l[i - 20:i + 21]):
+                比們.append((np.nanmax(h[i + 1:i + 41]) - l[i]) / (hi - l[i]))
+                i += 40
+            else:
+                i += 1
+    r = pd.Series(比們).dropna()
+    邊 = [0, 0.25, 0.35, 0.41, 0.47, 0.53, 0.59, 0.65, 0.8, 1, 99]
+    分 = pd.cut(r, 邊).value_counts(sort=False)
+    反彈 = {"次數": int(len(r)), "達成%": {f"{lv:g}": round(float((r >= lv).mean() * 100), 1) for lv in (0.382, 0.5, 0.618, 1.0)},
+          "分布": [{"區間": f"{a:g}～{b:g}" if b < 99 else f"{a:g} 以上", "次數": int(v)} for (a, b), v in zip(zip(邊[:-1], 邊[1:]), 分.to_numpy())]}
+    return {"計算日": f"{pd.Timestamp.now():%Y-%m-%d}", "起": f"{C.index.min():%Y-%m-%d}", "迄": f"{C.index.max():%Y-%m-%d}",
+            "年線": 年線, "反彈": 反彈}
+
+
+def 更新價位統計(強制=False, 間隔天數=25):
+    """GitHub Actions 每天呼叫；距離上次超過 間隔天數 才重算，結果存 data/level_stats.json。"""
+    import json
+    檔 = 資料夾 / "level_stats.json"
+    if 檔.exists() and not 強制:
+        舊 = json.loads(檔.read_text())
+        if (pd.Timestamp.now() - pd.Timestamp(舊.get("計算日", "2000-01-01"))).days < 間隔天數:
+            print("價位統計：還不用重算")
+            return
+    結果 = 價位統計()
+    檔.write_text(json.dumps(結果, ensure_ascii=False, indent=1))
+    print(f"價位統計：年線 {結果['年線']['20日']['次數']} 次、反彈 {結果['反彈']['次數']} 次")
+
+
+def 讀取價位統計():
+    import json
+    檔 = 資料夾 / "level_stats.json"
+    return json.loads(檔.read_text()) if 檔.exists() else None
+
+
+def 讀取關注清單():
+    """data/watchlists.csv（清單, 代號, 新, 增, 大, 角色, 加入日）：市場評論提到的股票清單（不記人名）。"""
+    f = 資料夾 / "watchlists.csv"
+    if not f.exists():
+        return pd.DataFrame(columns=["清單", "代號", "新", "增", "大", "角色", "加入日"])
+    return pd.read_csv(f, dtype=str).fillna("")
+
+
+def 關注清單表(清單, 今日, 指標):
+    """每檔：目前股價、加入日收盤、加入後%、同期加權%、超額%、距 60 日高%、預估 EPS、明年成長、明年預估本益比。
+    回傳 (明細, 各清單彙總)。指標要有 代號、date、收盤（含加入日當天）。"""
+    if 清單 is None or 清單.empty or 今日 is None:
+        return pd.DataFrame(), pd.DataFrame()
+    K = 讀取指數K線("TAIEX")
+    加 = K.set_index("date")["close"] if K is not None else pd.Series(dtype=float)
+    今 = 今日.set_index("代號")
+    收 = 指標.pivot_table(index="date", columns="代號", values="收盤") if 指標 is not None else pd.DataFrame()
+    高60 = 收.tail(60).max() if len(收) else pd.Series(dtype=float)
+    列們 = []
+    for _, r in 清單.iterrows():
+        c = r["代號"]
+        if c not in 今.index:
+            continue
+        x = 今.loc[c]
+        現 = float(x["收盤"])
+        日 = pd.Timestamp(r["加入日"]) if r.get("加入日") else None
+        基 = np.nan
+        if 日 is not None and c in 收.columns:
+            s = 收[c][:日].dropna()
+            基 = float(s.iloc[-1]) if len(s) else np.nan
+        加基 = float(加[:日].iloc[-1]) if 日 is not None and len(加[:日]) else np.nan
+        加後 = (float(加.iloc[-1]) / 加基 - 1) * 100 if pd.notna(加基) and len(加) else np.nan
+        後 = (現 / 基 - 1) * 100 if pd.notna(基) and 基 > 0 else np.nan
+        標 = "".join(k for k in ("新", "增", "大") if str(r.get(k, "")).strip() in ("1", "Y", "y", "✓", "是"))
+        列們.append({"清單": r["清單"], "代號": c, "名稱": x.get("名稱", ""), "角色": r.get("角色", ""), "標記": 標,
+                    "收盤": 現, "加入日": r.get("加入日", ""), "加入後%": round(後, 1) if pd.notna(後) else np.nan,
+                    "超額%": round(後 - 加後, 1) if pd.notna(後) and pd.notna(加後) else np.nan,
+                    "距60日高%": round((現 / float(高60[c]) - 1) * 100, 1) if c in 高60.index and pd.notna(高60[c]) else np.nan,
+                    "預估EPS今年": x.get("預估EPS今年", np.nan), "預估EPS明年": x.get("預估EPS明年", np.nan),
+                    "明年EPS成長%": x.get("明年EPS成長%", np.nan), "明年預估本益比": x.get("明年預估本益比", np.nan),
+                    "_市值": 現 * float(x.get("發行股數", np.nan) or np.nan)})
+    明 = pd.DataFrame(列們)
+    if 明.empty:
+        return 明, pd.DataFrame()
+    彙們 = []
+    for 名, g in 明.groupby("清單", sort=False):
+        e = pd.to_numeric(g["預估EPS明年"], errors="coerce")
+        有 = (e > 0) & g["_市值"].notna()
+        股數 = g["_市值"] / g["收盤"]
+        彙們.append({"清單": 名, "檔數": len(g), "加入後平均%": round(float(g["加入後%"].mean()), 1),
+                    "超額平均%": round(float(g["超額%"].mean()), 1),
+                    "明年EPS成長中位數%": round(float(pd.to_numeric(g["明年EPS成長%"], errors="coerce").median()), 1),
+                    "明年預估本益比(合計)": round(float(g["_市值"][有].sum() / (e[有] * 股數[有]).sum()), 1) if 有.any() else np.nan,
+                    "距60日高平均%": round(float(g["距60日高%"].mean()), 1)})
+    return 明.drop(columns="_市值"), pd.DataFrame(彙們)
+
+
+def 讀取領頭連動():
+    """data/leader_groups.csv（組, 領頭, 跟隨, 說明）：跟隨＝空白分隔的代號。"""
+    f = 資料夾 / "leader_groups.csv"
+    if not f.exists():
+        return pd.DataFrame(columns=["組", "領頭", "跟隨", "說明"])
+    return pd.read_csv(f, dtype=str).fillna("")
+
+
+def 領頭連動(組表, 指標, 均線=20, 跌破天數=10, 之後=20):
+    """領頭股站回月線（前 跌破天數 天都在月線下，今天收盤站上）時，同組跟隨股之後 之後 日平均漲跌 vs 跟隨股一般日子。
+    回傳 (目前狀態表, 回測表)。指標要有 代號、date、收盤（建議用還原價：有 還原價 欄就用）。"""
+    if 組表 is None or 組表.empty or 指標 is None:
+        return pd.DataFrame(), pd.DataFrame()
+    欄 = "還原價" if "還原價" in 指標.columns else "收盤"
+    收 = 指標.pivot_table(index="date", columns="代號", values=欄).sort_index()
+    狀們, 測們 = [], []
+    for _, r in 組表.iterrows():
+        頭 = r["領頭"]
+        跟 = [c for c in r["跟隨"].split() if c in 收.columns]
+        if 頭 not in 收.columns or not 跟:
+            continue
+        s = 收[頭].dropna()
+        ma = s.rolling(均線).mean()
+        下 = s < ma
+        站回 = (~下) & 下.shift(1).rolling(跌破天數).min().fillna(0).astype(bool)
+        跟後 = (收[跟].shift(-之後) / 收[跟] - 1) * 100
+        事件 = 跟後.loc[站回[站回].index].mean(axis=1).dropna()
+        基 = 跟後.stack().dropna()
+        跟20 = (收[跟].iloc[-1] / 收[跟].iloc[-21] - 1) * 100 if len(收) > 21 else pd.Series(np.nan, index=跟)
+        狀們.append({"組": r["組"], "領頭": 頭, "領頭距月線%": round(float((s.iloc[-1] / ma.iloc[-1] - 1) * 100), 1),
+                    "領頭狀態": "今天站回月線" if bool(站回.iloc[-1]) else ("月線上" if not bool(下.iloc[-1]) else "月線下"),
+                    "連續月線下天數": int(下[::-1].cumprod().sum()),
+                    "跟隨股20日平均%": round(float(跟20.mean()), 1), "跟隨": " ".join(跟), "說明": r.get("說明", "")})
+        測們.append({"組": r["組"], "站回次數": int(len(事件)), f"跟隨股之後{之後}日平均%": round(float(事件.mean()), 2) if len(事件) else np.nan,
+                    "跟隨股一般日子%": round(float(基.mean()), 2) if len(基) else np.nan,
+                    "上漲比率%": round(float((事件 > 0).mean() * 100)) if len(事件) else np.nan})
+    return pd.DataFrame(狀們), pd.DataFrame(測們)
+
+
+def 今日領頭站回(組表, 指標):
+    """LINE 用：今天剛站回月線的領頭股。回傳 list of (組, 領頭, 跟隨)。"""
+    狀, _ = 領頭連動(組表, 指標)
+    if 狀.empty:
+        return []
+    return [(r["組"], r["領頭"], r["跟隨"]) for _, r in 狀[狀["領頭狀態"] == "今天站回月線"].iterrows()]
+
+
+def 資本支出警示(表, 季減門檻=-10.0):
+    """AI 巨頭資本支出：最新一季比上一季、比去年同季。任兩家季減超過 季減門檻%，或合計年增率連兩季下滑 → 🟠／🔴。
+    回傳 (燈, 說明, 明細表)。表：macro.讀取資本支出()。"""
+    if 表 is None or 表.empty:
+        return "⚪", "沒有資本支出資料", pd.DataFrame()
+    t = 表.copy().sort_values("quarter")
+    列們 = []
+    for 代, g in t.groupby("symbol"):
+        g = g.set_index("quarter")["capex"].dropna()
+        if len(g) < 2:
+            continue
+        q = g.index[-1]
+        去 = f"{int(q[:4]) - 1}{q[4:]}"
+        列們.append({"公司": t.loc[t["symbol"] == 代, "name"].iloc[-1], "季度": q, "資本支出(億美元)": round(float(g.iloc[-1]) / 1e8, 0),
+                    "季增%": round(float((g.iloc[-1] / g.iloc[-2] - 1) * 100), 1),
+                    "年增%": round(float((g.iloc[-1] / g[去] - 1) * 100), 1) if 去 in g.index and g[去] else np.nan})
+    明 = pd.DataFrame(列們)
+    樞 = t.pivot_table(index="quarter", columns="symbol", values="capex").sort_index()
+    年增 = {}
+    for q in 樞.index:  # 只用「今年這季和去年同季都有資料」的公司加總，缺資料的公司不會讓年增率失真
+        去 = f"{int(q[:4]) - 1}{q[4:]}"
+        if 去 not in 樞.index:
+            continue
+        有 = 樞.loc[q].notna() & 樞.loc[去].notna()
+        if 有.sum() >= 3:
+            年增[q] = float((樞.loc[q, 有].sum() / 樞.loc[去, 有].sum() - 1) * 100)
+    年增 = pd.Series(年增, dtype=float)
+    季減家 = 明[明["季增%"] <= 季減門檻]["公司"].tolist() if len(明) else []
+    放緩 = len(年增) >= 3 and 年增.iloc[-1] < 年增.iloc[-2] < 年增.iloc[-3]
+    if len(季減家) >= 2 or (len(年增) and 年增.iloc[-1] < 0):
+        燈 = "🔴"
+    elif 季減家 or 放緩:
+        燈 = "🟠"
+    else:
+        燈 = "🟢"
+    話 = (f"合計年增 {年增.iloc[-1]:+.0f}%（{年增.index[-1]}）" if len(年增) else "合計年增：資料不足")
+    if 放緩:
+        話 += f"，已連兩季放緩（{年增.iloc[-3]:+.0f}% → {年增.iloc[-2]:+.0f}% → {年增.iloc[-1]:+.0f}%）"
+    if 季減家:
+        話 += f"；最新一季比上一季減少超過 {abs(季減門檻):.0f}%：{'、'.join(季減家)}"
+    if 燈 == "🟢":
+        話 += "；沒有大廠縮手的跡象"
+    return 燈, 話, 明

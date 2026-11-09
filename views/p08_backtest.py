@@ -237,6 +237,19 @@ else:
                "沒有扣手續費，也不代表未來。這段期間台股是大多頭，追強勢的規則本來就占優勢。")
 
 
+段落("CLAIMS // 說法查核紀錄：網紅、Podcast 的說法對不對")
+_查 = engine.讀取說法查核()
+if len(_查):
+    _來源們 = list(dict.fromkeys(_查["來源"][::-1]))
+    _選 = st.segmented_control("來源", _來源們, default=_來源們[0], key="查核來源") or _來源們[0]
+    _顯 = _查[_查["來源"] == _選]
+    _計 = _顯["判定"].str.extract(r"^(相符|大致相符|不成立|查不到)")[0].value_counts()
+    st.markdown(f"**{_選}**（{_顯['日期'].iloc[0]} 查核）：" + "、".join(f"{k} {v} 項" for k, v in _計.items()))
+    _圖示 = lambda x: ("✅ " if x.startswith("相符") else "🟡 " if x.startswith("大致") else "❌ " if x.startswith("不成立") else "❔ ") + x
+    表格(_顯.assign(判定=_顯["判定"].map(_圖示))[["編號", "說法", "查到的事實", "判定"]], hide_index=True, width="stretch")
+    st.caption("數字用網站資料庫與新聞核對，回測細節在各頁的 ℹ️ 說明裡。新的查核在 GitHub 的 data/claims.csv 加列（來源, 日期, 編號, 說法, 查到的事實, 判定）。")
+
+
 段落("BACKLOG // 合約負債全市場驗證：預收款能不能領先股價與營收")
 _約 = 讀檔("讀取合約負債驗證", _版本)
 if not _約 or not _約.get("結果"):

@@ -21,13 +21,33 @@ jobs:
         run: python tests/test_reload.py
       - name: 每個頁面都打開看看有沒有錯誤
         run: python tests/test_pages.py
+      - name: 網址記住頁面、時區、分頁切換
+        run: python tests/test_navigation.py
+      - name: 順勢做多引擎（均線刻度、VCP 突破、交易計畫）
+        run: python tests/test_momentum.py
+      - name: 新手白話模式、AI 數字查核、族群輪動、市場健康分數
+        run: python tests/test_beginner.py
       - name: 網站錯誤通知不重複推播
         run: python tests/test_error_notify.py
+      - name: 止跌訊號（指數 vs 融資、借券、賣壓消散、破低不破）
+        run: python tests/test_bottom_signals.py
       - name: 融資成本估算
         run: python tests/test_margin.py
       - name: 面額分割換算
         run: python tests/test_split.py
+      - name: 個股報告盤中即時價
+        run: python tests/test_realtime.py
       - name: 新聞事件工具（舊聞、事件反應、金額換算、業外）
         run: python tests/test_news_tools.py
       - name: 大跌日收復表、跌停打開回測
         run: python tests/test_crash_tools.py
+      - name: AI 報告 json 拆解與目標價檢查
+        run: python tests/test_ai_card.py
+      - name: 止跌與抄底工具
+        run: python tests/test_dip_tools.py
+      - name: 預估 EPS（三源）與預估本益比
+        run: python tests/test_forecast.py
+      - name: 主動式 ETF 績效體檢、除權息日報酬
+        run: python tests/test_etf_perf.py
+      - name: 預估本益比情境、做帳季節、年線、反彈尺、關注清單、領頭連動
+        run: python tests/test_market_views.py

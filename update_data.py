@@ -1014,7 +1014,7 @@ def 抓期貨保證金():
 
 美股代號 = {"^SOX": "費城半導體", "^IXIC": "那斯達克", "^GSPC": "S&P 500", "^DJI": "道瓊", "^VIX": "VIX",
           "TSM": "台積電 ADR", "NVDA": "輝達", "AAPL": "蘋果", "AMD": "超微", "AVGO": "博通", "MU": "美光",
-          "TSLA": "特斯拉", "^N225": "日經 225", "^KS11": "韓國綜合", "LITE": "Lumentum",
+          "TSLA": "特斯拉", "^N225": "日經 225", "^KS11": "韓國綜合", "LITE": "Lumentum", "COHR": "Coherent",
           # 全球風險燈（總經區塊）
           "DX-Y.NYB": "美元指數", "CL=F": "原油", "HYG": "高收益債 HYG", "^TNX": "美債10年殖利率",
           # 財報關注的其他龍頭（美股財報 → 台股隔日反應用）
@@ -1024,7 +1024,7 @@ def 抓期貨保證金():
 財報關注 = {"NVDA": "輝達", "AAPL": "蘋果", "MSFT": "微軟", "GOOGL": "Alphabet", "AMZN": "亞馬遜", "META": "Meta",
           "TSLA": "特斯拉", "AMD": "超微", "AVGO": "博通", "MU": "美光", "QCOM": "高通", "INTC": "英特爾",
           "AMAT": "應用材料", "LRCX": "科林研發", "KLAC": "科磊", "ASML": "艾司摩爾", "TSM": "台積電 ADR",
-          "SMCI": "美超微", "DELL": "戴爾", "HPE": "慧與", "ORCL": "甲骨文", "ARM": "安謀", "MRVL": "邁威爾",
+          "SMCI": "美超微", "DELL": "戴爾", "HPE": "慧與", "ORCL": "甲骨文", "ARM": "安謀", "MRVL": "邁威爾", "LITE": "Lumentum", "COHR": "Coherent",
           "CSCO": "思科", "ANET": "Arista", "TXN": "德州儀器", "NXPI": "恩智浦", "ON": "安森美", "WDC": "威騰"}
 
 
@@ -1060,6 +1060,28 @@ def 抓美股日線(範圍="2y"):
     表 = 表[表["date"] >= (dt.date.today() - dt.timedelta(days=800)).isoformat()]
     表.to_csv(檔, index=False)
     print(f"美股日線完成：{表['symbol'].nunique()} 檔，最新 {表['date'].max()}")
+
+
+def 抓VIX長線():
+    """VIX 從 1990 年起的每日收盤 → data/vix_long.csv（股癌 EP712：VIX 跳升之後美股、台股怎麼走）。約 150KB。"""
+    try:
+        r = requests.get("https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX"
+                         f"?period1=631152000&period2={int(time.time())}&interval=1d",  # 1990-01-01 起
+                         headers={"User-Agent": "Mozilla/5.0"}, timeout=60)
+        結果 = r.json()["chart"]["result"][0]
+        時區 = 結果["meta"].get("gmtoffset", 0)
+        新 = pd.DataFrame([{"date": dt.datetime.utcfromtimestamp(時 + 時區).strftime("%Y-%m-%d"), "close": round(收, 2)}
+                          for 時, 收 in zip(結果["timestamp"], 結果["indicators"]["quote"][0]["close"]) if 收])
+    except Exception as 錯誤:
+        print(f"VIX 長線失敗：{錯誤}")
+        return
+    檔 = 資料夾 / "vix_long.csv"
+    舊 = pd.read_csv(檔, dtype={"date": str}) if 檔.exists() else pd.DataFrame(columns=["date", "close"])
+    if len(新) < 0.9 * len(舊):  # Yahoo 偶爾只回一段，別把舊資料蓋掉
+        新 = pd.concat([舊, 新])
+    表 = 新.drop_duplicates("date", keep="last").sort_values("date")
+    表.to_csv(檔, index=False)
+    print(f"VIX 長線完成：{len(表)} 筆（{表['date'].min()}～{表['date'].max()}）")
 
 
 def 抓費半長線():
@@ -1734,7 +1756,8 @@ def 抓可轉債():
 
 def 抓公司簡介(每次=250):
     """公司主要業務（公開資訊觀測站）與營收比重（MoneyDJ）→ data/company_profile.csv。
-    一檔約 2 秒，所以每天只補 每次 檔：先補還沒有的，再更新超過 60 天的，約 10 天全部跑過一輪。"""
+    一檔約 2 秒，所以每天只補 每次 檔：先補還沒有的，再重試「主要業務是空的」（公開資訊觀測站偶爾擋掉，3 天後重試），
+    最後更新超過 60 天的。全部跑完一輪後，到 60 天後才會再有東西要更新，這段期間更新日不動是正常的。"""
     import engine
     f = 資料夾 / "company_profile.csv"
     舊 = pd.read_csv(f, dtype=str).fillna("") if f.exists() else pd.DataFrame(columns=engine.公司簡介欄)
@@ -1742,7 +1765,11 @@ def 抓公司簡介(每次=250):
     代號們 = [c for c in 股本["code"].astype(str).str.strip() if re.fullmatch(r"[1-9]\d{3}", c)]
     更新日 = dict(zip(舊["code"], 舊["更新日"]))
     期限 = (dt.datetime.now(台北時區) - dt.timedelta(days=60)).strftime("%Y-%m-%d")
-    待 = [c for c in 代號們 if c not in 更新日] + sorted((c for c in 代號們 if c in 更新日 and 更新日[c] < 期限), key=更新日.get)
+    沒業務 = set(舊.loc[舊["業務"].str.strip() == "", "code"])
+    重試限 = (dt.datetime.now(台北時區) - dt.timedelta(days=3)).strftime("%Y-%m-%d")
+    待 = ([c for c in 代號們 if c not in 更新日]
+          + sorted((c for c in 代號們 if c in 沒業務 and 更新日[c] < 重試限), key=更新日.get)
+          + sorted((c for c in 代號們 if c in 更新日 and c not in 沒業務 and 更新日[c] < 期限), key=更新日.get))
     待 = 待[:每次]
     if not 待:
         print("公司簡介：都是最新的")
@@ -1807,7 +1834,7 @@ def main():
     if not 參數.skip_latest:
         for 工作 in (抓分時, 抓興櫃, 抓基本面, 抓匯率, 抓處置注意, 抓借券, 抓法說會, 抓融資金額, 抓期貨未平倉, 抓小台散戶,
                      抓美股日線, 抓經濟行事曆, 抓美股財報, 抓指數K線, 抓選擇權, 抓新股申購, 抓外資持股, 抓當沖, 抓庫藏股, 抓可轉債, 抓公司簡介, 抓合約負債, 抓合約負債歷史,
-                     抓內部人轉讓, 抓興櫃推薦券商, 抓重大訊息, 抓美國數據, 抓美股資本支出, 抓費半長線, 抓夜盤法人, 抓台指期價差, 抓期貨保證金, 抓0050成分):  # 這些出問題不影響主資料庫
+                     抓內部人轉讓, 抓興櫃推薦券商, 抓重大訊息, 抓美國數據, 抓美股資本支出, 抓費半長線, 抓VIX長線, 抓夜盤法人, 抓台指期價差, 抓期貨保證金, 抓0050成分):  # 這些出問題不影響主資料庫
             try:
                 工作()
             except Exception as 錯誤:

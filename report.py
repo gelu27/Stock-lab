@@ -386,6 +386,7 @@ def 產生PDF(代號, 名稱, 資料):
     """資料：收盤、漲跌、漲跌幅、日期、產業、市場、卡片[(標題, 值, 小字, 數值方向)]、基本資料[(段, [(項, 值)])]、
     判讀{分數, 看法, 利多, 利空}、歷史、營收、損益、建議、報告、報告時間。回傳 PDF bytes。"""
     from fpdf import FPDF, FontFace
+    import engine
 
     class 報告PDF(FPDF):
         def header(self):
@@ -462,7 +463,8 @@ def 產生PDF(代號, 名稱, 資料):
     # ===== 第 1 頁：總覽 =====
     pdf.add_page()
     字(9, 色=青)
-    pdf.cell(0, 5, f"STOCK REPORT  //  {資料.get('日期', '')}  //  {資料.get('產業') or ''}  ·  {資料.get('市場', '')}")
+    即時 = f"（現價：{資料['即時']}）" if 資料.get("即時") else ""
+    pdf.cell(0, 5, f"STOCK REPORT  //  {資料.get('日期', '')}{即時}  //  {資料.get('產業') or ''}  ·  {資料.get('市場', '')}")
     pdf.set_xy(左, 頂 + 6)
     字(34, True)
     pdf.cell(pdf.get_string_width(代號) + 4, 16, 代號)
@@ -559,6 +561,18 @@ def 產生PDF(代號, 名稱, 資料):
             for 標, 內 in re.findall(r"#+\s*([^\n]+)\n+(.*?)(?=\n#+\s|\Z)", 公司["AI介紹"], re.S):
                 小段(標.strip() + "（AI 整理）", 內.strip())
 
+    新聞們 = 資料.get("新聞") or []
+    if 新聞們:
+        if pdf.get_y() > pdf.h - 60:
+            pdf.add_page()
+        段標("News", "近期新聞整理（近 30 天，標題情緒為關鍵字粗判）")
+        for n in 新聞們:
+            字(10, True, {"利多": 紅, "利空": 綠}.get(n.get("情緒"), 青))
+            pdf.cell(22, 6, _乾淨(f"{n.get('日期', '')} {n.get('情緒', '')}"))
+            字(10, 色="#D5D5D5")
+            pdf.multi_cell(寬 - 22, 6, _乾淨(f"{n.get('標題', '')}（{n.get('來源', '')}）"), align="L", new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(3)
+
     pdf.add_page()
     圖高 = 72
     左圖右文("Revenue", "月營收：生意做得怎麼樣", 營收圖(資料.get("營收"), 高=3.3), 營收解讀(資料.get("營收")), 圖高 + 14)
@@ -572,6 +586,12 @@ def 產生PDF(代號, 名稱, 資料):
                  ("籌碼與股價一起看", 變化["解讀"]), 105)
 
     # 目標價
+    def 價(v):
+        """低價股（100 元以下）留兩位小數，不然 16.76、16.95 都會變成 17。"""
+        if not isinstance(v, (int, float)) or pd.isna(v):
+            return "無"
+        return f"{v:,.2f}" if abs(v) < 100 else f"{v:,.0f}"
+
     if 建議.get("目標價合理") is not None:
         if pdf.get_y() + 45 > pdf.h - 14:
             pdf.add_page()
@@ -583,14 +603,64 @@ def 產生PDF(代號, 名稱, 資料):
         for i, (名, 值, 色) in enumerate(項):
             空間 = (值 / 資料["收盤"] - 1) * 100 if isinstance(值, (int, float)) and 資料.get("收盤") else np.nan
             卡片(左 + i * (w + 3), y0, w, 24, f"目標價 · {名}" if i < 3 else 名,
-                 _數(值, "{:,.0f}") if isinstance(值, (int, float)) else "—",
+                 價(值) if isinstance(值, (int, float)) else "—",
                  f"距現價 {空間:+.1f}%" if pd.notna(空間) else "", 色)
         pdf.set_y(y0 + 28)
+
+    # AI 重點：把 AI 給的 json 欄位排成兩欄表格（null 顯示「無」），不再印原始 json
+    if 建議:
+        def 文(v):
+            if v is None or (isinstance(v, float) and pd.isna(v)) or str(v).strip() in ("", "null", "None"):
+                return "無"
+            return 價(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else _乾淨(str(v))
+        倍 = 建議.get("預估本益比")
+        欄們 = [("看法", 建議.get("看法")),
+              ("短線 / 中期", f"{文(建議.get('短線'))} / {文(建議.get('中期'))}"),
+              ("一句話結論", 建議.get("一句話")),
+              ("評價方法", 建議.get("評價方法")),
+              ("今年 / 明年 EPS", f"{文(建議.get('今年EPS'))} / {文(建議.get('明年EPS'))}"),
+              ("預估本益比", f"{倍:.1f} 倍" if isinstance(倍, (int, float)) else 文(倍)),
+              ("支撐 / 壓力", f"{文(建議.get('支撐'))} / {文(建議.get('壓力'))}"),
+              ("停損參考", 建議.get("停損")),
+              ("看錯條件", 建議.get("看錯條件")),
+              ("券商目標價", 建議.get("券商目標價"))]
+        欄們 = [(k, 文(v)) for k, v in 欄們 if not (k in ("短線 / 中期",) and 建議.get("短線") is None and 建議.get("中期") is None)]
+        if pdf.get_y() + 40 > pdf.h - 14:
+            pdf.add_page()
+        if 建議.get("目標價合理") is None:
+            段標("AI Summary", "AI 重點")
         字(10.5, 色="#D5D5D5")
-        f = lambda k, 格="{:,.2f}": _數(建議.get(k), 格) if isinstance(建議.get(k), (int, float)) else "—"
-        pdf.multi_cell(寬, 6, f"預估 EPS 今年 **{f('今年EPS')}**、明年 **{f('明年EPS')}**，預估本益比 **{f('預估本益比', '{:.1f}')} 倍**；"
-                           f"支撐 **{f('支撐', '{:,.0f}')}**、壓力 **{f('壓力', '{:,.0f}')}**、停損參考 **{f('停損', '{:,.0f}')}**。",
-                       markdown=True, align="L", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_draw_color(*_rgb(線色))
+        pdf.set_fill_color(*_rgb(卡色))
+        with pdf.table(col_widths=(32, 寬 - 32), width=寬, cell_fill_color=_rgb(卡色), cell_fill_mode="ALL", align="LEFT", text_align="LEFT", line_height=6,
+                       first_row_as_headings=False) as 表:
+            for k, v in 欄們:
+                列 = 表.row()
+                列.cell(k, style=FontFace(emphasis="BOLD", color=_rgb(青)))
+                列.cell(v)
+        pdf.ln(3)
+
+        # 數字合理性檢查：只提醒，不改 AI 的數字
+        歷 = 資料.get("歷史")
+        本益比 = 三年高 = None
+        try:
+            if 歷 is not None and len(歷):
+                近 = 歷[歷["date"] >= 歷["date"].max() - pd.Timedelta(days=3 * 365)]
+                三年高 = float(近["收盤"].max())
+                本 = 歷["本益比"].dropna() if "本益比" in 歷 else []
+                本益比 = float(本.iloc[-1]) if len(本) and 本.iloc[-1] > 0 else None
+        except Exception:
+            pass
+        提醒 = engine.檢查AI目標價(建議, 資料.get("收盤"), 本益比, 三年高)
+        if 提醒:
+            if pdf.get_y() + 10 + 7 * len(提醒) > pdf.h - 14:
+                pdf.add_page()
+            字(11, True, 黃)
+            pdf.cell(0, 7, "數字檢查（網站自動比對，AI 的數字未修改）", new_x="LMARGIN", new_y="NEXT")
+            字(10.5, 色="#D5D5D5")
+            for 句 in 提醒:
+                pdf.multi_cell(寬, 6, "・" + 句, align="L", new_x="LMARGIN", new_y="NEXT")
+            pdf.ln(3)
 
     # 多空清單
     判 = 資料.get("判讀") or {}

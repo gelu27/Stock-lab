@@ -154,6 +154,7 @@ def 網紅說法總覽():
     價們 = {c: 個股價格(c) for c in 代們}
     網紅熱度區(影片們)
     網紅條件區(影片們, 價們)
+    漲跌停查核區(影片們)
     網紅價位區(影片們)
     明細, 彙 = engine.網紅對答案(影片們, {k: v for k, v in 價們.items() if v is not None}, 指數K線("TAIEX", _版本))
     段落("SCORE // 誰說得準（20 個交易日後，扣掉大盤漲跌）")
@@ -163,6 +164,13 @@ def 網紅說法總覽():
         表格(彙, width="stretch", column_config={"平均超額%": st.column_config.NumberColumn(format="%+.1f")})
         st.caption("超額報酬＝個股報酬減同期加權報酬。看多且贏大盤、看空且輸大盤算說對；不到 20 天的算「暫時」，不計入命中率。"
                    "中立的不算。樣本少的時候命中率只是參考。")
+    混 = engine.摘要混稿偵測(影片們)
+    if 混:
+        段落("DUPLICATE // 摘要可能重複或混稿")
+        表格(pd.DataFrame(混), hide_index=True, width="stretch",
+             column_config={"理由相似度": st.column_config.NumberColumn(format="percent")})
+        st.caption("前後 1 天內兩個不同頻道點名 3 檔以上相同股票、理由句子又很像（兩字一組重疊 55% 以上），"
+                   "可能是同一支影片整理兩次，或 Gemini 把兩支影片混在一起。這種在「被多個頻道點名」裡等於只算一次，要回去看原影片確認。")
     段落("FLAGS // 紅旗：哪些說法要打折")
     for v in 影片們:
         旗 = v.get("紅旗") or []
@@ -220,6 +228,24 @@ def 網紅條件區(影片們, 價們):
          column_config={"影片日": st.column_config.DateColumn(format="MM/DD")})
     st.caption(f"{len(清單)} 個條件裡有 {len(列們)} 個網站能自動判斷，只看條件的前半段（例如「站回 20 週線」）現在是不是真的。"
                "條件成立不代表後半段（就會漲）一定發生。")
+
+
+def 漲跌停查核區(影片們):
+    起 = 最新日 - pd.Timedelta(days=45)
+    日表 = 指標[指標["date"] >= 起][["date", "代號", "日報酬"]].copy()
+    日表["名稱"] = 日表["代號"].map(市場名稱).fillna("")
+    t = engine.漲跌停查核(影片們, 日表, 天數=30)
+    if t.empty:
+        return
+    段落("LIMIT // 網紅說「漲停／跌停」，真的有嗎（近 30 天影片）")
+    t = t.sort_values("影片日", ascending=False)
+    表格(t, hide_index=True, width="stretch",
+         column_config={"影片日": st.column_config.DateColumn(format="MM/DD"),
+                        "交易日": st.column_config.DateColumn(format="MM/DD"),
+                        "實際漲跌%": st.column_config.NumberColumn(format="%+.2f")})
+    錯 = int((t["結果"] == "❌ 不符").sum())
+    st.caption(f"{len(t)} 則漲跌停說法有 {錯} 則對不上。對不上時，從當天真的漲停（跌停）的股票裡找名字念起來最像的，列在「可能是」；"
+               "例如汪海華 11/02 說「萬泰科漲停」，字幕其實是「忘久」，當天漲停的是旺玖（6233）。漲跌幅 9.5% 以上算漲停。")
 
 
 def 網紅價位區(影片們):
@@ -306,6 +332,44 @@ def 研究筆記區():
             st.rerun()
 
 
+@st.cache_data(ttl=6 * 3600, show_spinner="計算長均線（年線、月 10MA、72 週線）…")
+def 抄底名單(版本鍵, 距離上限):
+    """三條件抄底：先用今天的融資、營收篩，剩下的才讀 1 年半歷史算長均線，省時間也省記憶體。"""
+    營, _ = engine.月營收總表()
+    年增 = 營["近3月年增"].dropna().to_dict() if len(營) and "近3月年增" in 營 else {}
+    t = 今日[今日["代號"].str.fullmatch(r"\d{4}") & (今日["收盤"] > 0)]
+    洗 = t["融資洗完"].astype(bool) if "融資洗完" in t.columns else pd.Series(False, index=t.index)
+    減 = t["融資20日增減"] <= -10 if "融資20日增減" in t.columns else pd.Series(False, index=t.index)
+    t = t[(洗 | 減) & t["代號"].map(lambda c: (年增.get(c) or 0) > 0)]
+    if t.empty:
+        return pd.DataFrame(), 0
+    歷 = engine.讀取資料庫(代號=t["代號"].tolist(), 起日=最新日 - pd.Timedelta(days=560))
+    if 歷 is None:
+        return pd.DataFrame(), len(t)
+    距 = engine.長均線距離(歷)
+    del 歷
+    return engine.抄底三條件(t, 距, 年增, 距離上限=距離上限), len(t)
+
+
+def 抄底區():
+    段落("DIP BUY // 三條件抄底：跌到長均線＋營收沒壞＋融資洗掉")
+    st.caption("通勤族（阿信，2026-11-04）的選股法：① 技術面跌到長均線支撐（年線、月 10MA、72 週線任一條，上下幾 % 內）、"
+               "② 基本面沒壞（近 3 個月營收年增 > 0）、③ 融資已經退場（🧹 融資洗完，或融資 20 日減少 10% 以上）。")
+    距離上限 = st.segmented_control("離均線多近", [2.0, 3.0, 5.0], default=3.0, key="抄底距離",
+                                format_func=lambda v: f"±{v:.0f}%") or 3.0
+    表, 候選 = 抄底名單(_版本, 距離上限)
+    if 表.empty:
+        st.caption(f"今天沒有三個條件都符合的股票（融資＋營收先篩出 {候選} 檔，沒有一檔靠近長均線）。")
+        return
+    點選表(表, 上色(表).format({c: "{:+.1f}" for c in ("距年線%", "距月10MA%", "距72週線%", "近3月營收年增", "融資20日增減")}
+                             | {"融資維持率": "{:.0f}", "本益比": "{:.1f}"}, na_rep="—"), "抄底表",
+          height=min(35 * (len(表) + 1) + 3, 520))
+    st.caption(f"融資＋營收先篩出 {候選} 檔，其中 {len(表)} 檔靠近長均線。距離用原始收盤價（沒有還原除權息），"
+               "月 10MA＝最近 10 個月底收盤平均（含本月）、72 週線＝最近 72 個週收盤平均（含本週）。"
+               "阿信的做法是等震盪中均線不破、再站回 5 週線才加碼；這張表只是觀察名單，"
+               "網站回測過「融資洗完」單獨當策略並不好（見 01 跌深榜說明），不是買賣建議。")
+
+
 def 訂閱清單():
     if "條件訂閱" not in st.session_state:
         try:
@@ -349,57 +413,260 @@ def 條件訂閱區(條件, 範本, 結果):
         st.caption("訂閱的條件存在 ai-reports 分支的 subscriptions.json。第一天只記錄名單、不通知；之後每天收盤摘要會附上變動。")
 
 
+def 順勢做多區():
+    """操盤手視角：只做多、只看強勢股。條件與回測都寫清楚，不承諾報酬。"""
+    段落("MOMENTUM // 順勢做多選股：RS 強弱、均線多頭、VCP 帶量突破、法人連買")
+    動 = 動能資料(_版本)
+    if "產業" in 今日 and "產業" not in 動:
+        動 = 動.join(今日.drop_duplicates("代號").set_index("代號")["產業"])
+    實測 = momentum.讀取全市場回測()
+    名們 = ["強勢突破", "VCP突破", "領頭羊", "RS強勢", "多頭排列", "法人連買"]
+    卡片格([卡片(名, f"{int(動[名].sum())}", "檔", 紅 if 名 in ("強勢突破", "領頭羊") else 青) for 名 in 名們])
+    a, b, c = st.columns([3, 1, 1])
+    要 = a.multiselect("條件（全部都要符合）", 名們, default=["多頭排列", "RS強勢"], key="動能條件",
+                      help="\n".join(f"{k}：{v}" for k, v in momentum.訊號說明.items()))
+    RS下限 = b.number_input("RS 至少", 1, 99, 85, key="動能RS", help="RS 等級 1～99：近一年漲幅贏過全市場多少 % 的股票")
+    額下限 = c.number_input("成交值至少（億）", 0.0, 100.0, 1.0, step=0.5, key="動能額", help="太冷門的股票買賣價差大，突破也容易是假的")
+    結果 = 動[(動["RS"] >= RS下限) & (動["成交值億"].fillna(0) >= 額下限)]
+    for k in 要:
+        結果 = 結果[結果[k]]
+    結果 = 結果.sort_values("RS", ascending=False).reset_index()
+    結果["符合訊號"] = 結果.apply(lambda x: "、".join(k for k in 名們 if x[k]), axis=1)
+    結果["距前高%"] = (結果["收盤"] / 結果["前高20"] - 1) * 100
+    欄 = ["代號", "名稱", "產業", "收盤", "漲跌幅", "RS", "量倍數", "距前高%", "買點", "停損", "停損%", "目標1", "目標2",
+         "外資連買", "投信連買", "符合訊號"]
+    表 = 結果[[c for c in 欄 if c in 結果.columns]]
+    st.caption(f"符合 {len(表)} 檔（資料日期 {最新日:%Y/%m/%d}），依 RS 由高到低。買點＝已突破就用收盤價，還沒突破就是前 20 日高點；"
+               "停損＝買點 − 1.5 倍 ATR（已突破時取突破紅 K 低點，兩者取較近的）；目標 1／2＝風報比 1:2／1:3。點一下看個股的交易計畫卡。")
+    if len(表):
+        樣式 = 上色(表).format({"收盤": "{:,.2f}", "漲跌幅": "{:+.2f}", "RS": "{:.0f}", "量倍數": "{:.1f}", "距前高%": "{:+.1f}",
+                               "買點": "{:,.2f}", "停損": "{:,.2f}", "停損%": "{:.1f}", "目標1": "{:,.2f}", "目標2": "{:,.2f}",
+                               "外資連買": "{:.0f}", "投信連買": "{:.0f}"}, na_rep="—")
+        點選表(表, 樣式, "動能表", height=min(35 * (len(表) + 1) + 3, 520))
+    else:
+        st.info("今天沒有股票同時符合這些條件，可以少勾一個條件或降低 RS。")
+
+    段落("TRACK RECORD // 這些訊號過去準不準？（全市場 5 年回測）")
+    回 = 訊號回測表(實測)
+    if 回 is None:
+        st.caption("回測結果還沒算（每天收盤後 GitHub Actions 會自動算，約每 25 天重算一次）。")
+        return
+    表格(回.style.format({"次數": "{:,.0f}", "5日勝率%": "{:.1f}", "5日平均%": "{:+.2f}", "20日勝率%": "{:.1f}",
+                          "20日平均%": "{:+.2f}", "20日超額%": "{:+.2f}", "20日內平均最大回撤%": "{:.1f}"}, na_rep="—"),
+         hide_index=True, width="stretch", column_config={"說明": st.column_config.TextColumn(width="large")})
+    st.caption(f"期間 {實測['起']}～{實測['迄']}，只算 20 日均成交值 ≥ 0.5 億的上市櫃普通股，共 {實測['樣本']:,} 個「股票 × 交易日」樣本。"
+               "勝率＝之後 N 個交易日還原股價上漲的比例；超額＝扣掉同一天所有股票平均報酬後多賺的部分；"
+               "最大回撤＝之後 20 日內最低收盤相對進場價跌多少（平均值）。")
+    計 = 實測.get("計畫模擬") or {}
+    if 計:
+        段落("PLAN TEST // 照交易計畫卡操作的結果（停損 1.5 ATR、目標 3R、最多抱 20 天）")
+        計表 = pd.DataFrame([dict(訊號=k, **v) for k, v in 計.items() if v])
+        表格(計表, hide_index=True, width="stretch")
+        好 = max(計.items(), key=lambda kv: (kv[1] or {}).get("平均R", -9))
+        st.markdown(
+            f"**操盤手的誠實結論**：最好的「{好[0]}」平均每筆賺 {好[1]['平均R']:+.2f}R（約 {好[1]['平均報酬%']:+.1f}%／筆），"
+            f"但只有 {好[1]['達標率%']:.0f}% 的單會碰到 3R 目標、{好[1]['停損率%']:.0f}% 會先停損。"
+            "也就是說順勢突破是「小賠多次、少數大賺」的打法，勝率通常不到一半，靠嚴格停損與部位控制才有正期望值。"
+            "月賺 20% 需要每筆都大賺且資金幾乎全壓，歷史數據不支持，請把它當成「找強勢股的篩子」而不是印鈔機。")
+    with st.expander("🧑‍💼 操盤手評估：網站哪些指標太慢、這裡補了什麼"):
+        st.markdown("""
+- **偏落後（只當背景）**：KD、MACD 黃金交叉、本益比位階、月營收年增——多半在股價動了之後才確認。
+- **這裡補的領先訊號**：
+  - **RS 等級**：近 3 個月占 40%、其餘三季各 20% 的加權報酬，在全市場排百分位（1～99）。強勢股常常在大盤還沒止跌時就先創高。
+  - **VCP 收斂突破**：突破前 10 日的平均真實波幅 < 前 50 日的 75%（波動壓縮），今天收盤站上前 20 日高點、量 ≥ 前 5 日均量 2 倍。
+  - **領頭羊**：大盤距 60 日高點還有 3% 以上，這檔已經回到 60 日高點 2% 以內，且 RS ≥ 85。
+  - **法人連買**：外資或投信連買 3 天以上，而且股價在多頭排列（避免接到法人倒貨前的最後一棒）。
+- **還沒有的**：盤中即時突破提醒（需要盤中全市場報價）、大戶持股週變化（集保資料剛開始累積）。
+""")
+
+
 # ---------- 04 選股 ----------
-選股分頁 = st.tabs(["條件選股", "烏賊每日功課", "烏賊策略總覽", "🏆 策略排行榜", "券商報告", "網紅說法", "📝 研究筆記"])
-with 選股分頁[6]:
-  研究筆記區()
-with 選股分頁[3]:
-  策略排行區()
-with 選股分頁[4]:
-  券商報告總覽()
-with 選股分頁[5]:
-  網紅說法總覽()
-with 選股分頁[2]:
-  總表, 名單, 重複 = engine.烏賊總覽(今日)
-  多 = 總表[總表["多空"] == "多"]["符合檔數"].sum()
-  空 = 總表[總表["多空"] == "空"]["符合檔數"].sum()
-  卡片格([卡片("多方策略符合", f"{多}", "檔次（可能重複）", 紅), 卡片("空方策略符合", f"{空}", "檔次（可能重複）", 綠),
-         卡片("同時符合 2 個以上", f"{len(重複)}", "檔", 青)])
-  st.caption("多＝適合找買點（講義：強勢股買拉回、盤整突破）；空＝轉弱、避開或減碼（講義：跌破十日線、弱勢股）。"
-             "資料日期 " + 最新日.strftime("%Y-%m-%d"))
-  段落("SUMMARY // 各策略符合檔數")
-  表格(總表.style.map(lambda v: f"color:{紅 if v == '多' else 綠}", subset=["多空"]),
-               hide_index=True, width="stretch",
-               column_config={"說明": st.column_config.TextColumn(width="large")})
-  段落("OVERLAP // 同時符合多個策略")
-  if 重複.empty:
-      st.write("今天沒有股票同時符合 2 個以上的策略。")
-  else:
-      點選表(重複, 上色(重複).map(lambda v: f"color:{紅 if v == '多' else (綠 if v == '空' else '#FFC24B')}",
-                              subset=["多空"]), "重複表")
-  段落("DETAIL // 各策略名單")
-  清單欄 = ["代號", "名稱", "市場", "收盤", "漲跌幅", "成交張數", "量對5日均", "3日漲幅", "5日漲幅", "20日漲幅",
-           "40日漲幅", "週轉率", "股本億", "法人5日買超", "法人10日買超", "營收年增率", "近三季EPS"]
-  for 名, 結果 in 名單.items():
-      方向 = engine.烏賊條件[名]["方向"]
-      with st.expander(f"{'🔴 多' if 方向 == '多' else '🟢 空'}｜{名.replace('烏賊', '')}｜{len(結果)} 檔"):
-          st.caption(engine.烏賊條件[名]["說明"])
-          if len(結果):
-              點選表(結果, 上色(結果[[c for c in 清單欄 if c in 結果.columns]]), f"策略表{名}")
-with 選股分頁[1]:
-  st.caption("講義「每天的功課」：每天看這六張榜，熟悉股性。三&五日強勢股的重點是找貼近 5 日或 10 日線、"
-             "均線剛勾起來的股票（★）；股本小、量大、有題材最好。")
-  功課 = engine.每日功課(今日)
-  功課欄 = [c for c in ["代號", "名稱", "市場", "收盤", "漲跌幅", "3日漲幅", "5日漲幅", "振幅", "成交張數",
-                      "量對5日均", "股本億", "外資買超", "投信買超", "重點"] if c in 今日.columns or c == "重點"]
-  for 標籤, 分頁表 in zip(功課, st.tabs(list(功課))):
-      with 分頁表:
-          表 = 功課[標籤]
-          if "股本億" not in 表.columns:
-              表 = 表.join(讀檔("_股本表", _版本), on="代號")
-          點選表(表, 上色(表[[c for c in 功課欄 if c in 表.columns]]), f"功課表{標籤}", height=420)
-  with st.expander("課程重點：盤整、上升、下降趨勢怎麼操作"):
-      st.markdown("""
+# 只計算打開的分頁；第一個是順勢做多選股
+@st.cache_data(ttl=43200, max_entries=2, show_spinner=False)
+def 預估修正驗證資料(版本鍵, 快照們):
+    """快照們只用來當快取鍵（上傳新快照就重算）。用記憶體裡的 300 天還原價，不另外讀資料庫。"""
+    價 = 指標.pivot(index="date", columns="代號", values="還原價").sort_index()
+    return engine.預估修正驗證(價)
+
+
+def 預估上傳區():
+    if not 可編輯():
+        st.caption("上傳新的預估 EPS 要先在 01 市場總覽的庫存區輸入密碼解鎖。")
+        return
+    檔 = st.file_uploader("上傳全市場預估 EPS（CSV，跟 11/07 那份同格式：股號、A_2026E_EPS、B_2026E_EPS、Vera_2026E_EPS…）",
+                         type=["csv"], key="預估上傳")
+    if not 檔:
+        return
+    try:
+        原始 = pd.read_csv(檔, dtype={"股號": str, "代號": str, "code": str}, encoding="utf-8-sig")
+        t = engine.轉換預估檔(原始)
+    except Exception as e:
+        st.error(f"讀不懂這個檔：{e}")
+        return
+    import re as _re
+    m = _re.search(r"(20\d{6})", 檔.name)
+    預設 = pd.Timestamp(m.group(1)) if m else pd.Timestamp(最新日)
+    日 = st.date_input("這份預估的資料日", value=預設.date(), key="預估資料日")
+    st.caption(f"讀到 {len(t)} 檔，欄位：{'、'.join(c for c in t.columns if c != 'code')}")
+    if st.button("💾 存成新的一份快照", key="存預估", type="primary"):
+        try:
+            永久 = engine.存預估檔(t, 日, _設定())
+        except Exception as e:
+            st.error(f"存檔失敗：{e}")
+            return
+        st.cache_data.clear()
+        st.success(f"已存 {pd.Timestamp(日):%Y-%m-%d} 的預估（" + ("已寫入 GitHub，網站重新部署後全站生效）" if 永久 else "只存在網站上，重啟會消失）"))
+
+
+def 預估EPS分頁():
+    段落("FORECAST // 預估 EPS 快照：上修、下修追蹤")
+    快照 = engine.預估檔們()
+    卡片格([卡片("快照份數", f"{len(快照)}", "、".join(f"{d:%m/%d}" for d, _ in 快照[-4:]) or "—"),
+           卡片("最新一份", f"{快照[-1][0]:%Y-%m-%d}" if 快照 else "—"),
+           卡片("涵蓋檔數", f"{int(今日['預估EPS今年'].notna().sum()) if '預估EPS今年' in 今日 else 0}", "有 A 或 B 預估")])
+    with st.expander("📥 上傳新的一份預估 EPS", expanded=not 快照):
+        預估上傳區()
+    st.caption("建議每週（或每月）上傳一份同樣格式的匯出檔。網站會跟上一份比，算出上修、下修，"
+               "累積幾份之後自動驗證「預估上修的股票之後有沒有比較會漲」。")
+    if "預估修正%" not in 今日.columns:
+        st.info("目前只有一份預估快照，等下一份上傳後這裡就會列出上修、下修名單。")
+    else:
+        t = 今日[今日["預估修正%"].notna() & (今日["成交張數"] >= 200)]
+        欄 = [c for c in ["代號", "名稱", "收盤", "漲跌幅", "前期預估EPS今年", "預估EPS今年", "預估修正%", "明年預估修正%",
+                         "預估本益比", "明年預估本益比"] if c in t.columns]
+        上, 下 = st.columns(2)
+        with 上:
+            st.markdown("**🔺 上修最多**")
+            a = t[t["預估修正%"] > 0].nlargest(20, "預估修正%")
+            點選表(a, 上色(a[欄]), "預估上修表", height=400)
+        with 下:
+            st.markdown("**🔻 下修最多**")
+            b = t[t["預估修正%"] < 0].nsmallest(20, "預估修正%")
+            點選表(b, 上色(b[欄]), "預估下修表", height=400)
+        st.caption("修正%＝今年預估 EPS（A、B 中位數）跟上一份比；上一份太小（< 0.3 元）的不算。只列成交 200 張以上。")
+    段落("TEST // 預估上修的股票，之後有比較會漲嗎？")
+    結果, 說明 = 預估修正驗證資料(_版本, tuple(str(d) for d, _ in 快照))
+    st.markdown(說明)
+    if 結果 is not None:
+        表格(結果.style.format({"前期": "{:%Y-%m-%d}", "本期": "{:%Y-%m-%d}", "上修超額%": "{:+.2f}", "下修超額%": "{:+.2f}",
+                               "上修減下修%": "{:+.2f}"}), hide_index=True, width="stretch")
+    st.caption("每兩份相鄰快照：今年預估上修 ≥ 2% 與下修 ≤ −2% 的股票，下一份資料日後 20 個交易日的平均報酬減全體平均。"
+               "期數少的時候結果不穩定，至少累積 6 期以上再當參考。")
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def 關注清單資料(版本鍵):
+    return engine.關注清單表(engine.讀取關注清單(), 今日, 指標[["代號", "date", "收盤"]])
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def 領頭連動資料(版本鍵):
+    return engine.領頭連動(engine.讀取領頭連動(), 指標[[c for c in ("代號", "date", "收盤", "還原價") if c in 指標.columns]])
+
+
+def 關注清單分頁():
+    """市場評論提到的股票清單（不記人名）：加入後表現、共識預估 EPS 成長與預估本益比；規格升級 vs 漲價題材對照；領頭股連動。"""
+    明, 彙 = 關注清單資料(_版本)
+    if 明.empty:
+        st.info("還沒有關注清單（data/watchlists.csv）。")
+        return
+    段落("LISTS // 各清單彙總（從加入日收盤起算）")
+    表格(彙, hide_index=True, width="stretch",
+         column_config={c: st.column_config.NumberColumn(format="%+.1f") for c in ("加入後平均%", "超額平均%", "明年EPS成長中位數%", "距60日高平均%")})
+    st.caption("超額＝加入後漲跌減同期加權。明年預估本益比(合計)＝清單裡有正預估 EPS 的股票，合計市值 ÷ 合計明年預估獲利。"
+               "「規格升級」對照「漲價題材」：市場評論認為明年上半年漲價股的獲利會回落、規格升級股才有持續成長，"
+               "這裡用共識預估 EPS 檢查兩組的成長與倍數，並記錄之後的實際表現。")
+    清單們 = list(dict.fromkeys(明["清單"]))
+    選 = st.segmented_control("清單", 清單們, default=清單們[0], key="關注清單選") or 清單們[0]
+    表 = 明[明["清單"] == 選].drop(columns="清單")
+    if not (表["標記"] != "").any():
+        表 = 表.drop(columns="標記")
+    點選表(表, 上色(表), "關注清單表",
+          column_config={c: st.column_config.NumberColumn(format="%+.1f") for c in ("加入後%", "超額%", "距60日高%", "明年EPS成長%")})
+    if "標記" in 表.columns:
+        st.caption("標記：新＝設計或規格升級、增＝用量提升、大＝龍頭。")
+    st.caption("清單只記錄市場評論提到的股票與日期，不是推薦；點一列可跳到個股查詢。")
+    段落("LEADERS // 領頭股連動：領頭股站回月線，同組跟著反攻嗎？")
+    狀, 測 = 領頭連動資料(_版本)
+    if 狀.empty:
+        st.caption("沒有連動組資料（data/leader_groups.csv）。")
+        return
+    表格(狀.merge(測, on="組", how="left"), hide_index=True, width="stretch",
+         column_config={c: st.column_config.NumberColumn(format="%+.1f") for c in 狀.columns.union(測.columns) if str(c).endswith("%")}
+         | {"說明": st.column_config.TextColumn(width="large")})
+    st.caption("站回＝領頭股前 10 天都在月線（20 日均線）下、今天收盤站上。之後 20 日＝同組跟隨股平均漲跌，跟跟隨股一般日子比。"
+               "只用網站常駐的近一年多資料，次數少，只是參考；領頭股今天站回月線時，收盤 LINE 會提醒。")
+
+
+選股分頁 = st.tabs(["🚀 順勢做多", "條件選股", "烏賊每日功課", "烏賊策略總覽", "🏆 策略排行榜", "券商報告", "網紅說法", "📝 研究筆記", "🧲 三條件抄底", "📐 預估 EPS", "⭐ 關注清單"],
+                   key="選股分頁", on_change="rerun")
+with 選股分頁[0], 區塊防護("順勢做多"):
+    if 選股分頁[0].open:
+        順勢做多區()
+with 選股分頁[10], 區塊防護("關注清單"):
+    if 選股分頁[10].open:
+        關注清單分頁()
+with 選股分頁[9], 區塊防護("預估EPS"):
+    if 選股分頁[9].open:
+        預估EPS分頁()
+with 選股分頁[8], 區塊防護("三條件抄底"):
+    if 選股分頁[8].open:
+        抄底區()
+with 選股分頁[7], 區塊防護("研究筆記"):
+    if 選股分頁[7].open:
+        研究筆記區()
+with 選股分頁[4], 區塊防護("策略排行榜"):
+    if 選股分頁[4].open:
+        策略排行區()
+with 選股分頁[5], 區塊防護("券商報告"):
+    if 選股分頁[5].open:
+        券商報告總覽()
+with 選股分頁[6], 區塊防護("網紅說法"):
+    if 選股分頁[6].open:
+        網紅說法總覽()
+with 選股分頁[3], 區塊防護("烏賊策略總覽"):
+    if 選股分頁[3].open:
+        總表, 名單, 重複 = engine.烏賊總覽(今日)
+        多 = 總表[總表["多空"] == "多"]["符合檔數"].sum()
+        空 = 總表[總表["多空"] == "空"]["符合檔數"].sum()
+        卡片格([卡片("多方策略符合", f"{多}", "檔次（可能重複）", 紅), 卡片("空方策略符合", f"{空}", "檔次（可能重複）", 綠),
+               卡片("同時符合 2 個以上", f"{len(重複)}", "檔", 青)])
+        st.caption("多＝適合找買點（講義：強勢股買拉回、盤整突破）；空＝轉弱、避開或減碼（講義：跌破十日線、弱勢股）。"
+                   "資料日期 " + 最新日.strftime("%Y-%m-%d"))
+        段落("SUMMARY // 各策略符合檔數")
+        表格(總表.style.map(lambda v: f"color:{紅 if v == '多' else 綠}", subset=["多空"]),
+                     hide_index=True, width="stretch",
+                     column_config={"說明": st.column_config.TextColumn(width="large")})
+        段落("OVERLAP // 同時符合多個策略")
+        if 重複.empty:
+            st.write("今天沒有股票同時符合 2 個以上的策略。")
+        else:
+            點選表(重複, 上色(重複).map(lambda v: f"color:{紅 if v == '多' else (綠 if v == '空' else '#FFC24B')}",
+                                    subset=["多空"]), "重複表")
+        段落("DETAIL // 各策略名單")
+        清單欄 = ["代號", "名稱", "市場", "收盤", "漲跌幅", "成交張數", "量對5日均", "3日漲幅", "5日漲幅", "20日漲幅",
+                 "40日漲幅", "週轉率", "股本億", "法人5日買超", "法人10日買超", "營收年增率", "近三季EPS"]
+        for 名, 結果 in 名單.items():
+            方向 = engine.烏賊條件[名]["方向"]
+            with st.expander(f"{'🔴 多' if 方向 == '多' else '🟢 空'}｜{名.replace('烏賊', '')}｜{len(結果)} 檔"):
+                st.caption(engine.烏賊條件[名]["說明"])
+                if len(結果):
+                    點選表(結果, 上色(結果[[c for c in 清單欄 if c in 結果.columns]]), f"策略表{名}")
+with 選股分頁[2], 區塊防護("烏賊每日功課"):
+    if 選股分頁[2].open:
+        st.caption("講義「每天的功課」：每天看這六張榜，熟悉股性。三&五日強勢股的重點是找貼近 5 日或 10 日線、"
+                   "均線剛勾起來的股票（★）；股本小、量大、有題材最好。")
+        功課 = engine.每日功課(今日)
+        功課欄 = [c for c in ["代號", "名稱", "市場", "收盤", "漲跌幅", "3日漲幅", "5日漲幅", "振幅", "成交張數",
+                            "量對5日均", "股本億", "外資買超", "投信買超", "重點"] if c in 今日.columns or c == "重點"]
+        for 標籤, 分頁表 in zip(功課, st.tabs(list(功課))):
+            with 分頁表:
+                表 = 功課[標籤]
+                if "股本億" not in 表.columns:
+                    表 = 表.join(讀檔("_股本表", _版本), on="代號")
+                點選表(表, 上色(表[[c for c in 功課欄 if c in 表.columns]]), f"功課表{標籤}", height=420)
+        with st.expander("課程重點：盤整、上升、下降趨勢怎麼操作"):
+            st.markdown("""
 - **盤整格局**：找出最高點與最低點畫成箱型（框框），注意箱子左右兩邊爆量的日子；**收盤突破箱頂**、量放大是轉強訊號。
 - **上升趨勢**：沿著 5 日、10 日線走，突破前波高點後一路墊高；**怎麼買？靠近昨天高點買**，強勢股別人追高，你買拉回點。
 - **下降趨勢**：**跌破十日線後**轉弱，反彈到壓力就該小心；弱勢股別人追空，你買反彈點。
@@ -408,47 +675,54 @@ with 選股分頁[1]:
 
 這些規則已做成「個股回測」裡的 **盤整突破（烏賊）** 與 **均線勾起（烏賊）** 兩個策略，「條件選股」分頁的「策略範本」可直接套用五組選股條件。
 """)
-with 選股分頁[0]:
-  with st.expander("⚙️ 選股條件（組合回測也用這組）", expanded=True):
-      條件, 範本 = 選股條件區()
-  結果 = engine.選股(今日, 條件)
-  卡片格([
-      卡片("符合條件", f"{len(結果)}", "檔", 青),
-      卡片("資料日期", 最新日.strftime("%Y-%m-%d")),
-      卡片("排序", 條件["排序"]),
-  ])
-  段落("RESULT // 選股結果")
-  顯示欄 = [c for c in ["代號", "名稱", "市場", "收盤", "漲跌幅", "本益比", "殖利率", "淨值比",
-                      "營收年增率", "營收月增率", "累計營收年增率", "EPS", "成交張數",
-                      "外資買超", "投信買超", "法人5日買超", "外資連買", "投信連買", "融資5日增減",
-                      "20日漲幅", "RSI", "量比", "距52週高點"] if c in 結果.columns]
-  for 鍵, 欄們 in (("外資持股比下限", ["外資持股比", "外資持股20日變化"]), ("外資持股20日變化下限", ["外資持股比", "外資持股20日變化"]),
-                 ("當沖比率上限", ["當沖比率"]), ("負債比上限", ["負債比", "流動比"]),
-                 ("自由現金流為正", ["近四季營業現金流億", "近四季自由現金流億"]),
-                 ("合約負債年增下限", ["合約負債億", "合約負債年增", "能見度月"]), ("能見度月下限", ["合約負債億", "合約負債年增", "能見度月"])):
-      if 條件.get(鍵) is not None:
-          顯示欄 += [c for c in 欄們 if c in 結果.columns and c not in 顯示欄]
-  if 範本 != "自訂條件":  # 烏賊條件多看幾個相關欄位
-      顯示欄[3:3] = [c for c in ["週轉率", "股本億", "量對5日均", "5日均量", "10日漲幅", "30日漲幅", "40日漲幅",
-                               "法人10日買超", "近三季EPS"] if c in 結果.columns]
-  點選表(結果, 上色(結果[顯示欄]), "選股表", height=420)
-  st.caption("點一下任何一列，就會跳到那檔股票的個股查詢。")
-  st.download_button("下載 CSV", 結果[顯示欄].to_csv(index=False).encode("utf-8-sig"),
-                     file_name=f"選股_{最新日:%Y%m%d}.csv")
-  條件訂閱區(條件, 範本, 結果)
+with 選股分頁[1], 區塊防護("條件選股"):
+    if 選股分頁[1].open:
+        with st.expander("⚙️ 選股條件（組合回測也用這組）", expanded=True):
+            條件, 範本 = 選股條件區()
+        結果 = engine.選股(今日, 條件)
+        卡片格([
+            卡片("符合條件", f"{len(結果)}", "檔", 青),
+            卡片("資料日期", 最新日.strftime("%Y-%m-%d")),
+            卡片("排序", 條件["排序"]),
+        ])
+        段落("RESULT // 選股結果")
+        顯示欄 = [c for c in ["代號", "名稱", "市場", "收盤", "漲跌幅", "本益比", "殖利率", "淨值比",
+                            "營收年增率", "營收月增率", "累計營收年增率", "EPS", "成交張數",
+                            "外資買超", "投信買超", "法人5日買超", "外資連買", "投信連買", "融資5日增減",
+                            "20日漲幅", "RSI", "量比", "距52週高點"] if c in 結果.columns]
+        for 鍵, 欄們 in (("外資持股比下限", ["外資持股比", "外資持股20日變化"]), ("外資持股20日變化下限", ["外資持股比", "外資持股20日變化"]),
+                       ("當沖比率上限", ["當沖比率"]), ("負債比上限", ["負債比", "流動比"]),
+                       ("自由現金流為正", ["近四季營業現金流億", "近四季自由現金流億"]),
+                       ("合約負債年增下限", ["合約負債億", "合約負債年增", "能見度月"]), ("能見度月下限", ["合約負債億", "合約負債年增", "能見度月"]),
+                       ("預估本益比上限", ["預估EPS今年", "預估本益比", "預估EPS明年", "明年預估本益比", "明年EPS成長%", "預估分歧%", "預估業外占比%"]), ("明年預估本益比上限", ["預估EPS今年", "預估本益比", "預估EPS明年", "明年預估本益比", "明年EPS成長%", "預估分歧%", "預估業外占比%"]), ("明年EPS成長下限", ["預估EPS今年", "預估本益比", "預估EPS明年", "明年預估本益比", "明年EPS成長%", "預估分歧%", "預估業外占比%"]),
+                       ("預估業外占比上限", ["預估EPS今年", "預估本業EPS", "預估業外占比%", "預估本益比", "本業預估本益比"]),
+                       ("預估修正下限", ["預估EPS今年", "前期預估EPS今年", "預估修正%", "預估本益比"]), ("排除預估分歧", ["預估EPS今年", "預估本益比", "預估EPS明年", "明年預估本益比", "明年EPS成長%", "預估分歧%", "預估業外占比%"])):
+            if 條件.get(鍵) is not None:
+                顯示欄 += [c for c in 欄們 if c in 結果.columns and c not in 顯示欄]
+        if str(條件.get("排序", "")).startswith(("預估", "明年")):
+            顯示欄 += [c for c in ["預估EPS今年", "預估本益比", "預估EPS明年", "明年預估本益比", "明年EPS成長%", "預估修正%"]
+                      if c in 結果.columns and c not in 顯示欄]
+        if 範本 != "自訂條件":  # 烏賊條件多看幾個相關欄位
+            顯示欄[3:3] = [c for c in ["週轉率", "股本億", "量對5日均", "5日均量", "10日漲幅", "30日漲幅", "40日漲幅",
+                                     "法人10日買超", "近三季EPS"] if c in 結果.columns]
+        點選表(結果, 上色(結果[顯示欄]), "選股表", height=420)
+        st.caption("點一下任何一列，就會跳到那檔股票的個股查詢。")
+        st.download_button("下載 CSV", 結果[顯示欄].to_csv(index=False).encode("utf-8-sig"),
+                           file_name=f"選股_{最新日:%Y%m%d}.csv")
+        條件訂閱區(條件, 範本, 結果)
 
-  段落("CHART // 個股走勢")
-  選項 = (結果["代號"] + " " + 結果["名稱"]).tolist() or (今日["代號"] + " " + 今日["名稱"]).tolist()
-  選擇 = st.selectbox("選一檔股票", 選項)
-  個股 = 指標[指標["代號"] == 選擇.split()[0]].tail(250)
-  圖 = go.Figure(go.Candlestick(
-      x=個股["date"], open=個股["open"], high=個股["high"], low=個股["low"], close=個股["收盤"],
-      increasing=dict(line=dict(color=紅), fillcolor=紅),
-      decreasing=dict(line=dict(color=綠), fillcolor=綠), name="K 線"))
-  # 均線用還原價算，換算回原始股價的比例來畫
-  比例 = 個股["收盤"] / 個股["還原價"]
-  for 天數, 色 in ((5, "#FFFFFF"), (20, 青), (60, "#FF00E5")):
-      圖.add_trace(go.Scatter(x=個股["date"], y=個股[f"MA{天數}"] * 比例, name=f"MA{天數}",
-                              line=dict(color=色, width=1)))
-  圖.update_layout(xaxis_rangeslider_visible=False)
-  st.plotly_chart(圖表外觀(圖, 420), width="stretch")
+        段落("CHART // 個股走勢")
+        選項 = (結果["代號"] + " " + 結果["名稱"]).tolist() or (今日["代號"] + " " + 今日["名稱"]).tolist()
+        選擇 = st.selectbox("選一檔股票", 選項)
+        個股 = 指標[指標["代號"] == 選擇.split()[0]].tail(250)
+        圖 = go.Figure(go.Candlestick(
+            x=個股["date"], open=個股["open"], high=個股["high"], low=個股["low"], close=個股["收盤"],
+            increasing=dict(line=dict(color=紅), fillcolor=紅),
+            decreasing=dict(line=dict(color=綠), fillcolor=綠), name="K 線"))
+        # 均線用還原價算，換算回原始股價的比例來畫
+        比例 = 個股["收盤"] / 個股["還原價"]
+        for 天數, 色 in ((5, "#FFFFFF"), (20, 青), (60, "#FF00E5")):
+            圖.add_trace(go.Scatter(x=個股["date"], y=個股[f"MA{天數}"] * 比例, name=f"MA{天數}",
+                                    line=dict(color=色, width=1)))
+        圖.update_layout(xaxis_rangeslider_visible=False)
+        st.plotly_chart(圖表外觀(圖, 420), width="stretch")
