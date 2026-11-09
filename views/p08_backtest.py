@@ -415,3 +415,66 @@ else:
                "沒打開＝收在跌停附近。之後報酬從當天收盤算起，「任何一天買進」是同一批股票每天買的平均。"
                "很多事件集中在同幾天（例如 2025/4 關稅、2024/8 日圓平倉），要看「不同日期」那欄，實際獨立的機會沒有次數那麼多。"
                "台積電 2024/8/5、2025/4/7 都是收在跌停沒打開，之後 60 日都漲超過 27%；2026/11/6 是第一次碰跌停又打開。")
+
+
+段落("REBOUND // 反彈力道：反彈第一天站不站得上 5 日線？")
+_K弱 = 指數K線("TAIEX", _版本)
+_彈事, _彈統, _彈今 = engine.反彈首日(_K弱) if _K弱 is not None else (pd.DataFrame(), pd.DataFrame(), None)
+if not len(_彈事):
+    st.caption("指數資料還不夠。")
+else:
+    if _彈今:
+        st.markdown(f"**最近的反彈首日：{pd.Timestamp(_彈今['日期']):%Y/%m/%d}　{_彈今['類型']}**（收盤 {_彈今['收盤']:,.0f}，5 日線 {_彈今['5日線']:,.0f}）")
+    表格(_彈統, hide_index=True, width="stretch",
+         column_config={c: st.column_config.NumberColumn(format="%+.2f") for c in ("5日平均%", "10日平均%", "20日平均%")})
+    表格(_彈事.assign(日期=_彈事["日期"].dt.strftime("%Y/%m/%d"), 大跌日=_彈事["大跌日"].dt.strftime("%Y/%m/%d")), hide_index=True, width="stretch",
+         column_config={c: st.column_config.NumberColumn(format="%+.2f") for c in ("大跌%", "反彈日%", "5日後%", "10日後%", "20日後%")})
+    st.caption("反彈首日＝加權單日跌 3% 以上之後 5 天內，第一個漲 1.5% 以上的日子。站上＝當天收盤在 5 日線上（強反彈）；碰線被壓＝最高碰到但收在下面（弱反彈）。"
+               "報酬從反彈首日收盤算起。樣本很少（2021-11 起），只能當參考；「任何一天買進」是同期間每天買的平均。")
+
+段落("STOP FALL // 量縮止跌：KD 黃金交叉＋站上 5、10 日線")
+_KD事, _KD統, _KD今 = engine.止跌KD條件(_K弱) if _K弱 is not None else (pd.DataFrame(), pd.DataFrame(), None)
+if _KD今:
+    卡片格([卡片("KD 黃金交叉", "✅ 有" if _KD今["KD 黃金交叉"] else "還沒", f"K {_KD今['K']:.0f}／D {_KD今['D']:.0f}"),
+          卡片("站上 5、10 日線", "✅ 是" if _KD今["站上 5、10 日線"] else "還沒", ""),
+          卡片("離 20 日高點", f"{_KD今['離 20 日高%']:+.1f}%", "回落 8% 以上才算「跌過」")])
+    if len(_KD統):
+        表格(_KD統, hide_index=True, width="stretch",
+             column_config={c: st.column_config.NumberColumn(format="%+.2f") for c in ("5日平均%", "10日平均%", "20日平均%")})
+    if len(_KD事):
+        表格(_KD事.assign(日期=_KD事["日期"].dt.strftime("%Y/%m/%d")), hide_index=True, width="stretch",
+             column_config={c: st.column_config.NumberColumn(format="%+.2f") for c in ("離20日高%", "5日後%", "10日後%", "20日後%")})
+    st.caption("條件：KD（9,3,3）K 線由下往上穿過 D 線，同一天收盤站上 5 日與 10 日均線，而且收盤離 20 日高點已回落 8% 以上；同一段 10 天內只算一次。"
+               "樣本少，結果只當參考。")
+
+段落("ROTATION // 反彈兩階段：資金先回跌深股，還是已輪到高位階成長股？")
+_輪 = 讀檔("讀取反彈輪動", _版本)
+if not _輪:
+    st.caption("價格資料還不夠。")
+else:
+    st.markdown(f"**{pd.Timestamp(_輪['日期']):%Y/%m/%d}　{_輪['階段']}**　{_輪['說明']}")
+    表格(_輪["組別"], hide_index=True, width="stretch",
+         column_config={c: st.column_config.NumberColumn(format="%+.2f") for c in ("今日平均%", "近 3 日平均%")})
+    st.caption(f"跌深＝收盤離近 60 日高點 25% 以上；高位階高本益比＝離高點不到 10% 且本益比高於全市場中位數（{_輪['本益比中位']}）。"
+               "原本的說法是「融資維持率爆掉」，網站沒有每檔融資維持率，所以用跌深＋本益比近似。兩組平均差 1 個百分點以上才判斷偏向哪一階段。")
+
+段落("RESCUE HISTORY // 國安基金進場後：歷次平均")
+_國表, _國本 = engine.國安基金統計(engine.讀取長期指數(_K弱)) if _K弱 is not None else (pd.DataFrame(), None)
+_國均 = engine.國安基金平均(_國表)
+if len(_國均):
+    表格(_國均, hide_index=True, width="stretch", column_config={"平均%": st.column_config.NumberColumn(format="%+.1f")})
+    st.caption("決議日起算，只算已有資料的次數。長期指數（2000 年起）每天自動補一段，補完後 2000～2020 年的幾次會自動納入；"
+               "目前資料不足時次數偏少。2008 年「進場又限空仍續跌」要等補齊後才看得到。")
+
+段落("VOLATILITY // 標普單日重挫之後：未來 20 天波動是不是比平常大？")
+_標 = engine.資料夾 / "sox_long.csv"
+_標價 = pd.read_csv(_標, parse_dates=["date"]) if _標.exists() else pd.DataFrame()
+_標價 = _標價[_標價["symbol"] == "^GSPC"].set_index("date")["close"] if len(_標價) else None
+_波 = engine.單日大跌後波動(_標價) if _標價 is not None else None
+if not _波:
+    st.caption("美股資料還不夠。")
+else:
+    卡片格([卡片("單日跌 4% 以上", f"{_波['次數']} 次", f"{_波['起']} 起"),
+          卡片("之後 20 天年化波動", f"{_波['之後波動%']:.1f}%", f"全期間平均 {_波['全期間波動%']:.1f}%", 綠 if _波["之後波動%"] > _波["全期間波動%"] else "#EDEDED"),
+          卡片("波動比平常大", f"{_波['放大次數']}／{_波['次數']}", "次數")])
+    st.caption("標普 500 單日重挫 4% 以上，隔天起 20 個交易日的年化波動率平均，對照全期間 20 日波動率平均。波動放大不等於方向，只代表追價風險高；樣本少且集中在 2008、2020 年。")

@@ -2287,7 +2287,7 @@ def 標普長線(版本鍵):
 @st.cache_data(ttl=3600, show_spinner=False)
 def 護盤資料(版本鍵):
     K = 指數K線("TAIEX", 版本鍵)
-    表, 本次 = engine.國安基金統計(K)
+    表, 本次 = engine.國安基金統計(engine.讀取長期指數(K))
     狀 = engine.季線狀態(K)
     乖 = engine.季線乖離位置(K)
     標 = 標普長線(版本鍵)

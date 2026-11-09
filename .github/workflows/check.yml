@@ -41,6 +41,8 @@ jobs:
         run: python tests/test_news_tools.py
       - name: 大跌日收復表、跌停打開回測
         run: python tests/test_crash_tools.py
+      - name: 反彈力道、KD 止跌、反彈兩階段
+        run: python tests/test_rebound_tools.py
       - name: AI 報告 json 拆解與目標價檢查
         run: python tests/test_ai_card.py
       - name: 止跌與抄底工具
