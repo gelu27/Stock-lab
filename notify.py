@@ -383,6 +383,10 @@ def 提醒事項(代號們):
         行們 += 季線VIX提醒(狀態)
     except Exception as e:
         print("季線／VIX 提醒失敗：", repr(e))
+    try:
+        行們 += 領頭站回提醒(狀態)
+    except Exception as e:
+        print("領頭站回提醒失敗：", repr(e))
     if 狀態 != 舊狀態:
         try:
             寫設定("alert_state.json", 狀態, sha)
@@ -420,6 +424,28 @@ def 台幣提醒(狀態):
         記[鍵] = 今.isoformat()
         新.append(w)
     return (["", "💱 台幣與外資"] + 新) if 新 else []
+
+
+def 領頭站回提醒(狀態):
+    """data/leader_groups.csv 的領頭股今天站回月線（前 10 天都在月線下）就通知一次，附同組跟隨股。"""
+    import engine
+    組 = engine.讀取領頭連動()
+    if 組.empty:
+        return []
+    代們 = set(組["領頭"]) | {c for x in 組["跟隨"] for c in x.split()}
+    表 = engine.讀取資料庫(最近天數=60, 代號=list(代們))
+    if 表 is None or not len(表):
+        return []
+    t = 表.rename(columns={"code": "代號", "close": "收盤"})[["代號", "date", "收盤"]]
+    行們 = []
+    日 = f"{pd.to_datetime(t['date']).max():%Y-%m-%d}"
+    for 名, 頭, 跟 in engine.今日領頭站回(組, t):
+        鍵 = f"領頭站回_{頭}"
+        if 狀態.get(鍵) == 日:
+            continue
+        狀態[鍵] = 日
+        行們 += ["", f"🚩 {名}：領頭股 {頭} 今天站回月線，同組 {跟} 可以留意是否跟上（只是連動觀察，不是買進訊號）"]
+    return 行們
 
 
 def 季線VIX提醒(狀態):

@@ -410,6 +410,7 @@ def 個股價位區(代號):
         燈 = "r" if 貴["跌幅%"] <= -30 else ("y" if 貴["跌幅%"] <= -10 else "g")
         st.markdown(f'<div class="lamp {燈}" style="margin:6px 0"><div class="t"><i>💸</i>買貴檢查</div>'
                     f'<div class="s">{貴["說明"]}</div></div>', unsafe_allow_html=True)
+    年線反彈區(K)
     摘要 = 個股價位回測(代號, _版本)
     st.plotly_chart(支撐壓力圖(K, sr, 區們, 120, 420, 摘要=摘要), width="stretch", config={"displayModeBar": False})
     with st.expander("🧪 這檔的價位準不準？（5 年回測）"):

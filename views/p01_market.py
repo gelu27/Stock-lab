@@ -900,6 +900,83 @@ def 波段區(K, sr):
                    "回檔尺用 5% 以上的波段；等幅測距是「第二段跟第一段一樣長」的經驗法則，不一定會到。")
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def 季節資料(代號, 版本鍵):
+    return engine.季節統計(指數K線(代號, 版本鍵))
+
+
+def 季節區(K, 名稱):
+    """年底做帳行情：每年 11 月底 → 隔年 2/5 的漲跌、12 月漲跌，跟任意同樣長度的期間比。"""
+    表, 基, 今 = 季節資料("TAIEX" if 名稱 == "加權指數" else "TPEX", _版本)
+    if 表.empty or not 基:
+        return
+    標 = (f"🗓️ 年底做帳行情：過去 {基['區間次數']} 年 11 月底→2/5 上漲 {基['區間上漲次數']} 次、平均 {基['區間平均%']:+.1f}%"
+         f"（任意 {基['天數']} 個交易日平均 {基['平均%']:+.1f}%、上漲 {基['上漲%']}%）")
+    with st.expander(標):
+        if 今:
+            if 今.get("還沒開始"):
+                st.caption(f"今年的區間還沒開始（{今['距開始天數']} 天後，11 月底起算）。")
+            else:
+                st.caption(f"今年（{今['年度']}）進行中：從 11 月底 {今['起點']:,.2f} 起至今 {今['區間%']:+.1f}%，期間最大回檔 {今['最大回檔%']:+.1f}%。")
+        表格(表.drop(columns="完整").sort_values("年度", ascending=False), hide_index=True, width="stretch",
+             column_config={c: st.column_config.NumberColumn(format="%+.1f") for c in ("區間%", "12月%", "最大回檔%")})
+        st.caption("市場常說「選後做帳行情到農曆年前」（今年九合一選舉 11/28）。過去 5 年加權每年都漲，但任意同長度期間也有 7 成會漲，"
+                   "優勢只有 1～2 個百分點；「12 月會有喘息」在 5 年裡只有 2022 成立，不過每年這段期間都有 4% 左右的回檔。"
+                   "只有 5 年、而且多半是多頭年，只是參考。")
+
+
+def 預估估值區(K):
+    """大盤預估本益比（共識 EPS）＋下修情境＋目標點位換算；台股半導體相對大盤本益比。"""
+    估 = engine.大盤預估本益比(今日)
+    本 = 大盤本益比資料(_版本)
+    現 = float(K["close"].iloc[-1])
+    卡們 = []
+    if 估 and "明年" in 估:
+        明 = 估["明年"]
+        卡們.append(卡片("上市預估本益比（明年共識 EPS）", f"{明['本益比']:.1f} 倍",
+                       f"不含台積電 {明['不含龍頭']:.1f}；今年 EPS 算 {估.get('今年', {}).get('本益比', np.nan):.1f} 倍", 青))
+        最差 = 明["情境"][-1]
+        卡們.append(卡片("如果明年 EPS 全部下修 20%", f"{最差['大盤預估本益比']:.1f} 倍",
+                       f"台積電佔上市市值 {估['龍頭權重%']:.0f}%，它下修大盤就跟著變貴", "#FFC24B"))
+    if len(本) and "半導體相對" in 本.columns and 本["半導體相對"].notna().sum() >= 12:
+        近 = 本.dropna(subset=["半導體相對"])
+        v = float(近["半導體相對"].iloc[-1])
+        卡們.append(卡片("台股半導體本益比 ÷ 大盤", f"{v:.2f} 倍",
+                       f"5 年平均 {近['半導體相對'].mean():.2f}、最低 {近['半導體相對'].min():.2f}；不含台積電 {近['不含台積電相對'].iloc[-1]:.2f}",
+                       "#7EE2A8" if v <= 近["半導體相對"].quantile(0.2) else "#EDEDED"))
+    if not 卡們:
+        return
+    卡片格(卡們)
+    with st.expander("🧮 預估本益比情境、目標點位換算、半導體相對本益比"):
+        if 估 and "明年" in 估:
+            列 = []
+            for 名 in ("今年", "明年"):
+                if 名 in 估:
+                    x = 估[名]
+                    列.append({"口徑": f"{名}共識 EPS", "大盤": round(x["本益比"], 2), "不含台積電": round(x["不含龍頭"], 2),
+                              "台積電": round(x["龍頭本益比"], 2), "涵蓋市值%": x["涵蓋%"]})
+            表格(pd.DataFrame(列), hide_index=True, width="stretch")
+            表格(pd.DataFrame(估["明年"]["情境"]), hide_index=True, width="stretch")
+            a, b = st.columns(2)
+            目標 = a.number_input("目標點位", min_value=1000, value=int(round(現 * 1.2, -3)), step=1000, key="目標點位")
+            pe = engine.點位本益比換算(現, 估["明年"]["本益比"], 目標點位=目標)
+            a.caption(f"加權 {現:,.0f} → {目標:,.0f}，明年共識 EPS 不變的話，預估本益比要從 {估['明年']['本益比']:.1f} 倍變成 **{pe:.1f} 倍**。")
+            倍 = b.number_input("目標預估本益比", min_value=5.0, value=12.0, step=0.5, key="目標本益比")
+            點 = engine.點位本益比換算(現, 估["明年"]["本益比"], 目標本益比=倍)
+            b.caption(f"明年共識 EPS 不變，{倍:.1f} 倍對應加權約 **{點:,.0f}**。")
+            st.caption("預估 EPS＝網站預估 EPS 檔裡 A、B 兩個法人常用來源的中位數（04「📐 預估 EPS」可上傳新的）；"
+                       "大盤預估本益比＝上市股票（不含 ETF、只算預估 EPS > 0 的）總市值 ÷ 總預估獲利。"
+                       "「便宜」是建立在明年 EPS 不下修上：明年共識比今年再成長約 3 成，若景氣放緩被下修，倍數會一起變高。")
+        if len(本) and "半導體相對" in 本.columns:
+            近 = 本.dropna(subset=["半導體相對"])
+            圖 = go.Figure([go.Scatter(x=近["date"], y=近["半導體相對"], name="半導體 ÷ 大盤", line=dict(color=青, width=2)),
+                           go.Scatter(x=近["date"], y=近["不含台積電相對"], name="不含台積電", line=dict(color="#FFB020", width=1.5, dash="dot"))])
+            圖.add_hline(y=1, line_dash="dot", line_color="#666")
+            st.plotly_chart(圖表外觀(圖, 260), width="stretch", config={"displayModeBar": False})
+            st.caption("用證交所個股本益比（近四季獲利）算：高於 1＝半導體比大盤貴。美股有研究指出費半相對 S&P 500 的預估本益比"
+                       "跌到 0.75 倍、2018 年來最低；台股半導體目前沒有出現同樣的折價。")
+
+
 def 關鍵價位區():
     段落("LEVELS // 關鍵價位：支撐、壓力與觀察條件")
     選 = st.segmented_control("指數", ["加權指數", "櫃買指數"], default="加權指數", key="價位指數",
@@ -924,6 +1001,8 @@ def 關鍵價位區():
     if 黑:
         st.markdown(黑K卡(黑), unsafe_allow_html=True)
     波段區(K, sr)
+    年線反彈區(K, 是大盤=True)
+    季節區(K, 選)
     K棒解讀區(K, None, f"{'加權' if 代號 == 'TAIEX' else '櫃買'}今天的 K 棒怎麼看", 是大盤=True)
     技術 = 指數技術觀察(代號, _版本)
     if 技術:
@@ -945,6 +1024,7 @@ def 關鍵價位區():
         殺估值區()
         光通訊區()
         估值週線區(K)
+        預估估值區(K)
     天數 = st.segmented_control("圖表區間", [20, 60, 120, 250], default=120,
                               format_func=lambda d: {20: "1 個月", 60: "3 個月", 120: "半年", 250: "1 年"}[d],
                               key="價位區間", label_visibility="collapsed") or 120
@@ -2022,6 +2102,12 @@ def 總經區():
                 st.warning(w)
     合, 家 = macro.AI巨頭資本支出(macro.讀取資本支出())
     if 家 is not None and len(家):
+        燈, 話, 明 = engine.資本支出警示(macro.讀取資本支出())
+        st.markdown(燈號卡([("AI 資本支出縮手警示", 燈, 話 + "。大廠停資本支出時，AI 供應鏈的獲利預估與本益比通常會一起下修")]),
+                    unsafe_allow_html=True)
+        if len(明):
+            with st.expander("各家最新一季：比上一季、比去年同季"):
+                表格(明, hide_index=True, width="stretch", column_config={c: st.column_config.NumberColumn(format="%+.1f") for c in ("季增%", "年增%")})
         st.markdown("**🏗️ AI 巨頭資本支出與自由現金流**（最新一季，億美元）")
         表格(家, hide_index=True, width="stretch", column_config={c: st.column_config.NumberColumn(format="%.0f") for c in
              ("資本支出(億美元)", "營業現金流(億美元)", "自由現金流(億美元)")} | {"年增%": st.column_config.NumberColumn(format="%+.0f"),
