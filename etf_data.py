@@ -722,6 +722,37 @@ def 抓費用一檔(代號):
     return 解析費用(r.text)
 
 
+費用診斷檔 = 資料夾 / "fees_debug.txt"
+
+
+def 費用診斷(代號們=("0050", "00981A", "00985A")):
+    """抓不到費用時存證據：試幾個候選網址，記下狀態碼、頁面長度、標題，以及「費」「%」附近的文字，
+    下次才知道頁面長什麼樣子、解析規則怎麼改。只寫 data/etf/fees_debug.txt。"""
+    網址們 = ["https://www.moneydj.com/ETF/X/Basic/Basic0004.xdjhtm?etfid={}.TW",
+            "https://www.moneydj.com/ETF/X/Basic/Basic0003.xdjhtm?etfid={}.TW",
+            "https://www.moneydj.com/ETF/X/Basic/Basic0001.xdjhtm?etfid={}.TW",
+            "https://www.moneydj.com/etf/x/basic/basic0004.xdjhtm?etfid={}"]
+    行們 = [f"診斷時間 {dt.datetime.now(台北時區):%Y-%m-%d %H:%M}"]
+    for 代號 in 代號們:
+        for 網址 in 網址們:
+            u = 網址.format(代號)
+            try:
+                r = requests.get(u, headers=標頭, timeout=30)
+                r.encoding = r.apparent_encoding or "utf-8"
+                t = r.text
+                標題 = re.search(r"<title>(.*?)</title>", t, re.S)
+                字 = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", t))
+                行們.append(f"\n===== {u}\n狀態 {r.status_code}，長度 {len(t)}，標題 {標題.group(1).strip() if 標題 else '—'}")
+                for m in list(re.finditer("經理|管理費|保管|費用率|內扣", 字))[:5]:
+                    行們.append("  …" + 字[max(0, m.start() - 80):m.start() + 160])
+                if not re.search("經理|管理費|保管", 字):
+                    行們.append("  （找不到經理／管理費／保管）頁面開頭：" + 字[:300])
+            except Exception as e:
+                行們.append(f"\n===== {u}\n錯誤 {type(e).__name__} {str(e)[:150]}")
+    費用診斷檔.write_text("\n".join(行們) + "\n", encoding="utf-8")
+    print(f"費用診斷已存到 {費用診斷檔.name}")
+
+
 def 更新費用(代號們=None, 間隔天數=30, 抓=None):
     """fees.csv 裡「空白」或「上次自動抓超過 間隔天數」的列，自動補經理費、保管費；
     來源不是 MoneyDJ 的列（手動填的）一律不動。回傳 (更新筆數, 失敗代號們)。"""
@@ -764,6 +795,8 @@ def 更新費用(代號們=None, 間隔天數=30, 抓=None):
         time.sleep(0.5)
     表[費用欄].to_csv(費用檔, index=False)
     print(f"費用：更新 {更新} 檔，抓不到 {len(失敗)} 檔{('：' + '、'.join(失敗)) if 失敗 else ''}")
+    if 失敗 and 更新 == 0 and 抓 is 抓費用一檔:
+        費用診斷()
     return 更新, 失敗
 
 if __name__ == "__main__":
