@@ -552,3 +552,113 @@ def 產生PDF(資料):
              ("金額", "R")], 列們, [寬 * .24, 寬 * .22, 寬 * .08, 寬 * .12, 寬 * .12, 寬 * .1, 寬 * .12], 色們=色們, 列高=5.6)
 
     return bytes(pdf.output())
+
+
+# ---------- 明日續買預測（規則版，免費）----------
+# 研究（2026-11-10，7/21～11/09 共 75 個交易日）：今天被 2 檔以上加碼的股票，明天又被 2 檔以上加碼的機率約 29%（一般持股 5%），
+# 連 2 天都是就到 41%，所以「續買」是可以預測的；但這些股票隔天平均反而落後其他持股 0.3～0.7%，買進不等於會漲。
+def 個股買賣面板(變化):
+    """每天每檔股票：幾檔 ETF 加碼（新增＋加碼）、幾檔減碼（減碼＋出清）、扣申贖金額、含申贖金額、哪幾檔在買。
+    只留 ETF 資料夠齊的日子（當天有資料的 ETF 至少是中位數的一半）。"""
+    if 變化 is None or not len(變化):
+        return pd.DataFrame()
+    e = 變化[變化["code"].astype(str).str.fullmatch(r"\d{4}")].copy()
+    e["買"] = e["type"].isin(["新增", "加碼"])
+    e["賣"] = e["type"].isin(["減碼", "出清"])
+    數 = e.groupby("date")["etf"].nunique()
+    e = e[e["date"].isin(數[數 >= max(3, 數.median() * 0.5)].index)]
+    if e.empty:
+        return pd.DataFrame()
+    g = e.groupby(["date", "code"]).agg(買檔=("買", "sum"), 賣檔=("賣", "sum"), 主動=("adj_amount", "sum"),
+                                        含申贖=("amount", "sum"), 持有=("shares", lambda s: int((s > 0).sum())))
+    買ETF = e[e["買"]].groupby(["date", "code"])["etf"].apply(lambda s: "、".join(sorted(set(s))))
+    g["買進ETF"] = 買ETF.reindex(g.index).fillna("")
+    g = g.reset_index()
+    # 前幾天的加碼檔數用「日期 × 股票」寬表平移，沒持有的那天算 0
+    寬 = g.pivot(index="date", columns="code", values="買檔").fillna(0).sort_index()
+    前1, 前2 = 寬.shift(1), 寬.shift(2)
+    連 = pd.DataFrame(0, index=寬.index, columns=寬.columns)
+    for i, d in enumerate(寬.index):
+        連.loc[d] = np.where(寬.loc[d] >= 1, (連.iloc[i - 1] if i else 0) + 1, 0)
+    長 = lambda w, 名: w.stack().rename(名)
+    g = g.join(長(前1, "前日買檔"), on=["date", "code"]).join(長(前2, "前前日買檔"), on=["date", "code"]) \
+         .join(長(連, "連買天數"), on=["date", "code"])
+    g[["前日買檔", "前前日買檔", "連買天數"]] = g[["前日買檔", "前前日買檔", "連買天數"]].fillna(0)
+    g["近3日買檔"] = g["買檔"] + g["前日買檔"] + g["前前日買檔"]
+    g["續買分數"] = (g["買檔"] * 2 + g["前日買檔"] + g["前前日買檔"] * 0.5 - g["賣檔"] + (g["主動"] > 0)).round(1)
+    return g.sort_values(["date", "續買分數"], ascending=[True, False]).reset_index(drop=True)
+
+
+def 續買理由(r):
+    片 = []
+    if r["買檔"]:
+        片.append(f"今天 {int(r['買檔'])} 檔加碼")
+    if r["連買天數"] >= 2:
+        片.append(f"連 {int(r['連買天數'])} 天有人買")
+    elif r["前日買檔"]:
+        片.append(f"前一天 {int(r['前日買檔'])} 檔加碼")
+    if r["賣檔"]:
+        片.append(f"但有 {int(r['賣檔'])} 檔減碼")
+    if r["主動"] < 0 < r["含申贖"]:
+        片.append("扣掉申購其實是淨賣")
+    return "，".join(片)
+
+
+def 續買預測(面板, 筆數=20, 日期=None):
+    """最新一天（或指定日期）續買分數最高的股票：明天最可能繼續被主動式 ETF 加碼。"""
+    if 面板 is None or not len(面板):
+        return pd.DataFrame(), None
+    日期 = pd.Timestamp(日期) if 日期 is not None else 面板["date"].max()
+    t = 面板[(面板["date"] == 日期) & (面板["續買分數"] > 0)].head(筆數).copy()
+    t["理由"] = [續買理由(r) for _, r in t.iterrows()]
+    return t, 日期
+
+
+def 續買回測(面板, 行情, 前幾名=10):
+    """每天照續買分數取前 幾名，看隔一個交易日：①有沒有又被加碼（≥1 檔、≥2 檔）②股價表現（對同一天所有主動式 ETF 持股）。
+    行情要有 code、date、high、收盤、日報酬（指標表）。回傳 (彙總 dict, 每天明細, 每筆明細)。"""
+    from engine import 漲跌停價
+    if 面板 is None or not len(面板):
+        return {}, pd.DataFrame(), pd.DataFrame()
+    日們 = sorted(面板["date"].unique())
+    t = 行情.loc[行情["code"].str.fullmatch(r"\d{4}") & (行情["date"] >= 日們[0]), ["code", "date", "high", "收盤", "日報酬"]].copy()
+    t["前收"] = t["收盤"] / (1 + t["日報酬"])
+    t["盤中最高"] = (t["high"] / t["前收"] - 1) * 100
+    t["漲停價"] = t["前收"].map(lambda x: 漲跌停價(round(x, 2))[0])
+    t["碰漲停"] = t["high"] >= t["漲停價"] - 1e-6
+    t["隔日%"] = t["日報酬"] * 100
+    t = t[t["隔日%"].abs() < 11]
+    交易日 = pd.Index(sorted(t["date"].unique()))
+    次 = {}
+    for d in 日們:
+        i = 交易日.searchsorted(d, side="right")
+        if i < len(交易日):
+            次[d] = 交易日[i]
+    p = 面板[面板["持有"] > 0].copy()
+    p["隔日"] = p["date"].map(次)
+    p = p.dropna(subset=["隔日"])
+    p = p.merge(t.rename(columns={"date": "隔日"})[["code", "隔日", "隔日%", "盤中最高", "碰漲停"]], on=["code", "隔日"], how="inner")
+    # 隔日有沒有被加碼：隔日也在面板裡才算得出來（ETF 資料缺的日子不算）
+    有面板 = set(日們)
+    p = p[p["隔日"].isin(有面板)]
+    隔買 = 面板.set_index(["date", "code"])["買檔"]
+    p["隔日買檔"] = [隔買.get((d, c), 0) for d, c in zip(p["隔日"], p["code"])]
+    if p.empty:
+        return {}, pd.DataFrame(), pd.DataFrame()
+    p["超額%"] = p["隔日%"] - p.groupby("date")["隔日%"].transform("mean")
+    p["前名"] = p.groupby("date")["續買分數"].rank(ascending=False, method="first") <= 前幾名
+    名 = p[p["前名"] & (p["續買分數"] > 0)]
+    連2 = p[(p["買檔"] >= 2) & (p["前日買檔"] >= 2)]
+
+    def 組(s):
+        return {"筆數": len(s), "續買1": (s["隔日買檔"] >= 1).mean() * 100, "續買2": (s["隔日買檔"] >= 2).mean() * 100,
+                "隔日%": s["隔日%"].mean(), "超額%": s["超額%"].mean(), "贏%": (s["超額%"] > 0).mean() * 100,
+                "盤中最高": s["盤中最高"].mean(), "碰漲停%": s["碰漲停"].mean() * 100} if len(s) else {}
+    每天 = 名.groupby("date").agg(隔日=("隔日", "first"), 命中=("隔日買檔", lambda s: int((s >= 1).sum())), 檔數=("code", "size"),
+                                 平均超額=("超額%", "mean")).reset_index()
+    彙 = {"天數": int(名["date"].nunique()), "起": 名["date"].min(), "迄": 名["date"].max(), "前幾名": 前幾名,
+         "名單": 組(名), "全部": 組(p), "連2日2檔": 組(連2)}
+    if len(每天) >= 3:
+        x = 每天["平均超額"]
+        彙["超額t值"] = float(x.mean() / x.std() * np.sqrt(len(x))) if x.std() > 0 else np.nan
+    return 彙, 每天, p
