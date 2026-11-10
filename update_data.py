@@ -1084,6 +1084,34 @@ def 抓VIX長線():
     print(f"VIX 長線完成：{len(表)} 筆（{表['date'].min()}～{表['date'].max()}）")
 
 
+def 抓美股K線(範圍="2y"):
+    """費半、那斯達克的每日開高低收 → data/us_ohlc.csv（找未回補的跳空缺口用；date 是美股交易日）。"""
+    列們 = []
+    for 符號 in ("^SOX", "^IXIC"):
+        try:
+            r = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{requests.utils.quote(符號)}"
+                             f"?range={範圍}&interval=1d", headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+            結果 = r.json()["chart"]["result"][0]
+            時區 = 結果["meta"].get("gmtoffset", 0)
+            時間們 = 結果["timestamp"]
+            盤中 = 結果["meta"].get("currentTradingPeriod", {}).get("regular", {})
+            if 盤中 and 盤中.get("start", 0) <= time.time() < 盤中.get("end", 0) and 時間們[-1] >= 盤中["start"]:
+                時間們 = 時間們[:-1]  # 還沒收盤的最後一根先不存
+            q = 結果["indicators"]["quote"][0]
+            for i, 時 in enumerate(時間們):
+                if all(q[k][i] for k in ("open", "high", "low", "close")):
+                    列們.append({"date": dt.datetime.utcfromtimestamp(時 + 時區).strftime("%Y-%m-%d"), "symbol": 符號,
+                              "open": round(q["open"][i], 2), "high": round(q["high"][i], 2),
+                              "low": round(q["low"][i], 2), "close": round(q["close"][i], 2)})
+        except Exception as 錯誤:
+            print(f"美股K線 {符號} 失敗：{錯誤}")
+    if not 列們:
+        return
+    表 = pd.DataFrame(列們).drop_duplicates(["date", "symbol"], keep="last").sort_values(["symbol", "date"])
+    表.to_csv(資料夾 / "us_ohlc.csv", index=False)
+    print(f"美股K線完成：{len(表)} 筆")
+
+
 def 抓費半長線():
     """費半、S&P 500 從 1994 年起的每日收盤 → data/sox_long.csv（算費半距歷史高點的回撤、歷年大跌後表現）。
     us_daily.csv 只留 2 年，這個檔只放兩個指數，約 300KB。"""
@@ -1871,7 +1899,7 @@ def main():
     if not 參數.skip_latest:
         for 工作 in (抓分時, 抓興櫃, 抓基本面, 抓匯率, 抓處置注意, 抓借券, 抓法說會, 抓融資金額, 抓期貨未平倉, 抓小台散戶,
                      抓美股日線, 抓經濟行事曆, 抓美股財報, 抓指數K線, 抓指數長期, 抓選擇權, 抓新股申購, 抓外資持股, 抓當沖, 抓庫藏股, 抓可轉債, 抓公司簡介, 抓合約負債, 抓合約負債歷史,
-                     抓內部人轉讓, 抓興櫃推薦券商, 抓重大訊息, 抓美國數據, 抓美股資本支出, 抓費半長線, 抓VIX長線, 抓夜盤法人, 抓台指期價差, 抓期貨保證金, 抓0050成分):  # 這些出問題不影響主資料庫
+                     抓內部人轉讓, 抓興櫃推薦券商, 抓重大訊息, 抓美國數據, 抓美股資本支出, 抓美股K線, 抓費半長線, 抓VIX長線, 抓夜盤法人, 抓台指期價差, 抓期貨保證金, 抓0050成分):  # 這些出問題不影響主資料庫
             try:
                 工作()
             except Exception as 錯誤:
