@@ -69,16 +69,21 @@ def main():
     # 費用：網頁文字解析、只補空白與自動列，手動填的不動
     import tempfile
     import etf_data
-    經, 保 = etf_data.解析費用("<tr><td>管理費(%)</td><td>1.20%（200億以下）、1.00%</td></tr><td>保管費</td><td>0.035 %</td>")
+    經, 保, _ = etf_data.解析費用("<tr><td>管理費(%)</td><td>1.20%（200億以下）、1.00%</td></tr><td>保管費</td><td>0.035 %</td>")
     檢查("解析經理費", 經, 1.2)
     檢查("解析保管費", 保, 0.035)
+    頁 = "保管機構 彰化商業銀行&nbsp; 投資風格 配息頻率 季配 經理費(%) 1 殖利率(%) 6.59（11/11） 總管理費用(%) 1.67 (含 0.67 非管理費用) 經銷商"
+    經, 保, 總 = etf_data.解析費用(頁)
+    檢查("MoneyDJ 經理費", 經, 1.0)
+    檢查("MoneyDJ 總費用率", 總, 1.67)
+    檢查("MoneyDJ 保管及其他", 保, 0.67)
     if etf_data.解析費用("沒有費用資料")[0] is not None:
         錯誤.append("找不到費用時應回 None")
     with tempfile.TemporaryDirectory() as 暫:
         etf_data.費用檔 = Path(暫) / "fees.csv"
         pd.DataFrame({"etf": ["00981A", "00985A"], "經理費": [9.9, None], "保管費": [0.1, None],
                       "總費用率": [None, None], "來源": ["公開說明書", "待填"], "更新日": ["2026-11-01", None]}).to_csv(etf_data.費用檔, index=False)
-        etf_data.更新費用(["00981A", "00985A", "00999A"], 抓=lambda c: (0.45, 0.03) if c == "00985A" else (None, None))
+        etf_data.更新費用(["00981A", "00985A", "00999A"], 抓=lambda c: (0.45, 0.03, 0.88) if c == "00985A" else (None, None, None))
         f = pd.read_csv(etf_data.費用檔, dtype={"etf": str}).set_index("etf")
         檢查("手動填的不動", f.at["00981A", "經理費"], 9.9)
         檢查("空白自動補", f.at["00985A", "經理費"], 0.45)
