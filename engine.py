@@ -9734,3 +9734,160 @@ def 指數說法查核(影片們, 容許=0.3):
                 衝.append({"指數": 指, "交易日": 日, "資料收盤": g["資料收盤"].iloc[0],
                          "各頻道說法": "；".join(f"{r.頻道} {r.說的收盤:,.0f}" for r in g.itertuples())})
     return 表, pd.DataFrame(衝)
+
+
+# ========== 2026-11-11 網紅摘要建議：降評利空測試、連板統計、無量上漲、族群連續流入、台幣×外資警示 ==========
+def _交易日位置(日們, 日):
+    """事件日對到交易日（非交易日用下一個交易日），沒有就回傳 None。"""
+    位 = 日們.searchsorted(pd.Timestamp(日), side="left")
+    return None if 位 >= len(日們) else int(位)
+
+
+def 降評利空測試(報告們, 指標, 下修門檻=-5.0):
+    """外資／券商下修目標價（比前次低 門檻% 以上）當天，股價有沒有「利空不跌」。
+    過關＝開低走高（開盤低於昨收、收盤高於開盤）或收盤不低於昨收；不過關＝收盤比昨收低。
+    回傳 (事件表, 摘要表)：摘要比較過關與不過關事件之後 5／20 日報酬。指標需含 open、收盤、還原價、date、代號。"""
+    if not len(報告們) or 指標 is None or not len(指標):
+        return pd.DataFrame(), pd.DataFrame()
+    價 = 指標[["date", "代號", "open", "收盤", "還原價"]]
+    列們 = []
+    for x in 報告們:
+        目, 前 = _數(x.get("目標價")), _數(x.get("前次目標價"))
+        if np.isnan(目) or np.isnan(前) or 前 <= 0 or (目 / 前 - 1) * 100 > 下修門檻:
+            continue
+        列們.append({"日期": pd.Timestamp(x.get("日期")), "代號": str(x.get("代號")), "名稱": x.get("名稱"), "券商": x.get("券商"),
+                    "目標價變動%": round((目 / 前 - 1) * 100, 1)})
+    if not 列們:
+        return pd.DataFrame(), pd.DataFrame()
+    事 = pd.DataFrame(列們).drop_duplicates(["日期", "代號", "券商"])
+    分 = {c: g.sort_values("date").reset_index(drop=True) for c, g in 價.groupby("代號")}
+    結 = []
+    for r in 事.itertuples():
+        g = 分.get(r.代號)
+        if g is None or len(g) < 3:
+            continue
+        位 = _交易日位置(pd.DatetimeIndex(g["date"]), r.日期)
+        if 位 is None or 位 < 1:
+            continue
+        昨, 開, 收 = float(g.loc[位 - 1, "收盤"]), float(g.loc[位, "open"]), float(g.loc[位, "收盤"])
+        過 = (開 < 昨 and 收 > 開) or 收 >= 昨
+        列 = r._asdict()
+        列.pop("Index", None)
+        列.update({"交易日": g.loc[位, "date"], "開盤%": round((開 / 昨 - 1) * 100, 2), "收盤%": round((收 / 昨 - 1) * 100, 2),
+                  "利空測試": "過關" if 過 else "沒過"})
+        基 = float(g.loc[位, "還原價"])
+        for n in (5, 20):
+            列[f"{n}日後%"] = round((float(g.loc[位 + n, "還原價"]) / 基 - 1) * 100, 2) if 位 + n < len(g) else np.nan
+        結.append(列)
+    if not 結:
+        return pd.DataFrame(), pd.DataFrame()
+    表 = pd.DataFrame(結).sort_values("交易日", ascending=False).reset_index(drop=True)
+    摘 = []
+    for 名, 遮 in [("全部降評", 表["利空測試"].notna())] + [(f"利空測試{k}", 表["利空測試"] == k) for k in ("過關", "沒過")]:
+        g = 表[遮]
+        摘.append({"條件": 名, "件數": int(len(g)), "5日後平均%": round(float(g["5日後%"].mean()), 2) if g["5日後%"].notna().any() else np.nan,
+                  "20日後平均%": round(float(g["20日後%"].mean()), 2) if g["20日後%"].notna().any() else np.nan,
+                  "20日樣本": int(g["20日後%"].notna().sum())})
+    return 表, pd.DataFrame(摘)
+
+
+def 連板統計(指標, 連板們=(2, 3), 漲停門檻=0.095):
+    """連續漲停（收盤接近漲停：日報酬 ≥ 9.5% 且收在當天最高）的股票。
+    回傳 (今日連板, 統計)：今日連板有代號、名稱、連板天數、產業；統計是歷史上連板 N 天之後隔天、5 天的報酬，對照所有一般日子。"""
+    if 指標 is None or not len(指標):
+        return pd.DataFrame(), pd.DataFrame()
+    t = 指標[指標["代號"].str.fullmatch(r"[1-9]\d{3}")].sort_values(["代號", "date"]).copy()
+    t["板"] = (t["日報酬"] >= 漲停門檻) & (t["收盤"] >= t["high"] - 1e-9)
+    群 = t.groupby("代號", sort=False)
+    t["連板"] = _連續天數(t["板"], t["代號"])
+    t["隔日%"] = (群["還原價"].shift(-1) / t["還原價"] - 1) * 100
+    t["五日%"] = (群["還原價"].shift(-5) / t["還原價"] - 1) * 100
+    最新 = t["date"].max()
+    今 = t[(t["date"] == 最新) & (t["連板"] >= 2)].copy()
+    股 = _股本表()
+    今["產業"] = 今["代號"].map(股["產業"])
+    今 = 今.sort_values("連板", ascending=False)[["代號", "名稱", "連板", "產業", "收盤", "漲跌幅"]].reset_index(drop=True)
+    列們 = [{"條件": "全部日子", "次數": int(t["隔日%"].notna().sum()), "隔日平均%": round(float(t["隔日%"].mean()), 2),
+            "隔日上漲%": round(float((t["隔日%"].dropna() > 0).mean() * 100)), "5日平均%": round(float(t["五日%"].mean()), 2)}]
+    for n in 連板們:
+        g = t[t["連板"] == n]
+        列們.append({"條件": f"連板第 {n} 天收盤", "次數": int(g["隔日%"].notna().sum()),
+                    "隔日平均%": round(float(g["隔日%"].mean()), 2) if g["隔日%"].notna().any() else np.nan,
+                    "隔日上漲%": round(float((g["隔日%"].dropna() > 0).mean() * 100)) if g["隔日%"].notna().any() else np.nan,
+                    "5日平均%": round(float(g["五日%"].mean()), 2) if g["五日%"].notna().any() else np.nan})
+    return 今, pd.DataFrame(列們)
+
+
+def 無量上漲回測(K, 指標, 漲幅門檻=2.0, 天們=(5, 20)):
+    """大盤單日大漲 漲幅門檻% 以上時，成交值比 20 日均量小（無量）或大（有量），之後 5／20 日報酬。
+    成交值用 指標 全市場加總（只有近一年多，樣本少）。K：大盤 K 線（date, close）。回傳 DataFrame。"""
+    if K is None or 指標 is None or not len(K) or not len(指標):
+        return pd.DataFrame()
+    量 = 指標.groupby("date")["value"].sum().sort_index()
+    比 = 量 / 量.rolling(20, min_periods=10).mean().shift(1)
+    收 = K.set_index("date")["close"].sort_index()
+    漲 = (收.pct_change() * 100).reindex(比.index)
+    列們 = []
+    大 = 漲 >= 漲幅門檻
+    for 名, 遮 in [("全部日子", 漲.notna() & 比.notna()), (f"大漲 {漲幅門檻:g}% 以上（全部）", 大 & 比.notna()),
+                  (f"大漲且無量（量比 < 1）", 大 & (比 < 1)), (f"大漲且有量（量比 ≥ 1）", 大 & (比 >= 1))]:
+        列 = {"條件": 名, "次數": int(遮.sum())}
+        for n in 天們:
+            後 = ((收.shift(-n) / 收 - 1) * 100).reindex(比.index)
+            v = 後[遮].dropna()
+            列[f"{n}日後平均%"] = round(float(v.mean()), 2) if len(v) else np.nan
+            列[f"{n}日後上漲%"] = round(float((v > 0).mean() * 100)) if len(v) else np.nan
+            列[f"{n}日樣本"] = int(len(v))
+        列們.append(列)
+    return pd.DataFrame(列們)
+
+
+def 族群連續流入(指標, 分類="產業", 最少=3):
+    """族群「資金流入日」＝當天族群上漲，且成交值占全市場比例高於前 20 日平均；回傳連續流入 最少 天以上的族群（含連續天數）。
+    對照網紅「連三天資金流入可抱小波段、熱度退了就走」。"""
+    if 指標 is None or not len(指標):
+        return pd.DataFrame()
+    報 = 族群日報酬(指標, 分類)
+    t = 指標[["date", "代號", "value"]].copy()
+    if 分類 == "概念股":
+        t = t.merge(讀取概念().rename(columns={"code": "代號", "concept": "族群"}), on="代號")
+    else:
+        股 = _股本表()
+        t["族群"] = t["代號"].map(股["產業"])
+        t = t[~t["代號"].str.startswith("0") & (t["族群"].fillna("") != "")]
+    總 = 指標.groupby("date")["value"].sum()
+    占 = (t.groupby(["date", "族群"])["value"].sum().unstack().div(總, axis=0))
+    占 = 占.reindex(報.index)
+    流入 = (報 > 0) & (占 > 占.rolling(20, min_periods=10).mean().shift(1))
+    列們 = []
+    for 族 in 流入.columns:
+        s = 流入[族].to_numpy()
+        n = 0
+        for v in s[::-1]:
+            if not v:
+                break
+            n += 1
+        if n >= 最少:
+            列們.append({"族群": 族, "連續流入天數": n, "今日漲跌%": round(float(報[族].iloc[-1]), 2),
+                        "成交值占比%": round(float(占[族].iloc[-1] * 100), 1)})
+    return pd.DataFrame(列們).sort_values("連續流入天數", ascending=False).reset_index(drop=True) if 列們 else pd.DataFrame()
+
+
+def 台幣外資警示(匯率, 指標, 連續=2):
+    """新台幣連 連續 天貶值（美元兌台幣上升）且外資賣超 → 🟠；連續升值且外資買超 → 🟢；其餘 ⚪。
+    回傳 dict（燈、說明、匯率、外資億）；資料不足回傳 None。匯率：data/fx.csv（date, usdtwd）。"""
+    if 匯率 is None or len(匯率) < 連續 + 1 or 指標 is None or "外資買超" not in 指標.columns:
+        return None
+    匯 = 匯率.sort_values("date")["usdtwd"].astype(float).tail(連續 + 1).to_numpy()
+    差 = np.diff(匯)
+    貶, 升 = bool((差 > 0).all()), bool((差 < 0).all())
+    最新 = 指標["date"].max()
+    今 = 指標[指標["date"] == 最新]
+    外 = float((今["外資買超"] * 1000 * 今["收盤"]).sum() / 1e8)
+    if 貶 and 外 < 0:
+        燈, 說 = "🟠", f"新台幣連 {連續} 天貶值，外資同日賣超約 {abs(外):,.0f} 億：資金外流跡象，反彈延續性要打折。"
+    elif 升 and 外 > 0:
+        燈, 說 = "🟢", f"新台幣連 {連續} 天升值，外資同日買超約 {外:,.0f} 億：外資沒有大舉匯出。"
+    else:
+        燈, 說 = "⚪", f"匯率與外資沒有同向（近 {連續} 天匯率變動 {匯[-1] - 匯[0]:+.2f}，外資{'買' if 外 >= 0 else '賣'}超約 {abs(外):,.0f} 億）。"
+    return {"燈": 燈, "說明": 說, "匯率": float(匯[-1]), "外資億": 外, "日期": 最新}

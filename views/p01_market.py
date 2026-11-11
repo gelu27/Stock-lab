@@ -211,9 +211,32 @@ def 族群熱力圖():
         族群樹圖(族群, 個股, 界, 大小)
     族群排行(族群, 期間, 來源)
     族群輪動區(來源)
+    連板與流入區(分類)
     if 分類 == "概念股":
         st.caption("概念股是自己整理的題材清單（data/concepts.csv，約 25 個題材），一檔股票可以同時屬於好幾個概念；"
                    "想增刪可以直接在 GitHub 編輯這個檔案。")
+
+
+def 連板與流入區(分類):
+    """連續漲停名單與歷史統計、族群連續資金流入天數（短線追強、老二老三補漲用）。"""
+    try:
+        今連, 連統 = engine.連板統計(指標)
+        流 = engine.族群連續流入(指標, 分類)
+    except Exception:
+        return
+    with st.expander(f"🔥 連續漲停與連續資金流入（連板 {len(今連)} 檔、連續流入族群 {len(流)} 個）", expanded=False):
+        if len(今連):
+            st.markdown("**今天連續漲停（2 天以上）**")
+            表格(今連, hide_index=True, width="stretch", height=min(360, 38 + 35 * len(今連)),
+                 column_config={"漲跌幅": st.column_config.NumberColumn(format="%+.2f%%")})
+        if len(連統):
+            st.markdown("**歷史上連板之後隔天、5 天的報酬**")
+            表格(連統, hide_index=True, width="stretch")
+        if len(流):
+            st.markdown(f"**連續資金流入 3 天以上的{分類}**")
+            表格(流, hide_index=True, width="stretch")
+        st.caption("連板＝收盤接近漲停（漲幅 9.5% 以上且收在最高）；統計用近一年多資料的一般股票，不含 ETF，沒有扣手續費，連板股有流動性風險（可能鎖到買不到）。"
+                   "資金流入日＝族群當天上漲且成交值占全市場比例高於前 20 日平均。看的是熱度，連續流入 3 天以上之後熱度退了就要出場。")
 
 
 def 避風港區():
@@ -2504,6 +2527,12 @@ def 資金水位資料(版本鍵):
 
 def 資金水位區():
     段落("LEVEL // 市場健康分數與建議持股水位")
+    try:
+        匯警 = engine.台幣外資警示(engine.讀取匯率(), 指標)
+    except Exception:
+        匯警 = None
+    if 匯警:
+        st.markdown(f'<div class="verdict sub">{匯警["燈"]} <b>新台幣×外資</b>：{匯警["說明"]}（美元兌台幣 {匯警["匯率"]:.2f}）</div>', unsafe_allow_html=True)
     日, 回 = 資金水位資料(_版本)
     if 日 is None or 日.empty:
         st.caption("資料不足，暫時算不出市場健康分數。")
