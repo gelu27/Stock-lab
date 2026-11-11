@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths-ignore: ["data/**"]   # 每天的資料更新不用跑
   pull_request:
+    branches: [main]   # ai-reports 分支的開放 PR 每次寫入來訪紀錄都會觸發，白跑約 4 分鐘
   workflow_dispatch:
 
 jobs:
