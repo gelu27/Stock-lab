@@ -86,6 +86,19 @@ def 券商報告總覽():
         段落("BIG CUT // 目標價大砍 30% 以上")
         表格(砍, hide_index=True, width="stretch", column_config={"日期": st.column_config.DateColumn(format="YYYY-MM-DD")})
         st.caption("目標價比前次下修 30% 以上。多半是券商把本益比砍低（成長放緩的估值調整），不一定是獲利變差；看「原因」欄，再回頭看個股頁的獲利預估有沒有跟著下修。")
+    try:
+        降表, 降摘 = engine.降評利空測試(報告們, 指標)
+    except Exception:
+        降表, 降摘 = pd.DataFrame(), pd.DataFrame()
+    if len(降表):
+        段落("BAD NEWS TEST // 降評當天「利空不跌」的股票")
+        表格(降摘, hide_index=True, width="stretch")
+        with st.expander(f"降評事件明細（{len(降表)} 筆，近一年資料）"):
+            表格(降表, hide_index=True, width="stretch", column_config={
+                "日期": st.column_config.DateColumn(format="YYYY-MM-DD"), "交易日": st.column_config.DateColumn(format="YYYY-MM-DD")})
+        st.caption("目標價比前次下修 5% 以上的報告當天：開低走高或收盤不低於昨收算「過關」（利空測試過關），收盤比昨收低算「沒過」。"
+                   "常見說法是利空出來股價不破低，代表壞消息已反映；這裡看之後 5、20 日是否真的比較好。"
+                   "報告多集中在最近幾週，20 日後樣本還很少，且正逢 11 月初大跌，只能當參考。")
     段落("LIST // 全部報告")
     表 = engine.加潛在空間(表, dict(zip(今日["代號"].astype(str), 今日["收盤"])))
     表格(表.drop(columns=["報告收盤價"]), hide_index=True, width="stretch",

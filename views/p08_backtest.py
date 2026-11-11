@@ -476,6 +476,16 @@ else:
                "「樣本」欄不到 10 次的結果只能當參考；多位評論者用「外資空單 10 萬口」判斷反彈真假，這裡看資料撐不撐得住。")
 
 
+段落("QUIET RALLY // 大盤大漲但成交量縮：是好事還是假反彈？")
+_無 = engine.無量上漲回測(_K大, 指標)
+if not len(_無):
+    st.caption("指數或成交值資料還不夠。")
+else:
+    表格(_無, hide_index=True, width="stretch")
+    st.caption("加權單日漲 2% 以上，依當天全市場成交值是否小於前 20 日均量分成無量與有量，看之後 5、20 日報酬。"
+               "常見說法是「上漲沒有量，代表籌碼乾淨」。成交值只有近一年多的資料，「次數」不到 20 次的只能當參考。")
+
+
 段落("VOLATILITY // 標普單日重挫之後：未來 20 天波動是不是比平常大？")
 _標 = engine.資料夾 / "sox_long.csv"
 _標價 = pd.read_csv(_標, parse_dates=["date"]) if _標.exists() else pd.DataFrame()
