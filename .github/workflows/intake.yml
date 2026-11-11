@@ -2,9 +2,11 @@ name: 自動收件（網紅影片＋券商報告）
 
 on:
   # 錯開整點；重跑安全（處理過的影片／檔案會記在 ai-reports 的 intake_seen.json）
-  schedule:
-    - cron: "27 13 * * 1-5"   # 台灣時間 21:27
-    - cron: "52 14 * * 1-5"   # 22:52 補收晚上才傳的檔案
+  # 2026-11-11 暫停自動排程：免費額度撐不住長影片、YouTube 又擋字幕（見 auto_intake.py 說明）。
+  # 找到可行的辦法後，把下面兩行還原即可恢復每個交易日 21:27、22:52 自動執行：
+  #   schedule:
+  #     - cron: "27 13 * * 1-5"
+  #     - cron: "52 14 * * 1-5"
   workflow_dispatch:
     inputs:
       mode:
