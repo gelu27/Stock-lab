@@ -23,6 +23,7 @@ import os
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import requests
 
@@ -815,11 +816,11 @@ def 評分摘要(持股, 自選們=()):
 高分名單檔 = "score80_list.json"
 
 
-def 高分名單變化(分, 日期, 存檔, 門檻=高分門檻, 庫存們=(), 自選們=(), 全=None):
+def 高分名單變化(分, 日期, 存檔, 門檻=高分門檻, 庫存們=(), 自選們=(), 全=None, 價=None, 價說明="收盤"):
     """總分 ≥ 門檻 的名單，跟「前一交易日推播的名單」比對新增與剔除。
     存檔 = {"日期", "名單": {代號: [名稱, 總分]}, "前一日": {...}}；同一天重跑時跟「前一日」比，不會把自己當成昨天。
     沒有存檔（第一次跑）就用評分的「較昨日」推算昨天分數。分＝有入選資格的股票，全＝全部（查剔除股現在幾分）。
-    回傳 (訊息行們, 新存檔)。"""
+    價＝{代號: (股價, 漲跌幅%)}，沒給就用評分表的收盤、漲跌幅。回傳 (訊息行們, 新存檔)。"""
     日 = f"{pd.Timestamp(日期):%Y-%m-%d}"
     今 = 分[分["總分"] >= 門檻].sort_values("總分", ascending=False)
     今名單 = {c: [str(r["名稱"]), round(float(r["總分"]), 1)] for c, r in 今.iterrows()}
@@ -838,25 +839,60 @@ def 高分名單變化(分, 日期, 存檔, 門檻=高分門檻, 庫存們=(), �
     新增 = [c for c in 今名單 if c not in 前名單]
     剔除 = sorted((c for c in 前名單 if c not in 今名單), key=lambda c: -前名單[c][1])
     比對 = f"（比 {前日[5:].replace('-', '/')}）" if 前日 else "（比前一交易日）"
-    行們 = ["", f"🏅 {門檻} 分以上 {len(今名單)} 檔"]
-    if 今名單:
-        行們.append("、".join(f"{標(c)}{c} {v[0]} {v[1]:.1f}" for c, v in 今名單.items()))
+    表 = 分 if 全 is None else 全
+    價 = dict(價 or {})
+    for c in list(今名單) + 剔除:
+        if c not in 價 and c in 表.index and "收盤" in 表.columns:
+            價[c] = (表.at[c, "收盤"], 表.at[c, "漲跌幅"] if "漲跌幅" in 表.columns else np.nan)
+    def 價字(c):
+        p, f = 價.get(c, (np.nan, np.nan))
+        if pd.isna(p):
+            return ""
+        return f"｜{p:,.2f}" + (f" {符號(f)}{abs(f):.2f}%" if pd.notna(f) else "")
+    行們 = ["", f"🏅 {門檻} 分以上 {len(今名單)} 檔（股價：{價說明}）"]
+    行們 += [f"{標(c)}{c} {v[0]} {v[1]:.1f}分{價字(c)}" for c, v in 今名單.items()]
     行們.append(f"🟢 新增 {len(新增)} 檔{比對}" + ("：" + "、".join(
-        f"{標(c)}{今名單[c][0]} {今名單[c][1]:.1f}" for c in 新增) if 新增 else ""))
+        f"{標(c)}{今名單[c][0]}" for c in 新增) if 新增 else ""))
     def 剔(c):
-        現 = (分 if 全 is None else 全)["總分"].get(c)
-        return f"{標(c)}{前名單[c][0]} {前名單[c][1]:.1f}→" + (f"{現:.1f}" if pd.notna(現) else "無資料")
-    行們.append(f"🔴 剔除 {len(剔除)} 檔{比對}" + ("：" + "、".join(剔(c) for c in 剔除) if 剔除 else ""))
+        現 = 表["總分"].get(c)
+        return (f"{標(c)}{c} {前名單[c][0]} {前名單[c][1]:.1f}→" + (f"{現:.1f}分" if pd.notna(現) else "無資料")
+                + 價字(c))
+    行們.append(f"🔴 剔除 {len(剔除)} 檔{比對}" + ("：" if 剔除 else ""))
+    行們 += [剔(c) for c in 剔除]
     新存檔 = {"日期": 日, "門檻": 門檻, "名單": 今名單}
     if 前 is not None:
         新存檔["前一日"] = {"日期": 前.get("日期", ""), "名單": 前.get("名單", {})}
     return 行們, 新存檔
 
 
+def 即時價們(分, 代號們):
+    """證交所即時報價（延遲約 5～20 秒；收盤後就是收盤價）→ ({代號: (股價, 漲跌幅%)}, 說明)。抓不到就回空的，改用收盤。"""
+    代號們 = list(dict.fromkeys(c for c in 代號們 if c))
+    if not 代號們:
+        return {}, "收盤"
+    try:
+        import engine
+        市場 = 分["上市櫃"].to_dict() if "上市櫃" in 分.columns else {}
+        即 = engine.即時報價(代號們, 市場).dropna(subset=["close"])
+    except Exception as e:
+        print("即時報價抓不到，改用收盤價：", repr(e))
+        return {}, "收盤"
+    if 即.empty:
+        return {}, "收盤"
+    昨 = 即["close"] - 即["change"]
+    即 = 即.assign(幅=(即["change"] / 昨 * 100).where(昨 > 0))
+    價 = {r["code"]: (r["close"], r["幅"]) for _, r in 即.iterrows()}
+    時 = 即["time"].dropna().max() if "time" in 即 else None
+    日 = 即["date"].dropna().max() if "date" in 即 else None
+    說明 = "即時報價" + (f" {日:%m/%d}" if pd.notna(日) else "") + (f" {str(時)[:5]}" if 時 else "")
+    return 價, 說明
+
+
 def 八十分名單(可, 全, 庫存們, 自選們, 日期):
     存檔, sha = 讀設定(高分名單檔)
+    價, 說明 = 即時價們(全, 全.index[全["總分"] >= 高分門檻].tolist() + list((存檔 or {}).get("名單", {})))
     行們, 新存檔 = 高分名單變化(可, 日期 if 日期 is not None else dt.date.today(), 存檔 or {},
-                       庫存們=set(庫存們), 自選們=set(自選們), 全=全)
+                       庫存們=set(庫存們), 自選們=set(自選們), 全=全, 價=價, 價說明=說明)
     try:
         寫設定(高分名單檔, 新存檔, sha)
     except Exception as e:
