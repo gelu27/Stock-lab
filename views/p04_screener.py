@@ -81,6 +81,24 @@ def 券商報告總覽():
         with st.expander(f"🔍 目標價變動拆解（{len(拆)} 份，其中 {拆['倍數變動%'].notna().sum()} 份拆得出倍數）"):
             表格(拆, hide_index=True, width="stretch", column_config={"日期": st.column_config.DateColumn(format="YYYY-MM-DD")})
             st.caption("目標價＝倍數 × EPS。主要是倍數變的上修，代表券商在追估值，不是獲利變好。")
+    砍 = engine.目標價大砍(拆)
+    if len(砍):
+        段落("BIG CUT // 目標價大砍 30% 以上")
+        表格(砍, hide_index=True, width="stretch", column_config={"日期": st.column_config.DateColumn(format="YYYY-MM-DD")})
+        st.caption("目標價比前次下修 30% 以上。多半是券商把本益比砍低（成長放緩的估值調整），不一定是獲利變差；看「原因」欄，再回頭看個股頁的獲利預估有沒有跟著下修。")
+    try:
+        降表, 降摘 = engine.降評利空測試(報告們, 指標)
+    except Exception:
+        降表, 降摘 = pd.DataFrame(), pd.DataFrame()
+    if len(降表):
+        段落("BAD NEWS TEST // 降評當天「利空不跌」的股票")
+        表格(降摘, hide_index=True, width="stretch")
+        with st.expander(f"降評事件明細（{len(降表)} 筆，近一年資料）"):
+            表格(降表, hide_index=True, width="stretch", column_config={
+                "日期": st.column_config.DateColumn(format="YYYY-MM-DD"), "交易日": st.column_config.DateColumn(format="YYYY-MM-DD")})
+        st.caption("目標價比前次下修 5% 以上的報告當天：開低走高或收盤不低於昨收算「過關」（利空測試過關），收盤比昨收低算「沒過」。"
+                   "常見說法是利空出來股價不破低，代表壞消息已反映；這裡看之後 5、20 日是否真的比較好。"
+                   "報告多集中在最近幾週，20 日後樣本還很少，且正逢 11 月初大跌，只能當參考。")
     段落("LIST // 全部報告")
     表 = engine.加潛在空間(表, dict(zip(今日["代號"].astype(str), 今日["收盤"])))
     表格(表.drop(columns=["報告收盤價"]), hide_index=True, width="stretch",
@@ -171,6 +189,14 @@ def 網紅說法總覽():
              column_config={"理由相似度": st.column_config.NumberColumn(format="percent")})
         st.caption("前後 1 天內兩個不同頻道點名 3 檔以上相同股票、理由句子又很像（兩字一組重疊 55% 以上），"
                    "可能是同一支影片整理兩次，或 Gemini 把兩支影片混在一起。這種在「被多個頻道點名」裡等於只算一次，要回去看原影片確認。")
+    指表, 指衝 = engine.指數說法查核(影片們)
+    if len(指表) and ((指表["判定"] == "不符").any() or len(指衝)):
+        段落("NUMBERS // 指數收盤數字對不對")
+        表格(指表[指表["判定"] == "不符"], hide_index=True, width="stretch")
+        if len(指衝):
+            表格(指衝, hide_index=True, width="stretch")
+        st.caption("摘要裡寫的指數收盤價對 data 查核，差距超過 0.3% 標不符；同一天不同頻道說法不一致也列出來。以網站資料為準，"
+                   "常見原因是語音辨識把數字聽錯，或摘要混到別支影片。")
     段落("FLAGS // 紅旗：哪些說法要打折")
     for v in 影片們:
         旗 = v.get("紅旗") or []
