@@ -1,0 +1,30 @@
+name: 網紅新片提醒
+
+# 看頻道 RSS 有沒有新影片，有就傳 LINE（連結＋可複製的 Gemini 整理指令）。不用 Gemini、不花額度。
+# 頻道清單在 ai-reports 分支的 video_sources.json；每支只提醒一次（記在 intake_seen.json 的「已通知」）。
+on:
+  schedule:
+    - cron: "11 13 * * *"   # 台灣時間每天 21:11
+    - cron: "41 2 * * *"    # 台灣時間每天 10:41（早上先收一次昨晚的片）
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency: intake
+
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pandas numpy requests pyarrow
+      - run: python -u auto_intake.py remind
+        env:
+          LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
