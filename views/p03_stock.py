@@ -1868,6 +1868,15 @@ with 分頁[4], 區塊防護("AI 分析"):
                 摘要 += (f"\n\n上次網站 AI 報告（{上次['時間'][:10]}，當時收盤 {上次.get('收盤')}）：看法 {卡.get('看法')}、"
                        f"合理價 {卡.get('目標價合理')}、評價方法 {卡.get('評價方法')}、今年 EPS {卡.get('今年EPS')}、明年 EPS {卡.get('明年EPS')}、"
                        f"看錯條件 {卡.get('看錯條件')}")
+            try:  # 回饋循環：過去報告對答案、AI 整體成績、券商過去紀錄
+                import feedback
+                回饋 = feedback.讀取回饋()
+                回 = [x for x in (feedback.個股AI回顧(紀錄們, 個股價格(代號)), feedback.AI報告整體文字(回饋),
+                                 feedback.券商紀錄文字(回饋.get("券商"), [x.get("券商") for x in 全券])) if x]
+                if 回:
+                    摘要 += "\n\n" + "\n\n".join(回)
+            except Exception as 錯:
+                print("回饋摘要失敗：", repr(錯))
             天數 = (pd.Timestamp.now(tz="Asia/Taipei").tz_localize(None).normalize()
                     - pd.Timestamp(上次["時間"][:10])).days if 上次 else None
             過久 = int(設定.get("AI_STALE_DAYS", 7))
@@ -1913,7 +1922,7 @@ with 分頁[4], 區塊防護("AI 分析"):
                             st.session_state.pop("只貼json確認", None)
                             新 = {"時間": pd.Timestamp.now(tz="Asia/Taipei").strftime("%Y-%m-%d %H:%M"),
                                  "資料日期": 今天, "收盤": float(r["收盤"]), "引擎": 來源, "模型": "手動貼上",
-                                 "內容": 內容.strip(), "來源": []}
+                                 "內容": 內容.strip(), "來源": [], "提示版本": engine.個股提示版本()}
                             try:
                                 永久 = engine.儲存AI紀錄(代號, 新, 設定)
                                 st.success("已存檔" + ("（GitHub 永久保存）" if 永久 else "（暫存在網站上）") + "，下面的卡片已更新。")
@@ -1973,7 +1982,7 @@ with 分頁[4], 區塊防護("AI 分析"):
                             用量[今天] = 用量.get(今天, 0) + 1
                             新 = {"時間": pd.Timestamp.now(tz="Asia/Taipei").strftime("%Y-%m-%d %H:%M"),
                                  "資料日期": 今天, "收盤": float(r["收盤"]), "引擎": 引擎, "模型": 模型,
-                                 "內容": 文字, "來源": 來源}
+                                 "內容": 文字, "來源": 來源, "提示版本": engine.個股提示版本()}
                             try:
                                 永久 = engine.儲存AI紀錄(代號, 新, 設定)
                             except Exception as 錯:

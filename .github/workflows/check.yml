@@ -58,3 +58,5 @@ jobs:
         run: python tests/test_market_views.py
       - name: LINE 80 分以上名單（新增／剔除比對）
         run: python tests/test_score80.py
+      - name: 回饋循環（錯誤本、券商紀錄、規則體檢、週報自我檢討）
+        run: python tests/test_feedback.py

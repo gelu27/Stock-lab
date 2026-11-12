@@ -110,6 +110,76 @@ else:
                "AI 目標價＝報告裡的「合理目標價」，距目標價% ＝ 目標價比現在股價高（紅）或低（綠）多少。"
                "舊版報告沒有目標價，到個股的「🤖 AI 分析」分頁打開一次就會自動補上。點一下股票可到個股查詢。")
 
+import feedback as _回饋模組
+_回饋 = _回饋模組.讀取回饋()
+段落("FEEDBACK // 資料累積進度")
+if not _回饋:
+    st.info("每天收盤資料更新後會自動計算（data/feedback.json），明天起這裡就會有數字。")
+else:
+    _進 = pd.DataFrame(_回饋.get("進度", []))
+    if len(_進):
+        表格(_進[["記分板", "狀態", "樣本", "門檻", "預估", "說明"]].rename(columns={"預估": "預估可參考"}),
+             hide_index=True, width="stretch")
+    st.caption(f"計算日 {_回饋.get('計算日')}。語言模型不會自己學習，網站變準靠的是：累積樣本 → 對答案 → 把說錯的寫回提示（AI 錯誤本）。"
+               "樣本到門檻前的命中率只當參考；預估日期是照目前累積速度推算。")
+    _券 = pd.DataFrame.from_dict(_回饋.get("券商") or {}, orient="index")
+    if len(_券):
+        with st.expander(f"券商過去紀錄（{len(_券)} 家，報告後 20／60 日跑贏加權沒）"):
+            表格(_券, width="stretch")
+            st.caption("說對＝看多後超額報酬 > 0、看空後 < 0（中性不算）；超額＝個股漲跌扣掉同期加權。"
+                       "達標率要等 6 個月到期才有。這張表也會餵給個股 AI，紀錄差或樣本少的券商要打折。")
+    _網 = pd.DataFrame.from_dict(_回饋.get("網紅") or {}, orient="index")
+    if len(_網):
+        with st.expander(f"網紅記分板（{len(_網)} 個頻道，20 日後對答案）"):
+            表格(_網, width="stretch")
+
+段落("RULES // 規則體檢")
+_體 = _回饋模組.讀取規則體檢().get("歷史", [])
+if not _體:
+    st.info("每月重算一次（update.yml），第一次算完就會出現。")
+else:
+    _新 = pd.DataFrame(_體[-1]["規則"])
+    _圖示 = {"有效": "✅ 有效", "沒有優勢": "⚪ 沒有優勢", "反向": "🔻 反向", "樣本太少": "⏳ 樣本太少"}
+    _新["判定"] = _新["判定"].map(lambda v: _圖示.get(v, v))
+    卡片格([卡片(_k, f"{int((_新['判定'] == _v).sum())} 條", "") for _k, _v in _圖示.items()])
+    表格(_新[["判定", "規則", "超額%", "次數", "天數", "說明"]], hide_index=True, width="stretch")
+    _變 = _回饋模組.體檢變化()
+    if _變:
+        st.warning("跟上個月比判定有變：" + "；".join(f"{_名} {_前}→{_今}" for _名, _前, _今, _x in _變))
+    st.caption(f"計算日 {_體[-1]['計算日']}（共 {len(_體)} 次）。超額%＝亮燈後 N 日平均漲跌 − 任何一天的平均（評分列是 IC，t ≥ 2 算有效）。"
+               "沒有優勢或反向的燈號會告訴大盤 AI 不要當主要依據；每月第一份 LINE 週報附體檢摘要。")
+
+段落("PROMPT // 提示版本")
+_明 = pd.DataFrame((_回饋.get("大盤解讀") or {}).get("明細", []))
+_版列 = []
+if len(_明):
+    for _版, _g in _明.groupby("提示版本"):
+        _看 = _g[_g["看法對"].notna()]
+        _條 = [c for cs in _g["條件"] for c in cs]
+        _版列.append({"類型": "大盤解讀", "提示版本": _版, "篇數": len(_g), "起": _g["時間"].min()[:10],
+                     "看法命中": f"{int(_看['看法對'].sum())}/{len(_看)}" if len(_看) else "—",
+                     "條件成立": f"{sum(c['成立'] for c in _條)}/{len(_條)}" if _條 else "—"})
+for _版, _v in ((_回饋.get("AI報告") or {}).get("版本") or {}).items():
+    _結 = _v["達標"] + _v["停損"]
+    _版列.append({"類型": "個股 AI 報告", "提示版本": _版, "篇數": _v["份數"], "起": "",
+                 "看法命中": f"達標 {_v['達標']}/{_結}" if _結 else "—", "條件成立": ""})
+if _版列:
+    表格(pd.DataFrame(_版列), hide_index=True, width="stretch")
+表格(pd.DataFrame(_回饋模組.提示修改紀錄, columns=["日期", "改了什麼"]), hide_index=True, width="stretch")
+st.caption(f"目前版本：大盤解讀 {engine.大盤提示版本()}、個股 AI {engine.個股提示版本()}。"
+           "版本碼是提示文字的指紋，提示一改就換；「未記錄」是 2026-11-12 以前的解讀與報告。同一版本累積夠多篇再比較才有意義。")
+
+段落("LINE // 推播額度")
+_額 = _回饋.get("LINE額度")
+if _額:
+    st.markdown(_回饋模組.額度文字(_額) + f"（{_額.get('查詢時間', '')} 查詢）")
+else:
+    st.caption("還沒查到額度（每天收盤更新時用 LINE 官方 API 查一次，需要 Actions 的 LINE_TOKEN）。")
+_估 = pd.DataFrame(_回饋模組.推播來源估計, columns=["功能", "每月約幾則", "說明"])
+表格(_估, hide_index=True, width="stretch")
+st.caption(f"估計合計每月約 {int(_估['每月約幾則'].sum())} 則。LINE 免費方案每月主動推播有上限（一次送 5 段只算 1 則），"
+           "傳代號查詢的回覆不算額度。快超過時，可以把 AI 大盤解讀改成只推收盤一則，或把新片提醒改成每天一次。")
+
 段落("ERRORS // 網站錯誤紀錄")
 try:
     錯誤們 = engine.讀取設定檔(_設定(), "errors.json") or {}
