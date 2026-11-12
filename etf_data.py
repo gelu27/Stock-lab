@@ -716,6 +716,8 @@ def 解析費用(文字):
         return None
     經理 = 找(["經理費", "管理費"], 3.0)
     總 = 找(["總管理費用", "總費用率"], 5.0)
+    if 經理 is not None and 總 is not None and 總 < 經理:
+        總 = None      # 新基金總管理費用是未滿一年的部分數字，比經理費還小，不可信
     保管 = 找(["保管費"], 0.5)
     if 保管 is None and 經理 is not None and 總 is not None and 總 >= 經理:
         保管 = round(總 - 經理, 4)

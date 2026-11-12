@@ -90,6 +90,15 @@ def main():
         if "00999A" not in f.index:
             錯誤.append("清單裡沒有的 ETF 要補一列")
 
+    頁 = "經理費(%) 0.9 殖利率(%) 1 總管理費用(%) 0.13 (含 0 非管理費用)"
+    if etf_data.解析費用(頁)[2] is not None:
+        錯誤.append("總費用率比經理費小時應忽略")
+    費 = etf_perf.年費用(pd.DataFrame({"etf": ["A", "B", "C"], "經理費": [0.9, 1.0, 0.15], "保管費": [None, 0.2, 0.07],
+                                  "總費用率": [0.03, 1.5, 0.22]}))
+    檢查("總費用率不可信用經理費", 費["A"], 0.9)
+    檢查("總費用率可信", 費["B"], 1.5)
+    檢查("0050 總費用率", 費["C"], 0.22)
+
     # 全空白的 fees.csv（更新日整欄 NaN）也要能寫入
     with tempfile.TemporaryDirectory() as 暫:
         etf_data.費用檔 = Path(暫) / "fees.csv"
