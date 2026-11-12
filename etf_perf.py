@@ -251,12 +251,15 @@ def 讀費用():
 
 
 def 年費用(費用表):
-    """每檔一年內扣（%）：有總費用率用總費用率，否則經理費＋保管費。"""
+    """每檔一年內扣（%）：總費用率（不小於經理費才可信）優先，否則經理費＋保管費。"""
     if 費用表.empty:
         return {}
     t = 費用表.set_index("etf")
-    合 = pd.to_numeric(t["總費用率"], errors="coerce").fillna(
-        pd.to_numeric(t["經理費"], errors="coerce") + pd.to_numeric(t["保管費"], errors="coerce").fillna(0))
+    經 = pd.to_numeric(t["經理費"], errors="coerce")
+    保 = pd.to_numeric(t["保管費"], errors="coerce").fillna(0)
+    總 = pd.to_numeric(t["總費用率"], errors="coerce")
+    總 = 總.where(總 >= 經)          # 新基金的總費用率常是未滿一年的部分數字（比經理費還小），不採用
+    合 = 總.fillna(經 + 保)
     return 合.dropna().to_dict()
 
 
