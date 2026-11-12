@@ -385,6 +385,12 @@ def 產生PDF(代號, r, 全, 建議, 內文, 時間, 公司=None, 新聞=None):
     if 公司:
         資料["公司"] = 公司
     try:
+        預 = engine.預估EPS查詢(代號)
+        if 預:
+            資料["預估"] = engine.加預估本益比(pd.DataFrame([{**預, "收盤": float(r["收盤"])}])).iloc[0].to_dict()
+    except Exception as e:
+        print("PDF 預估 EPS 失敗：", repr(e))
+    try:
         h, 週轉, 大 = 變化資料(代號, r, 全)
         資料["變化"] = {"歷史": h, "週轉": 週轉, "大戶": 大, "解讀": engine.變化解讀(h, 週轉, 大)}
     except Exception as e:

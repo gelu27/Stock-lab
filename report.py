@@ -607,6 +607,21 @@ def 產生PDF(代號, 名稱, 資料):
                  f"距現價 {空間:+.1f}%" if pd.notna(空間) else "", 色)
         pdf.set_y(y0 + 28)
 
+    # 市場預估 EPS 共識（全市場預估 A、B 中位數）
+    預 = 資料.get("預估") or {}
+    文預 = engine.預估EPS文字(預) if 預 else ""
+    if 文預:
+        if pdf.get_y() + 30 > pdf.h - 14:
+            pdf.add_page()
+        段標("Consensus", "市場預估 EPS 共識")
+        字(10.5, 色="#D5D5D5")
+        pdf.multi_cell(寬, 6, _乾淨(文預), align="L", new_x="LMARGIN", new_y="NEXT")
+        修 = [(n, 預.get(k)) for n, k in (("今年預估較前期", "預估修正%"), ("明年預估較前期", "明年預估修正%"))]
+        修 = [f"{n} {v:+.1f}%" for n, v in 修 if isinstance(v, (int, float)) and pd.notna(v)]
+        if 修:
+            pdf.multi_cell(寬, 6, "・近期預估修正：" + "、".join(修), align="L", new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(3)
+
     # AI 重點：把 AI 給的 json 欄位排成兩欄表格（null 顯示「無」），不再印原始 json
     if 建議:
         def 文(v):
@@ -651,7 +666,7 @@ def 產生PDF(代號, 名稱, 資料):
                 本益比 = float(本.iloc[-1]) if len(本) and 本.iloc[-1] > 0 else None
         except Exception:
             pass
-        提醒 = engine.檢查AI目標價(建議, 資料.get("收盤"), 本益比, 三年高)
+        提醒 = engine.檢查AI目標價(建議, 資料.get("收盤"), 本益比, 三年高, 共識=預 or None)
         if 提醒:
             if pdf.get_y() + 10 + 7 * len(提醒) > pdf.h - 14:
                 pdf.add_page()
