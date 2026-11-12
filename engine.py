@@ -3921,14 +3921,27 @@ def AI大盤解讀(摘要, 模式, 設定):
     """用 Gemini（有 GEMINI_API_KEY）或 Claude 寫大盤解讀。回傳 (Markdown, 模型名稱)。"""
     import datetime as dt
     現在 = dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).strftime("%Y-%m-%d %H:%M")
-    if 模式 == "收盤":
+    try:
+        驗 = 驗收大盤解讀(讀取大盤解讀(設定), {"加權": 讀取指數K線("TAIEX"), "櫃買": 讀取指數K線("TPEX")})
+    except Exception as e:
+        print("解讀驗收失敗：", repr(e))
+        驗 = []
+    if 模式 == "收盤" and 驗:
         try:
-            回顧 = 條件回顧文字(驗收大盤解讀(讀取大盤解讀(設定), {"加權": 讀取指數K線("TAIEX"), "櫃買": 讀取指數K線("TPEX")}),
-                          讀取指數K線("TAIEX")["date"].iloc[-1])
+            回顧 = 條件回顧文字(驗, 讀取指數K線("TAIEX")["date"].iloc[-1])
             if 回顧:
                 摘要 = f"{摘要}\n\n{回顧}"
         except Exception as e:
             print("條件回顧失敗：", repr(e))
+    try:  # 回饋循環：錯誤本＋規則體檢
+        import feedback
+        錯 = feedback.大盤錯誤本(驗)
+        體 = feedback.規則體檢文字(給AI=True)
+        回 = "\n".join([x for x in [錯, *體] if x])
+        if 回:
+            摘要 = f"{摘要}\n\n{回}"
+    except Exception as e:
+        print("錯誤本失敗：", repr(e))
     問題 = f"現在是台灣時間 {現在}。請寫「{模式}」解讀：{解讀模式[模式]}\n\n以下是最新數據：\n{摘要}"
     系統 = 大盤解讀提示 + 解讀條件說明
     if str(設定.get("GEMINI_API_KEY", "")).strip():
@@ -3963,7 +3976,8 @@ def 儲存大盤解讀(設定, 模式, 內容, 模型, 保留=60):
     現在 = dt.datetime.now(dt.timezone(dt.timedelta(hours=8)))
     全部 = 讀取大盤解讀(設定)
     內容, 條 = 拆解解讀條件(內容)
-    全部[f"{現在:%Y-%m-%d}_{模式}"] = {"時間": f"{現在:%Y-%m-%d %H:%M}", "模式": 模式, "內容": 內容, "模型": 模型, **條}
+    全部[f"{現在:%Y-%m-%d}_{模式}"] = {"時間": f"{現在:%Y-%m-%d %H:%M}", "模式": 模式, "內容": 內容, "模型": 模型, **條,
+                                    "提示版本": 大盤提示版本()}
     全部 = dict(sorted(全部.items())[-保留:])
     return 儲存設定檔(設定, "briefs.json", 全部, f"{模式}大盤解讀 {現在:%m/%d}")
 
@@ -7479,6 +7493,27 @@ def 成交均價線(成交金額, 成交股數, n=20):
   · 引用時寫出處（頻道名或券商名＋日期），不要照抄原文。"""
 大盤解讀提示 += 外部觀點規則
 AI系統提示 += 外部觀點規則
+回饋規則 = """
+- 回饋紀錄（網站自己對答案的結果）：
+  · 數據摘要有「AI 錯誤本」或「網站 AI 過去對這檔的報告」時，先看過去哪裡說錯，這次避免同樣的判斷；上次看錯要寫出這次有什麼不同。
+  · 有「券商過去紀錄」時，紀錄好的券商可以多參考，紀錄差或樣本少的要打折，並寫出依據（說對幾 %、幾份）。
+  · 有「規則體檢」列出沒有優勢的燈號時，不要拿那些燈號當主要理由。"""
+大盤解讀提示 += 回饋規則
+AI系統提示 += 回饋規則
+
+
+def 提示版本(*文字們):
+    """提示文字的指紋（8 碼）。提示一改，版本碼就變，命中率可以按版本比較（feedback.提示修改紀錄 寫改了什麼）。"""
+    import hashlib
+    return hashlib.sha1("".join(文字們).encode("utf-8")).hexdigest()[:8]
+
+
+def 大盤提示版本():
+    return 提示版本(大盤解讀提示, 解讀條件說明)
+
+
+def 個股提示版本():
+    return 提示版本(AI系統提示)
 
 
 def 網紅記分板(影片們, 價格們, 加權=None):
@@ -7505,14 +7540,14 @@ def 指標價格表(指標, 代號們):
     return {c: g[["date", "收盤"]] for c, g in t.groupby("代號")}
 
 
-def 網紅觀點摘要(影片們, 指標=None, 代號=None, 今天=None, 名表=None):
+def 網紅觀點摘要(影片們, 指標=None, 代號=None, 今天=None, 名表=None, 記分板=None):
     """給 AI 用的網紅觀點文字（list of str）。代號＝None 是大盤用：近 7 天條件、共識熱度、準的頻道；有代號則是該股近 60 天說法。"""
     影片們 = [v for v in 影片們 or [] if not 是AI工具影片(v)]
     if not 影片們:
         return []
     今天 = pd.Timestamp(今天 or pd.Timestamp.today().normalize())
-    彙 = pd.DataFrame()
-    if 指標 is not None:
+    彙 = 記分板 if 記分板 is not None else pd.DataFrame()
+    if 指標 is not None and 記分板 is None:
         try:
             代們 = {str(x.get("代號")) for v in 影片們 for x in v.get("股票", [])}
             彙 = 網紅記分板(影片們, 指標價格表(指標, 代們), 讀取指數K線("TAIEX"))

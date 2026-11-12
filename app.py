@@ -36,6 +36,7 @@ import macro
 import momentum
 import beginner
 import ai_debate
+import feedback
 
 importlib.reload(engine)
 importlib.reload(etf_data)  # 程式更新後確保用的是最新版的計算規則
@@ -45,6 +46,7 @@ importlib.reload(momentum)  # 順勢做多選股引擎
 importlib.reload(beginner)  # 新手白話：名詞小卡、白話燈號
 importlib.reload(ai_debate)  # AI 多空辯論、數字查核
 importlib.reload(macro)  # 01 首頁總經／資金用；沒重新載入時，部署新版後會沿用舊版 macro 而找不到新函式
+importlib.reload(feedback)  # 回饋循環：錯誤本、券商與網紅記分板、規則體檢
 
 _圖示 = Path(__file__).parent / "static" / "icon-192.png"
 st.set_page_config(page_title="TW//STOCK LAB", page_icon=str(_圖示) if _圖示.exists() else "◢", layout="wide")

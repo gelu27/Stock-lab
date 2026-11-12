@@ -272,11 +272,19 @@ def AI報告(代號, r, 全, 設定, 公司=None, 新聞=None):
         卡 = engine.拆解AI建議(上次.get("內容", ""))[1] or {}
         摘要 += (f"\n\n上次網站 AI 報告（{上次['時間'][:10]}，當時收盤 {上次.get('收盤')}）：看法 {卡.get('看法')}、"
                f"合理價 {卡.get('目標價合理')}、看錯條件 {卡.get('看錯條件')}")
+    try:  # 回饋循環：券商報告與過去紀錄、網紅記分板、過去 AI 報告對答案
+        import feedback
+        補 = feedback.LINE個股摘要(代號, r["收盤"], 紀錄們, 全[["date", "high", "low", "收盤"]],
+                                 engine.讀取券商報告(設定), engine.讀取網紅說法(設定))
+        if 補:
+            摘要 += "\n\n" + 補
+    except Exception as e:
+        print("回饋摘要失敗：", repr(e))
     文字, 來源 = engine.AI分析Gemini(代號, r["名稱"], 摘要, 金鑰, 模型,
                                  搜尋=str(設定.get("GEMINI_SEARCH", "")).lower() == "true")
     時間 = dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).strftime("%Y-%m-%d %H:%M")
     新 = {"時間": 時間, "資料日期": 資料日, "收盤": float(r["收盤"]), "引擎": "Gemini（LINE 查詢）", "模型": 模型,
-         "內容": 文字, "來源": 來源}
+         "內容": 文字, "來源": 來源, "提示版本": engine.個股提示版本()}
     try:
         engine.儲存AI紀錄(代號, 新, 設定, 取代=取代)
     except Exception as e:

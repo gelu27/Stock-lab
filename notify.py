@@ -1076,6 +1076,11 @@ def 健康檢查():
         except Exception as e:
             問題.append(f"{名稱}：連不上（{type(e).__name__}）")
 
+    try:  # LINE 免費推播額度：照目前速度會超過上限，每個月提醒一次
+        額度提醒()
+    except Exception as e:
+        print("LINE 額度檢查失敗：", repr(e))
+
     try:
         錯 = 網站錯誤()
     except Exception as e:
@@ -1089,6 +1094,25 @@ def 健康檢查():
              + "\n\n網站其他功能照常，可以到 GitHub Actions 看「更新資料庫」的紀錄。")
     else:
         print("資料來源全部正常")
+
+
+def 額度提醒(比例=0.8):
+    """本月已用超過上限 比例、或照目前速度月底會超過上限時，每月只提醒一次（記在 alert_state.json「額度已提醒」）。"""
+    import feedback
+    額 = feedback.LINE推播額度()
+    if not 額 or not 額.get("上限"):
+        return
+    今 = dt.datetime.now(台北)
+    估 = 額["已用"] / max(今.day, 1) * pd.Timestamp(今.date()).days_in_month
+    if 額["已用"] < 額["上限"] * 比例 and 估 <= 額["上限"]:
+        return
+    狀態, sha = 讀設定("alert_state.json")
+    if 狀態.get("額度已提醒") == f"{今:%Y-%m}":
+        return
+    推播(feedback.額度文字(額) + "\n可以到網站 09 頁「LINE 推播額度」看哪些功能推最多；傳代號查詢的回覆不算額度。")
+    狀態["額度已提醒"] = f"{今:%Y-%m}"
+    if os.environ.get("GITHUB_TOKEN"):
+        寫設定("alert_state.json", 狀態, sha)
 
 
 def 網站錯誤():
@@ -1195,6 +1219,21 @@ def 週報():
             行們 += 主動ETF月報(迄)
         except Exception as e:
             print("主動式 ETF 月報失敗：", repr(e))
+
+    try:  # F7 AI 自我檢討、F6 推播額度
+        import feedback
+        行們 += feedback.週報自我檢討(起, 迄)
+        額 = feedback.額度文字(feedback.LINE推播額度())
+        if 額:
+            行們 += ["", 額]
+    except Exception as e:
+        print("AI 自我檢討失敗：", repr(e))
+    if 迄.day <= 7 or os.environ.get("RULE_MONTHLY") == "1":   # F4 每月第一份週報附規則體檢
+        try:
+            import feedback
+            行們 += feedback.規則體檢文字()
+        except Exception as e:
+            print("規則體檢月報失敗：", repr(e))
 
     日程 = engine.重要日程(set(庫存們 + 自選們), 天數=9)
     if len(日程):
@@ -1305,7 +1344,8 @@ def 個股查詢(問, 完整=True):
         報告們 = [x for x in (讀設定("broker_reports.json")[0] or {}).get("報告", []) if str(x.get("代號")) == 代]
         字 = engine.共識文字(engine.券商共識(報告們, float(今["收盤"] if 即時 else r["close"])))
         if 字:
-            行們.append("🏦 " + 字)
+            import feedback
+            行們.append("🏦 " + 字 + feedback.LINE券商紀錄短句([x.get("券商") for x in 報告們]))
     except Exception as e:
         print("券商共識失敗：", repr(e))
     try:
@@ -1323,7 +1363,9 @@ def 個股查詢(問, 完整=True):
              and str(v.get("日期") or "") >= f"{dt.date.today() - dt.timedelta(days=30)}"]
         if 說:
             多 = sum(1 for _, k in 說 if k == "看多")
-            行們.append(f"🎬 近 30 天 {len({c for c, _ in 說})} 個頻道提到（看多 {多}、看空 {sum(1 for _, k in 說 if k == '看空')}）")
+            import feedback
+            行們.append(f"🎬 近 30 天 {len({c for c, _ in 說})} 個頻道提到（看多 {多}、看空 {sum(1 for _, k in 說 if k == '看空')}）"
+                      + feedback.LINE網紅記分短句([c for c, _ in 說]))
     except Exception as e:
         print("網紅失敗：", repr(e))
     設定 = {k: os.environ.get(k, "") for k in ("GEMINI_API_KEY", "GEMINI_MODEL", "GEMINI_SEARCH", "GITHUB_TOKEN")}

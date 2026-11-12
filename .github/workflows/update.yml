@@ -76,6 +76,15 @@ jobs:
       - name: 年線與反彈尺全市場統計（約每月重算一次）
         continue-on-error: true
         run: python -c "import engine; engine.更新價位統計()"
+      - name: 規則體檢（約每月一次，看燈號與訊號有沒有失效）
+        continue-on-error: true
+        run: python -c "import feedback; feedback.更新規則體檢()"
+      - name: 回饋統計（AI 錯誤本、券商與網紅記分板、資料累積進度、LINE 額度）
+        continue-on-error: true
+        run: python -c "import feedback; feedback.更新回饋統計()"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
       - name: 存回 GitHub
         if: always()
         run: |
