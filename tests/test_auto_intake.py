@@ -58,3 +58,20 @@ def test_影片收件流程(monkeypatch):
     assert "abcdefghijk" in 存["intake_seen.json"]["影片"]
     assert 存["influencer_notes.json"]["影片"][0]["頻道"] == "測試頻道"
     assert auto_intake.收影片({"GEMINI_API_KEY": "k"}) == (0, 0)   # 第二次不重複處理
+
+
+def test_新片提醒只提醒一次(monkeypatch):
+    import datetime as dt
+    import notify
+    存 = {"video_sources.json": {"頻道": [{"名稱": "測試台", "channel_id": "UCx"}]}}
+    monkeypatch.setattr(engine, "讀取設定檔", lambda s, f: dict(存.get(f, {})))
+    monkeypatch.setattr(engine, "儲存設定檔", lambda s, f, c, m="": 存.__setitem__(f, c))
+    現在 = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    rss = mock.Mock(text=f"<entry><yt:videoId>abcdefghijk</yt:videoId><title>【直播】測試</title><published>{現在}</published></entry>")
+    monkeypatch.setattr(auto_intake.requests, "get", lambda *a, **k: rss)
+    送 = []
+    monkeypatch.setattr(notify, "送出", lambda m: 送.append(m))
+    assert auto_intake.新片提醒({}) == 1
+    assert "測試台" in 送[0][0]["text"] and "整理這支影片" in 送[0][1]["text"]
+    assert "abcdefghijk" in 存["intake_seen.json"]["已通知"]
+    assert auto_intake.新片提醒({}) == 0   # 第二次不重複提醒

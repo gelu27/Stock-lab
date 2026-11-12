@@ -4,6 +4,7 @@
 #   python auto_intake.py brokers   讀 Google 雲端資料夾（分享給「知道連結的人」）裡的新 PDF／截圖，
 #                                   請 Gemini 抽成 JSON 存進 broker_reports.json
 #   python auto_intake.py all       兩個都跑（排程用）
+#   python auto_intake.py remind    只看頻道 RSS 有沒有新影片，傳 LINE 提醒（連結＋整理指令），不用 Gemini
 #   python auto_intake.py usage     傳 LINE：近 7 天 Gemini 呼叫次數
 # 需要的 Secrets：GEMINI_API_KEY、GITHUB_TOKEN；券商報告另需 GOOGLE_API_KEY、DRIVE_FOLDER_ID。
 # 失敗會傳 LINE 通知；每日呼叫上限 AI_DAILY_CAP（預設 80 次）。
@@ -30,6 +31,9 @@ sys.stdout.reconfigure(line_buffering=True)   # Actions 上才看得到即時進
           "三、提到的股票（每檔一行：代號 名稱：看多或看空。理由：…，有價位要寫）。四、所有「如果…就…」的判斷條件（有提到股票名稱、均線天數或價位的要原樣寫出來，例如「台積電站回 20 週均線就買回」）。"
           "五、引用的資料來源。六、畫面上的圖表與字卡。七、影片本身前後矛盾或沒說清楚的地方"
           "（不要用你自己的知識判斷股價、EPS 等數字對不對，你的資料可能不是最新的）。")
+
+
+頻道名 = {}   # 影片id → 頻道名稱（RSS 讀到時記下，提醒訊息用）
 
 
 def _設定():
@@ -63,7 +67,7 @@ def _已看(設):
 
 
 # ---------- 影片 ----------
-def 影片清單(設, 已看影片, 天數=3):
+def 影片清單(設, 已看影片, 天數=3, 略過直播=True):
     """回傳 [(影片id, 網址, 標題, 日期)]：頻道 RSS 近 天數 天的新片＋手動網址。"""
     來源 = engine.讀取設定檔(設, "video_sources.json") or {}
     結果 = {}
@@ -83,6 +87,7 @@ def 影片清單(設, 已看影片, 天數=3):
                 continue
             時 = dt.datetime.fromisoformat(發.group(1)).astimezone(台北)
             if 時 >= 下限:
+                頻道名[vid.group(1)] = 頻.get("名稱", "")
                 結果[vid.group(1)] = (vid.group(1), f"https://www.youtube.com/watch?v={vid.group(1)}",
                                     (標.group(1) if 標 else ""), f"{時:%Y-%m-%d}")
     網址們 = list(來源.get("網址", [])) + [u for u in os.environ.get("VIDEO_URLS", "").split() if u]
@@ -92,8 +97,32 @@ def 影片清單(設, 已看影片, 天數=3):
             結果.setdefault(m.group(1), (m.group(1), f"https://www.youtube.com/watch?v={m.group(1)}", "", ""))
     略過 = [k for k in (來源.get("略過關鍵字") or ["直播"]) if k]   # 直播常常好幾個小時，額度吃不消
     def 要處理(v):
-        return v[0] not in 已看影片 and not any(k in v[2] for k in 略過)
+        return v[0] not in 已看影片 and not (略過直播 and any(k in v[2] for k in 略過))
     return [v for v in 結果.values() if 要處理(v)]
+
+
+def 新片提醒(設):
+    """不用 Gemini：看頻道 RSS 有沒有新影片，有就傳 LINE（影片連結＋可直接複製的整理指令），每支只提醒一次。"""
+    表 = engine.讀取設定檔(設, "intake_seen.json") or {}
+    已知 = set(表.get("影片", [])) | set(表.get("已通知", []))
+    新 = 影片清單(設, 已知, 天數=2, 略過直播=False)
+    if not 新:
+        print("沒有新影片")
+        return 0
+    新.sort(key=lambda v: (頻道名.get(v[0], ""), v[3]))
+    行們 = [f"🎬 頻道有 {len(新)} 支新影片（{dt.datetime.now(台北):%m/%d}）\n"]
+    for vid, 網址, 標題, 日期 in 新[:15]:
+        行們.append(f"▪ {頻道名.get(vid, '')}｜{標題[:40]}\n{網址}")
+    if len(新) > 15:
+        行們.append(f"…另有 {len(新) - 15} 支")
+    說明 = ("請把影片連結貼給 Gemini（Pro），加上下面那則整理指令。做完把整理文字存成 .txt 上傳雲端資料夾，"
+          "或貼到網站 04 選股 → 網紅收件匣。")
+    import notify
+    notify.送出([{"type": "text", "text": "\n".join(行們)[:4800]},
+              {"type": "text", "text": "📋 Gemini 整理指令（長按複製）：\n" + 網紅指令.replace("（頻道名稱）", "") + "\n\n" + 說明}])
+    表["已通知"] = sorted(set(表.get("已通知", [])) | {v[0] for v in 新[:15]})[-1000:]
+    engine.儲存設定檔(設, "intake_seen.json", 表, f"新片提醒 {len(新)} 支")
+    return len(新)
 
 
 def 取字幕(vid):
@@ -225,6 +254,9 @@ def 收券商(設):
 if __name__ == "__main__":
     模式 = sys.argv[1] if len(sys.argv) > 1 else "all"
     設 = _設定()
+    if 模式 == "remind":
+        新片提醒(設)
+        sys.exit(0)
     if 模式 == "usage":
         _通知(engine.AI用量小卡(設))
         sys.exit(0)
