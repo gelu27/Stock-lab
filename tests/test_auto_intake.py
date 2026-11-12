@@ -78,8 +78,12 @@ def test_新片提醒只提醒一次(monkeypatch):
     assert auto_intake.新片提醒({}) == 0   # 第二次不重複提醒
 
 
-def test_提醒訊息太長會分則():
-    新 = [(f"id{i:09d}", f"https://www.youtube.com/watch?v=id{i:09d}", "標題" * 20, "2026-11-12") for i in range(40)]
-    訊息們 = auto_intake.提醒訊息(新, 上限=1500)
-    assert len(訊息們) > 1 and all(len(t) <= 1500 for t in 訊息們)
-    assert sum(t.count("watch?v=") for t in 訊息們) == 40
+def test_提醒訊息每十部一則並含發布時間():
+    auto_intake.發布時間["id000000001"] = "11/12 08:30"
+    新 = [(f"id{i:09d}", f"https://www.youtube.com/watch?v=id{i:09d}", "標題", "2026-11-12") for i in range(1, 24)]
+    訊息們 = auto_intake.提醒訊息(新)
+    assert len(訊息們) == 3
+    assert [t.count("watch?v=") for t in 訊息們] == [10, 10, 3]
+    assert all("整理以下所有影片" in t and "folders/" in t and "影片連結如下" in t for t in 訊息們)
+    assert "第 1 / 3 批" in 訊息們[0] and "發布：11/12 08:30" in 訊息們[0]
+    assert "第" not in auto_intake.提醒訊息(新[:5])[0].split("\n")[0]   # 10 部以內只有一則，不加批次標題

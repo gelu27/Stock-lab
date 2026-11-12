@@ -34,6 +34,8 @@ sys.stdout.reconfigure(line_buffering=True)   # Actions 上才看得到即時進
 
 
 頻道名 = {}   # 影片id → 頻道名稱（RSS 讀到時記下，提醒訊息用）
+發布時間 = {}   # 影片id → 台北時間 "MM/DD HH:MM"（提醒訊息用）
+發布排序 = {}   # 影片id → ISO 時間（排序用）
 
 
 def _設定():
@@ -88,6 +90,8 @@ def 影片清單(設, 已看影片, 天數=3, 略過直播=True):
             時 = dt.datetime.fromisoformat(發.group(1)).astimezone(台北)
             if 時 >= 下限:
                 頻道名[vid.group(1)] = 頻.get("名稱", "")
+                發布時間[vid.group(1)] = f"{時:%m/%d %H:%M}"
+                發布排序[vid.group(1)] = 時.isoformat()
                 結果[vid.group(1)] = (vid.group(1), f"https://www.youtube.com/watch?v={vid.group(1)}",
                                     (標.group(1) if 標 else ""), f"{時:%Y-%m-%d}")
     網址們 = list(來源.get("網址", [])) + [u for u in os.environ.get("VIDEO_URLS", "").split() if u]
@@ -111,18 +115,18 @@ def 影片清單(設, 已看影片, 天數=3, 略過直播=True):
 預設雲端資料夾 = "https://drive.google.com/drive/folders/1OIjaCrzeQ06C2XwsoqKsI4PfetCOIudt"
 
 
-def 提醒訊息(新, 資料夾網址=預設雲端資料夾, 上限=4800):
-    """組成可一次複製貼上的 LINE 訊息：整理指令＋雲端資料夾連結＋影片清單。太長就切成幾則（每則 ≤ 上限字）。"""
+每則影片數 = 10
+
+
+def 提醒訊息(新, 資料夾網址=預設雲端資料夾, 每則=每則影片數):
+    """組成可一次複製貼上的 LINE 訊息：整理指令＋雲端資料夾連結＋影片清單（含發布時間）。
+    每 10 部影片一則，超過就多則；每則都完整，可單獨貼給 Gemini。"""
     開頭 = (批次指令 + "\n\n做完把整理文字存成 .txt 上傳雲端資料夾\n" + 資料夾網址 + "\n\n\n影片連結如下\n\n")
-    項目 = [f"▪ {頻道名.get(vid, '')}｜{標題[:45]}\n{網址}" for vid, 網址, 標題, 日期 in 新]
-    訊息們, 目前 = [], 開頭
-    for x in 項目:
-        if len(目前) + len(x) + 1 > 上限 and 目前 != 開頭:
-            訊息們.append(目前.rstrip())
-            目前 = ""
-        目前 += x + "\n"
-    訊息們.append(目前.rstrip())
-    return 訊息們
+    項目 = [f"▪ {頻道名.get(vid, '')}｜{標題[:45]}\n發布：{發布時間.get(vid) or 日期}\n{網址}" for vid, 網址, 標題, 日期 in 新]
+    組們 = [項目[i:i + 每則] for i in range(0, len(項目), 每則)]
+    多 = len(組們) > 1
+    return [(f"【第 {n} / {len(組們)} 批，本批 {len(組)} 部】\n" if 多 else "") + 開頭 + "\n".join(組)
+            for n, 組 in enumerate(組們, 1)]
 
 
 def 新片提醒(設):
@@ -133,7 +137,7 @@ def 新片提醒(設):
     if not 新:
         print("沒有新影片")
         return 0
-    新.sort(key=lambda v: (頻道名.get(v[0], ""), v[3]))
+    新.sort(key=lambda v: 發布排序.get(v[0], v[3]), reverse=True)   # 最新的在前
     來源 = engine.讀取設定檔(設, "video_sources.json") or {}
     訊息們 = 提醒訊息(新, 來源.get("雲端資料夾") or 預設雲端資料夾)
     import notify
