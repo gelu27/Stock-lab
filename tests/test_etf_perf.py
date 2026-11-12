@@ -90,6 +90,16 @@ def main():
         if "00999A" not in f.index:
             錯誤.append("清單裡沒有的 ETF 要補一列")
 
+    # 全空白的 fees.csv（更新日整欄 NaN）也要能寫入
+    with tempfile.TemporaryDirectory() as 暫:
+        etf_data.費用檔 = Path(暫) / "fees.csv"
+        pd.DataFrame({"etf": ["0050"], "經理費": [None], "保管費": [None], "總費用率": [None],
+                      "來源": ["待填"], "更新日": [None]}).to_csv(etf_data.費用檔, index=False)
+        etf_data.更新費用(["0050"], 抓=lambda c: (0.15, 0.07, 0.22))
+        f = pd.read_csv(etf_data.費用檔, dtype={"etf": str}).set_index("etf")
+        檢查("全空白檔可寫入經理費", f.at["0050", "經理費"], 0.15)
+        檢查("全空白檔可寫入總費用率", f.at["0050", "總費用率"], 0.22)
+
     for e in 錯誤:
         print("❌", e)
     if 錯誤:

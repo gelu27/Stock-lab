@@ -764,7 +764,7 @@ def 更新費用(代號們=None, 間隔天數=30, 抓=None):
     """fees.csv 裡「空白」或「上次自動抓超過 間隔天數」的列，自動補經理費、保管費；
     來源不是 MoneyDJ 的列（手動填的）一律不動。回傳 (更新筆數, 失敗代號們)。"""
     抓 = 抓 or 抓費用一檔
-    表 = pd.read_csv(費用檔, dtype={"etf": str}) if 費用檔.exists() else pd.DataFrame(columns=費用欄)
+    表 = pd.read_csv(費用檔, dtype=str).astype(object) if 費用檔.exists() else pd.DataFrame(columns=費用欄)
     for c in 費用欄:
         if c not in 表.columns:
             表[c] = ""
