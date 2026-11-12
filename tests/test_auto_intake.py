@@ -72,6 +72,14 @@ def test_新片提醒只提醒一次(monkeypatch):
     送 = []
     monkeypatch.setattr(notify, "送出", lambda m: 送.append(m))
     assert auto_intake.新片提醒({}) == 1
-    assert "測試台" in 送[0][0]["text"] and "整理這支影片" in 送[0][1]["text"]
+    文 = 送[0][0]["text"]
+    assert len(送[0]) == 1 and "整理以下所有影片" in 文 and "影片連結如下" in 文 and "測試台｜" in 文 and "folders/" in 文
     assert "abcdefghijk" in 存["intake_seen.json"]["已通知"]
     assert auto_intake.新片提醒({}) == 0   # 第二次不重複提醒
+
+
+def test_提醒訊息太長會分則():
+    新 = [(f"id{i:09d}", f"https://www.youtube.com/watch?v=id{i:09d}", "標題" * 20, "2026-11-12") for i in range(40)]
+    訊息們 = auto_intake.提醒訊息(新, 上限=1500)
+    assert len(訊息們) > 1 and all(len(t) <= 1500 for t in 訊息們)
+    assert sum(t.count("watch?v=") for t in 訊息們) == 40
