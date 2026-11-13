@@ -45,10 +45,10 @@ def _設定():
     return 設
 
 
-def _通知(文字):
+def _通知(文字, 類別="自動收件"):
     try:
         import notify
-        notify.推播(文字)
+        notify.推播(文字, 類別)
     except Exception as e:
         print("LINE 通知失敗：", repr(e))
 
@@ -141,7 +141,7 @@ def 新片提醒(設):
     來源 = engine.讀取設定檔(設, "video_sources.json") or {}
     訊息們 = 提醒訊息(新, 來源.get("雲端資料夾") or 預設雲端資料夾)
     import notify
-    notify.送出([{"type": "text", "text": t} for t in 訊息們[:5]])
+    notify.送出([{"type": "text", "text": t} for t in 訊息們[:5]], "新片提醒")
     表["已通知"] = sorted(set(表.get("已通知", [])) | {v[0] for v in 新})[-1000:]
     engine.儲存設定檔(設, "intake_seen.json", 表, f"新片提醒 {len(新)} 支")
     return len(新)
@@ -280,7 +280,7 @@ if __name__ == "__main__":
         新片提醒(設)
         sys.exit(0)
     if 模式 == "usage":
-        _通知(engine.AI用量小卡(設))
+        _通知(engine.AI用量小卡(設), "Gemini用量")
         sys.exit(0)
     出錯 = []
     for 名, 函 in (("videos", 收影片), ("brokers", 收券商)):

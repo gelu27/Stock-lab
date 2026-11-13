@@ -6,6 +6,8 @@
 #   python notify.py weekly  每週六週報（大盤、庫存、自選股一週表現，主動式 ETF 一週加減碼，下週日程）
 #   python notify.py query 2330  查一檔股票（LINE 打字查詢用，由 Cloudflare Worker 觸發 query.yml）
 #   python notify.py brief 盤前|收盤|夜盤  AI 大盤解讀（要設定 GEMINI_API_KEY 或 ANTHROPIC_API_KEY），存到 ai-reports 並傳 LINE
+#   python notify.py flush   把同一個排程累積的通知（環境變數 LINE_OUTBOX）合成一則推播送出
+#   LINE 打「新片」「解讀」「額度」：用回覆（不算額度）拿最新影片清單、最新 AI 大盤解讀、本月額度
 #
 # 需要在 GitHub 專案 Settings → Secrets and variables → Actions 設定：
 #   LINE_TOKEN    LINE Messaging API 的 Channel access token（必填）
@@ -126,49 +128,125 @@ def 清理(值):
     return "".join(c for c in 值 if 33 <= ord(c) <= 126).strip('"\'')
 
 
-def 推播(文字):
-    權杖 = 清理(os.environ.get("LINE_TOKEN"))
-    if not 權杖:
-        print("沒有設定 LINE_TOKEN，略過推播。內容如下：\n" + 文字)
-        return
-    對象 = 清理(os.environ.get("LINE_USER_ID"))
-    網址 = "https://api.line.me/v2/bot/message/" + ("push" if 對象 else "broadcast")
-    # 一則最多 5000 字，太長就照換行切成多則（一次送最多 5 則，只算 1 次推播額度）
+# ---------- LINE 傳送：合併、額度節省、用量紀錄 ----------
+# 免費方案每月推播有上限（回覆不算）。一次 push 最多 5 個訊息框只算 1 則，所以：
+#   1. 同一個排程裡的多個通知先放進「待送」（環境變數 LINE_OUTBOX 指到暫存檔），最後 python notify.py flush 一次送出
+#   2. 照目前速度月底會超過上限時，自動略過低優先通知（網站上都看得到）；剩下的額度少於剩餘天數時只送重要通知
+#   3. 每次推播記在 ai-reports 分支 line_usage.json（09 頁顯示各功能本月實際推了幾則）
+推播等級 = {  # 類別 → 等級（重要 / 一般 / 低）；沒列到的算一般
+    "收盤摘要": "重要", "到價提醒": "重要", "額度提醒": "重要", "個股查詢": "重要", "設定測試": "重要",
+    "大盤解讀": "一般", "週報": "一般", "資料異常": "一般",
+    "新片提醒": "低", "盤中大盤價位": "低", "ETF斷線": "低", "網站錯誤": "低", "Gemini用量": "低", "自動收件": "低",
+}
+_額度快取 = {}
+
+
+def 切段(文字, 長=4900):
+    """一個訊息框最多 5000 字，太長就照換行切成多段。"""
     段們, 段 = [], ""
-    for 行 in 文字.split("\n"):
-        if len(段) + len(行) + 1 > 4900 and 段:
+    for 行 in str(文字).split("\n"):
+        if len(段) + len(行) + 1 > 長 and 段:
             段們.append(段)
             段 = ""
-        段 = (段 + "\n" + 行) if 段 else 行[:4900]
+        段 = (段 + "\n" + 行) if 段 else 行[:長]
     段們.append(段)
-    內容 = {"messages": [{"type": "text", "text": t} for t in 段們[:5]]}
-    if 對象:
-        內容["to"] = 對象
-    r = requests.post(網址, headers={"Authorization": f"Bearer {權杖}"}, json=內容, timeout=15)
-    print("LINE 回應", r.status_code, r.text[:200])
-    if r.status_code == 401:
-        print(f"金鑰長度 {len(權杖)} 個字（正確的 Channel access token 通常 170 字左右；"
-              "32 個字的是 Channel secret，貼錯了）")
-    r.raise_for_status()
+    return 段們
 
 
-def 送出(訊息們):
-    """傳多則訊息（LINE message object，最多 5 則算 1 次）。有 REPLY_TOKEN（LINE 打字查詢）先用「回覆」，
-    回覆不算每月免費額度；權杖過期或用過了就改用推播。"""
-    權杖 = 清理(os.environ.get("LINE_TOKEN"))
-    訊息們 = [m for m in 訊息們 if m][:5]
-    if not 訊息們:
+def 節省模式(額=None, 今=None):
+    """回傳 "" 正常、"省" 略過低優先、"緊" 只送重要。額＝{上限, 已用}。"""
+    if 額 is None:
+        if "額" not in _額度快取:
+            try:
+                import feedback
+                _額度快取["額"] = feedback.LINE推播額度()
+            except Exception as e:
+                print("查 LINE 額度失敗：", repr(e))
+                _額度快取["額"] = None
+        額 = _額度快取["額"]
+    if not 額 or not 額.get("上限"):
+        return ""
+    今 = 今 or dt.datetime.now(台北).date()
+    月天 = pd.Timestamp(今).days_in_month
+    剩 = 額["上限"] - 額["已用"]
+    剩天 = 月天 - 今.day + 1
+    if 剩 <= 剩天:
+        return "緊"
+    估 = 額["已用"] / max(今.day, 1) * 月天
+    if 額["已用"] >= 額["上限"] * 0.85 or (今.day >= 3 and 估 > 額["上限"]):
+        return "省"
+    return ""
+
+
+def 可以推播(類別, 模式=None):
+    等 = 推播等級.get(類別, "一般")
+    模式 = 節省模式() if 模式 is None else 模式
+    if 模式 == "緊":
+        return 等 == "重要"
+    if 模式 == "省":
+        return 等 != "低"
+    return True
+
+
+def 記用量(類別們, 種類="推播"):
+    """本月各功能推了幾次（合併送出時每個功能各記 1 次，總則數只加 1）；種類＝推播／回覆／略過。"""
+    if not os.environ.get("GITHUB_TOKEN"):
         return
+    try:
+        表, sha = 讀設定("line_usage.json")
+        月 = 表.setdefault(f"{dt.datetime.now(台北):%Y-%m}", {})
+        if 種類 == "推播":
+            月["總則數"] = 月.get("總則數", 0) + 1
+        格 = 月.setdefault(種類, {})
+        for k in 類別們:
+            格[k] = 格.get(k, 0) + 1
+        for 舊 in sorted(k for k in 表 if k[:2] == "20")[:-6]:   # 只留半年
+            表.pop(舊, None)
+        寫設定("line_usage.json", 表, sha)
+    except Exception as e:
+        print("記錄 LINE 用量失敗：", repr(e))
+
+
+def _放待送(訊息們, 類別, 可併):
+    檔 = Path(os.environ["LINE_OUTBOX"])
+    try:
+        舊 = json.loads(檔.read_text("utf-8")) if 檔.exists() else []
+    except ValueError:
+        舊 = []
+    舊.append({"類別": 類別, "訊息": 訊息們, "可併": 可併})
+    檔.write_text(json.dumps(舊, ensure_ascii=False), "utf-8")
+    print(f"先放進待送（{類別}，{len(訊息們)} 段），排程最後一起送")
+
+
+def 併成五則(項們):
+    """[(訊息, 可併)] → 最多 5 個訊息框：相鄰、都可併的文字框接在一起（不超過 4900 字）。回傳 [訊息批]。"""
+    框們 = [[m, 可] for m, 可 in 項們]
+    while len(框們) > 5:
+        for i in range(len(框們) - 1):
+            a, b = 框們[i], 框們[i + 1]
+            if a[1] and b[1] and a[0].get("type") == b[0].get("type") == "text" \
+                    and len(a[0]["text"]) + len(b[0]["text"]) + 2 <= 4900:
+                框們[i] = [{"type": "text", "text": a[0]["text"] + "\n\n" + b[0]["text"]}, True]
+                del 框們[i + 1]
+                break
+        else:
+            break
+    框們 = [m for m, _ in 框們]
+    return [框們[i:i + 5] for i in range(0, len(框們), 5)]
+
+
+def _直接送(訊息們, 類別們, 回覆=""):
+    權杖 = 清理(os.environ.get("LINE_TOKEN"))
     if not 權杖:
         print("沒有設定 LINE_TOKEN，略過。內容如下：\n" + json.dumps(訊息們, ensure_ascii=False, indent=1))
         return
     標頭 = {"Authorization": f"Bearer {權杖}"}
-    回覆 = 清理(os.environ.pop("REPLY_TOKEN", ""))   # 回覆權杖只能用一次
     if 回覆:
         r = requests.post("https://api.line.me/v2/bot/message/reply", headers=標頭, timeout=15,
                           json={"replyToken": 回覆, "messages": 訊息們})
         print("LINE 回覆", r.status_code, r.text[:200])
         if r.ok:
+            記用量(類別們, "回覆")
             return
     對象 = 清理(os.environ.get("LINE_USER_ID"))
     內容 = {"messages": 訊息們}
@@ -177,7 +255,60 @@ def 送出(訊息們):
     r = requests.post("https://api.line.me/v2/bot/message/" + ("push" if 對象 else "broadcast"),
                       headers=標頭, json=內容, timeout=15)
     print("LINE 推播", r.status_code, r.text[:200])
+    if r.status_code == 401:
+        print(f"金鑰長度 {len(權杖)} 個字（正確的 Channel access token 通常 170 字左右；"
+              "32 個字的是 Channel secret，貼錯了）")
     r.raise_for_status()
+    記用量(類別們)
+
+
+def 送出(訊息們, 類別="其他", 可併=False):
+    """傳多則訊息（LINE message object，最多 5 則算 1 次）。有 REPLY_TOKEN（LINE 打字查詢）先用「回覆」，
+    回覆不算每月免費額度；權杖過期或用過了就改用推播。有 LINE_OUTBOX 就先放進待送，排程最後一起送。"""
+    訊息們 = [m for m in 訊息們 if m]
+    if not 訊息們:
+        return
+    回覆 = 清理(os.environ.pop("REPLY_TOKEN", ""))   # 回覆權杖只能用一次
+    if not 回覆 and os.environ.get("LINE_OUTBOX"):
+        _放待送(訊息們, 類別, 可併)
+        return
+    if not 回覆 and not 可以推播(類別):
+        print(f"LINE 額度節省模式：略過「{類別}」（網站上看得到）")
+        記用量([類別], "略過")
+        return
+    for 批 in 併成五則([(m, 可併) for m in 訊息們]):
+        _直接送(批, [類別], 回覆)
+        回覆 = ""
+
+
+def 推播(文字, 類別="其他"):
+    """傳一段文字（太長自動切段），一般通知都走這裡。"""
+    送出([{"type": "text", "text": t} for t in 切段(文字)], 類別, 可併=True)
+
+
+def 送出待送():
+    """python notify.py flush：把這個排程累積的通知合成一次推播（最多 5 個訊息框只算 1 則）。"""
+    檔 = Path(os.environ.pop("LINE_OUTBOX", "") or "/tmp/line_outbox.json")
+    if not 檔.exists():
+        print("沒有待送的 LINE 通知")
+        return
+    try:
+        項們 = json.loads(檔.read_text("utf-8"))
+    except ValueError:
+        項們 = []
+    檔.unlink()
+    模式 = 節省模式()
+    留, 略 = [], []
+    for 項 in 項們:
+        (留 if 可以推播(項["類別"], 模式) else 略).append(項)
+    if 略:
+        print("LINE 額度節省模式：略過", "、".join(x["類別"] for x in 略))
+        記用量([x["類別"] for x in 略], "略過")
+    if not 留:
+        return
+    類別們 = list(dict.fromkeys(x["類別"] for x in 留))
+    for 批 in 併成五則([(m, x.get("可併", False)) for x in 留 for m in x["訊息"]]):
+        _直接送(批, 類別們)
 
 
 def 最新行情():
@@ -275,7 +406,7 @@ def 收盤摘要(強制=False):
             到價.append(f"{名稱(t, c)} 收 {價:,.2f}，已跌到 {設['下']:g} 以下")
     if 到價:
         行們 += ["", "🔔 到價"] + 到價
-    推播("\n".join(行們))
+    推播("\n".join(行們), "收盤摘要")
 
 
 def 價位提醒(代號們):
@@ -945,7 +1076,7 @@ def 盤中提醒():
         print("讀停損失敗：", repr(e))
     if not 提醒:
         if 價位訊息:
-            推播("📍 大盤盤中關鍵價位\n" + "\n".join(價位訊息))
+            推播("📍 大盤盤中關鍵價位\n" + "\n".join(價位訊息), "盤中大盤價位")
             寫設定("alert_state.json", 狀態, sha)
         else:
             print("沒有設定到價提醒，大盤也沒有跌破／站回")
@@ -975,10 +1106,11 @@ def 盤中提醒():
         if 設.get("停損") and 價 <= 設["停損"] and 狀態.get(f"{c}_停損") != 今天:
             訊息.append(f"🛑 {m.get('n', c)} 跌破交易日記停損 {設['停損']:g}（現在 {價:,.2f}）{m.get('t', '')}")
             狀態[f"{c}_停損"] = 今天
+    類別 = "到價提醒" if 訊息 else "盤中大盤價位"   # 只有大盤價位時算低優先，額度不夠就只在網站顯示
     if 價位訊息:
         訊息 = ["📍 大盤盤中關鍵價位"] + 價位訊息 + ([""] if 訊息 else []) + 訊息
     if 訊息:
-        推播("\n".join(訊息))
+        推播("\n".join(訊息), 類別)
         寫設定("alert_state.json", 狀態, sha)
     else:
         print("沒有觸發的提醒")
@@ -1088,10 +1220,10 @@ def 健康檢查():
         錯 = []
     if 錯:
         推播("🐞 台股觀測實驗室：網站有新的錯誤\n" + "\n".join(f"・{x}" for x in 錯)
-             + "\n\n可以把這段訊息貼給 Claude 修。")
+             + "\n\n可以把這段訊息貼給 Claude 修。", "網站錯誤")
     if 問題:
         推播("⚠️ 台股觀測實驗室：資料來源異常\n" + "\n".join(f"・{x}" for x in 問題)
-             + "\n\n網站其他功能照常，可以到 GitHub Actions 看「更新資料庫」的紀錄。")
+             + "\n\n網站其他功能照常，可以到 GitHub Actions 看「更新資料庫」的紀錄。", "資料異常")
     else:
         print("資料來源全部正常")
 
@@ -1109,7 +1241,9 @@ def 額度提醒(比例=0.8):
     狀態, sha = 讀設定("alert_state.json")
     if 狀態.get("額度已提醒") == f"{今:%Y-%m}":
         return
-    推播(feedback.額度文字(額) + "\n可以到網站 09 頁「LINE 推播額度」看哪些功能推最多；傳代號查詢的回覆不算額度。")
+    推播(feedback.額度文字(額) + "\n可以到網站 09 頁「LINE 推播額度」看哪些功能推最多；傳代號查詢的回覆不算額度。\n"
+         "已自動開啟節省模式：低優先的通知（新片提醒、盤中大盤價位、ETF 斷線、網站錯誤）改成只在網站顯示，"
+         "傳「新片」可以隨時用回覆（不算額度）拿到最新影片清單。", "額度提醒")
     狀態["額度已提醒"] = f"{今:%Y-%m}"
     if os.environ.get("GITHUB_TOKEN"):
         寫設定("alert_state.json", 狀態, sha)
@@ -1240,7 +1374,7 @@ def 週報():
         行們 += ["", "📅 下週日程"] + [f"{r['日期']:%m/%d} {r['類型']} {r['股票'] if r['代號'] else ''} {r['說明'][:40]}".replace("  ", " ")
                                      for _, r in 日程.iterrows()]
     行們.append("（僅供參考，非投資建議）")
-    推播("\n".join(行們))
+    推播("\n".join(行們), "週報")
 
 
 def 大盤解讀(模式):
@@ -1287,7 +1421,7 @@ def 大盤解讀(模式):
     except Exception as e:
         print("存檔失敗：", repr(e))
     文字 = re.sub(r"^#+\s*", "▍", engine.拆解解讀條件(內容)[0], flags=re.M).replace("**", "")
-    推播(f"🧠 {模式}大盤解讀（{dt.datetime.now(台北):%m/%d %H:%M}）\n\n{文字}")
+    推播(f"🧠 {模式}大盤解讀（{dt.datetime.now(台北):%m/%d %H:%M}）\n\n{文字}", "大盤解讀")
 
 
 def 個股查詢(問, 完整=True):
@@ -1372,16 +1506,61 @@ def 個股查詢(問, 完整=True):
     設定 = {k: v for k, v in 設定.items() if v}
     設定["AI_REPO"] = 倉庫
     要完整 = 完整 and 今 is not None
-    行們.append("（規則計分，僅供參考，非投資建議）"
-              + ("\n⏳ AI 分析與 PDF 報告產生中，約 1～2 分鐘後送到。" if 要完整 else ""))
-    送出([{"type": "text", "text": "\n".join(行們)[:4900]}])
+    行們.append("（規則計分，僅供參考，非投資建議）")
+    摘要 = {"type": "text", "text": "\n".join(行們)[:4900]}
     if not 要完整:
+        送出([摘要], "個股查詢")
         return
+    # 摘要和 AI／PDF 報告等全部做好，用同一次「回覆」送出（回覆不算額度；以前報告分第二批用推播，每查一次就用掉 1 則）
     try:
-        送出(line_report.完整報告(代, 今, 個股史, 設定))
+        報告 = line_report.完整報告(代, 今, 個股史, 設定)
     except Exception as e:
         print("完整報告失敗：", repr(e))
-        送出([{"type": "text", "text": f"⚠️ {代} {名} 的 AI／PDF 報告產生失敗：{str(e)[:150]}\n可到網站個股頁查看：{line_report.網站}/?s={代}"}])
+        報告 = [{"type": "text", "text": f"⚠️ {代} {名} 的 AI／PDF 報告產生失敗：{str(e)[:150]}\n可到網站個股頁查看：{line_report.網站}/?s={代}"}]
+    送出([摘要] + list(報告)[:4], "個股查詢")
+
+
+def 新片查詢():
+    """LINE 打「新片」：用回覆（不算額度）傳近 2 天還沒整理的影片清單＋整理指令。"""
+    import auto_intake
+    設 = auto_intake._設定()
+    表 = auto_intake.engine.讀取設定檔(設, "intake_seen.json") or {}
+    新 = auto_intake.影片清單(設, set(表.get("影片", [])), 天數=2, 略過直播=False)[:40]
+    if not 新:
+        送出([{"type": "text", "text": "🎬 近 2 天沒有還沒整理的新影片。"}], "新片提醒")
+        return
+    新.sort(key=lambda v: auto_intake.發布排序.get(v[0], v[3]), reverse=True)
+    來源 = auto_intake.engine.讀取設定檔(設, "video_sources.json") or {}
+    訊息們 = auto_intake.提醒訊息(新, 來源.get("雲端資料夾") or auto_intake.預設雲端資料夾)
+    送出([{"type": "text", "text": t} for t in 訊息們[:5]], "新片提醒")
+    表["已通知"] = sorted(set(表.get("已通知", [])) | {v[0] for v in 新})[-1000:]
+    auto_intake.engine.儲存設定檔(設, "intake_seen.json", 表, f"新片查詢 {len(新)} 支")
+
+
+def 解讀查詢():
+    """LINE 打「解讀」：用回覆傳最新一篇 AI 大盤解讀（節省模式沒推播時可以自己拿）。"""
+    import re
+    import engine
+    設定 = {"GITHUB_TOKEN": os.environ.get("GITHUB_TOKEN", ""), "AI_REPO": 倉庫}
+    全 = engine.讀取大盤解讀(設定) or {}
+    if not 全:
+        送出([{"type": "text", "text": "🧠 還沒有 AI 大盤解讀。"}], "大盤解讀")
+        return
+    鍵 = max(全, key=lambda k: (全[k].get("時間", "") if isinstance(全[k], dict) else "", k))
+    篇 = 全[鍵]
+    內容 = 篇.get("內容", "") if isinstance(篇, dict) else str(篇)
+    文字 = re.sub(r"^#+\s*", "▍", engine.拆解解讀條件(內容)[0], flags=re.M).replace("**", "")
+    送出([{"type": "text", "text": t} for t in 切段(f"🧠 {鍵.replace('_', ' ')}大盤解讀\n\n{文字}")][:5], "大盤解讀")
+
+
+def 額度查詢():
+    import feedback
+    額 = feedback.LINE推播額度()
+    模式 = {"省": "\n目前是節省模式：低優先通知只在網站顯示。", "緊": "\n目前額度很緊：只推重要通知（收盤摘要、到價、停損）。"}.get(節省模式(額), "")
+    送出([{"type": "text", "text": (feedback.額度文字(額) or "查不到 LINE 額度") + 模式}], "額度提醒")
+
+
+文字指令 = {"新片": 新片查詢, "影片": 新片查詢, "新影片": 新片查詢, "解讀": 解讀查詢, "大盤": 解讀查詢, "額度": 額度查詢}
 
 
 if __name__ == "__main__":
@@ -1398,9 +1577,9 @@ if __name__ == "__main__":
             庫 = 持股文字().strip().count("\n")
             結果 = f"✅ SITE_PASSWORD 設定正確，讀到網站庫存 {庫} 檔"
         print(結果)
-        推播("🔧 設定檢查：" + 結果)
+        推播("🔧 設定檢查：" + 結果, "設定測試")
     elif 模式 == "test":
-        推播("✅ 台股觀測實驗室：LINE 推播設定成功！之後每個交易日收盤後會傳摘要給你。")
+        推播("✅ 台股觀測實驗室：LINE 推播設定成功！之後每個交易日收盤後會傳摘要給你。", "設定測試")
     elif 模式 == "alert":
         盤中提醒()
     elif 模式 == "health":
@@ -1409,8 +1588,13 @@ if __name__ == "__main__":
         週報()
     elif 模式 == "query":
         問 = " ".join(sys.argv[2:]).strip()
+        if 問 in 文字指令:
+            文字指令[問]()
+            sys.exit(0)
         簡 = 問.endswith(("快", "簡")) and len(問) > 2   # 「2330快」只要文字摘要，不做 AI 與 PDF
         個股查詢(問[:-1].strip() if 簡 else 問, 完整=not 簡)
+    elif 模式 == "flush":
+        送出待送()
     elif 模式 == "brief":
         大盤解讀(sys.argv[2] if len(sys.argv) > 2 else "收盤")
     else:

@@ -24,6 +24,8 @@ jobs:
   brief:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      LINE_OUTBOX: /tmp/line_outbox.json   # 解讀＋新片提醒合成 1 則推播（省 LINE 額度）
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -42,6 +44,20 @@ jobs:
           BRIEF_AUTO: ${{ (github.event_name == 'schedule' || github.event.inputs.auto == 'true') && '1' || '0' }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: 網紅新片提醒（平日併在盤前、夜盤這則一起傳；備援那次不跑）
+        if: github.event.schedule == '7 0 * * 1-5' || github.event.schedule == '13 14 * * 1-5'
+        continue-on-error: true
+        run: python -u auto_intake.py remind
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: LINE 合併送出
+        if: always()
+        continue-on-error: true
+        run: python notify.py flush
+        env:
           LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
