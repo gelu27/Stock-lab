@@ -546,13 +546,30 @@ def 通知斷線():
     斷 = 健康檢查()
     if not 斷:
         print("主動式 ETF 持股都有更新")
+        try:
+            import notify
+            狀態, sha = notify.讀設定("alert_state.json")
+            if 狀態.pop("ETF斷線", None):
+                notify.寫設定("alert_state.json", 狀態, sha)
+        except Exception as e:
+            print("清除 ETF 斷線狀態失敗：", repr(e))
         return
     文字 = "⚠️ 主動式 ETF 持股超過 2 個交易日沒更新：\n" + "\n".join(
         f"・{e}（最後 {d:%m/%d}）" if d else f"・{e}（還沒有資料）" for e, d in 斷) + \
         "\n可能是投信官網改版或彙整資料停止更新，網站上這幾檔會停在舊資料。"
     print(文字)
     import notify
-    notify.推播(文字)
+    狀態, sha = notify.讀設定("alert_state.json")
+    名單 = ",".join(sorted(e for e, _ in 斷))
+    if 狀態.get("ETF斷線") == 名單:   # 同一批 ETF 已經通知過，等名單有變才再傳（省 LINE 額度）
+        print("同一批 ETF 已經通知過，不重複推播")
+        return
+    notify.推播(文字, "ETF斷線")
+    狀態["ETF斷線"] = 名單
+    try:
+        notify.寫設定("alert_state.json", 狀態, sha)
+    except Exception as e:
+        print("記錄 ETF 斷線狀態失敗：", repr(e))
 
 
 def 前一交易日(日期):

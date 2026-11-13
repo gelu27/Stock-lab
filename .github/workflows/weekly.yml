@@ -5,10 +5,15 @@ on:
     - cron: "0 2 * * 6"   # 每週六 台灣時間 10:00
   workflow_dispatch:
 
+permissions:
+  contents: write   # LINE 用量紀錄 line_usage.json 存在 ai-reports 分支
+
 jobs:
   weekly:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      LINE_OUTBOX: /tmp/line_outbox.json   # 週報＋Gemini 用量小卡合成 1 則推播
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -42,3 +47,11 @@ jobs:
           name: ai-reports-backup-${{ github.run_id }}
           path: backup/
           retention-days: 90
+      - name: LINE 合併送出
+        if: always()
+        continue-on-error: true
+        run: python notify.py flush
+        env:
+          LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

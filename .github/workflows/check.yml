@@ -60,3 +60,5 @@ jobs:
         run: python tests/test_score80.py
       - name: 回饋循環（錯誤本、券商紀錄、規則體檢、週報自我檢討）
         run: python tests/test_feedback.py
+      - name: LINE 省額度（合併推播、節省模式、回覆不算額度）＋新片提醒
+        run: pip install -q pytest && python -m pytest -q tests/test_line_quota.py tests/test_auto_intake.py

@@ -48,4 +48,5 @@ jobs:
         run: python etf_data.py --health
         env:
           LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}

@@ -175,10 +175,23 @@ if _額:
     st.markdown(_回饋模組.額度文字(_額) + f"（{_額.get('查詢時間', '')} 查詢）")
 else:
     st.caption("還沒查到額度（每天收盤更新時用 LINE 官方 API 查一次，需要 Actions 的 LINE_TOKEN）。")
+try:
+    _用 = (engine.讀取設定檔(_設定(), "line_usage.json") or {}).get(f"{pd.Timestamp.now(tz='Asia/Taipei'):%Y-%m}", {})
+except Exception:
+    _用 = {}
+if _用:
+    _功能們 = sorted(set(_用.get("推播", {})) | set(_用.get("回覆", {})) | set(_用.get("略過", {})),
+                  key=lambda k: -_用.get("推播", {}).get(k, 0))
+    表格(pd.DataFrame([{"功能": k, "推播（算額度）": _用.get("推播", {}).get(k, 0),
+                       "回覆（不算）": _用.get("回覆", {}).get(k, 0), "節省模式略過": _用.get("略過", {}).get(k, 0)}
+                      for k in _功能們]), hide_index=True, width="stretch")
+    st.caption(f"本月實際推播 {_用.get('總則數', 0)} 則（同一次合併送出的幾個功能各記 1 次，但只算 1 則額度）。")
 _估 = pd.DataFrame(_回饋模組.推播來源估計, columns=["功能", "每月約幾則", "說明"])
 表格(_估, hide_index=True, width="stretch")
-st.caption(f"估計合計每月約 {int(_估['每月約幾則'].sum())} 則。LINE 免費方案每月主動推播有上限（一次送 5 段只算 1 則），"
-           "傳代號查詢的回覆不算額度。快超過時，可以把 AI 大盤解讀改成只推收盤一則，或把新片提醒改成每天一次。")
+st.caption(f"估計合計每月約 {int(_估['每月約幾則'].sum())} 則（免費上限 200 則；一次送最多 5 個訊息框只算 1 則）。"
+           "同一個排程的通知會合成一則；照目前速度月底會超過上限時自動進入節省模式，"
+           "新片提醒、盤中大盤價位、ETF 斷線、網站錯誤改成只在網站顯示；剩下的額度比剩餘天數少時只推收盤摘要、到價和停損。"
+           "在 LINE 打「新片」「解讀」「額度」會用回覆傳，不算額度。")
 
 段落("ERRORS // 網站錯誤紀錄")
 try:

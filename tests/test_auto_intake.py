@@ -70,7 +70,7 @@ def test_新片提醒只提醒一次(monkeypatch):
     rss = mock.Mock(text=f"<entry><yt:videoId>abcdefghijk</yt:videoId><title>【直播】測試</title><published>{現在}</published></entry>")
     monkeypatch.setattr(auto_intake.requests, "get", lambda *a, **k: rss)
     送 = []
-    monkeypatch.setattr(notify, "送出", lambda m: 送.append(m))
+    monkeypatch.setattr(notify, "送出", lambda m, *a, **k: 送.append(m))
     assert auto_intake.新片提醒({}) == 1
     文 = 送[0][0]["text"]
     assert len(送[0]) == 1 and "整理以下所有影片" in 文 and "影片連結如下" in 文 and "測試台｜" in 文 and "folders/" in 文

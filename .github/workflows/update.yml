@@ -45,6 +45,8 @@ jobs:
     if: needs.gate.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 340
+    env:
+      LINE_OUTBOX: /tmp/line_outbox.json   # 收盤摘要、收盤解讀、健康檢查先放這裡，最後一步合成 1 則推播（省 LINE 額度）
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -128,3 +130,11 @@ jobs:
           LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 記下哪些網站錯誤已通知過，避免每天重複推播
+      - name: LINE 合併送出（收盤摘要＋收盤解讀＋健康檢查，一次推播只算 1 則）
+        if: always()
+        continue-on-error: true
+        run: python notify.py flush
+        env:
+          LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
