@@ -9926,3 +9926,180 @@ def 台幣外資警示(匯率, 指標, 連續=2):
     else:
         燈, 說 = "⚪", f"匯率與外資沒有同向（近 {連續} 天匯率變動 {匯[-1] - 匯[0]:+.2f}，外資{'買' if 外 >= 0 else '賣'}超約 {abs(外):,.0f} 億）。"
     return {"燈": 燈, "說明": 說, "匯率": float(匯[-1]), "外資億": 外, "日期": 最新}
+
+
+# ========== 2026-11-13 網紅摘要建議：輝達事件週、反彈延續燈、國安隔日／一季、營收動能、價位量級提示 ==========
+輝達連動股 = ("2330", "2317", "2382", "3231", "2454", "2308", "3443", "3661", "6669", "2345")
+
+
+def 輝達事件(美股, 指標, 天數=60, 筆數=12):
+    """輝達換帥／財報週：財報倒數、輝達最新收盤、離一年高點，以及台股（含供應鏈名單）近 天數 個交易日
+    「輝達前一個美股交易日報酬 → 台股隔天報酬」的相關係數。回傳 dict：財報日、倒數天、時段、收盤、單日%、距高%、表。
+    相關係數只代表過去一陣子「一起動」的程度，不是營收占比，也不代表因果。"""
+    if 美股 is None or "輝達" not in 美股 or 指標 is None or 指標.empty:
+        return None
+    n = 美股["輝達"].dropna()
+    if len(n) < 30:
+        return None
+    今 = pd.Timestamp(指標["date"].max())
+    財報日, 時段 = None, ""
+    f = 資料夾 / "us_earnings.csv"
+    if f.exists():
+        e = pd.read_csv(f, parse_dates=["date"])
+        e = e[(e["symbol"] == "NVDA") & (e["date"] >= 今.normalize())].sort_values("date")
+        if len(e):
+            財報日, 時段 = e.iloc[0]["date"], str(e.iloc[0].get("time", ""))
+    碼們 = set(輝達連動股)
+    g = 資料夾 / "supply_chain.csv"
+    if g.exists():
+        碼們 |= set(pd.read_csv(g, dtype=str)["code"].dropna())
+    r = n.pct_change().dropna()
+    寬 = 指標[指標["代號"].isin(碼們) & (指標["date"] >= 今 - pd.Timedelta(days=int(天數 * 1.8)))].pivot_table(
+        index="date", columns="代號", values="日報酬")
+    位 = r.index.searchsorted(寬.index, side="left") - 1  # 台股日 d 對應「d 以前最近一個美股日」
+    有 = 位 >= 0
+    x = pd.Series(r.to_numpy()[位[有]], index=寬.index[有]).tail(天數)
+    寬 = 寬.loc[x.index]
+    列們 = []
+    名 = 指標.drop_duplicates("代號", keep="last").set_index("代號")["名稱"]
+    for c in 寬.columns:
+        s = 寬[c]
+        if s.notna().sum() < 40:
+            continue
+        列們.append({"代號": c, "名稱": 名.get(c, ""), "相關": round(float(s.corr(x)), 2),
+                   "最近一日%": round(float(s.dropna().iloc[-1]) * 100, 1)})
+    表 = pd.DataFrame(列們).sort_values("相關", ascending=False).head(筆數) if 列們 else pd.DataFrame()
+    return {"財報日": 財報日, "倒數天": (財報日 - 今.normalize()).days if 財報日 is not None else None, "時段": 時段,
+            "日期": n.index[-1], "收盤": float(n.iloc[-1]), "單日%": round(float(n.iloc[-1] / n.iloc[-2] - 1) * 100, 1),
+            "距高%": round(float(n.iloc[-1] / n.tail(250).max() - 1) * 100, 1), "表": 表}
+
+
+def _站上均線(s, n):
+    s = s.dropna()
+    return bool(len(s) > n and s.iloc[-1] > s.tail(n).mean())
+
+
+def 反彈延續燈(美股, 匯率, K, 重貶=1.0):
+    """老王的反彈延續條件：費半、那斯達克守住 5 日線；台幣沒有重貶（5 個交易日升值幅度，美元兌台幣上升超過 重貶% 算重貶）；
+    加權守住 5、10 日線。回傳 dict（燈、條件清單[(文字, 是否成立)]、說明）。全成立 🟢；加權跌破 5、10 日線或台幣重貶 🔴；其餘 🟡。"""
+    條件 = []
+    if 美股 is not None:
+        for 名 in ("費城半導體", "那斯達克"):
+            if 名 in 美股:
+                條件.append((f"{名}站上 5 日線", _站上均線(美股[名], 5)))
+    重 = False
+    if 匯率 is not None and len(匯率) > 6:
+        m = 匯率.sort_values("date")["usdtwd"].astype(float).to_numpy()
+        變 = (m[-1] / m[-6] - 1) * 100
+        重 = 變 >= 重貶
+        條件.append((f"台幣沒有重貶（近 5 日美元兌台幣 {變:+.2f}%，重貶門檻 +{重貶:.1f}%）", not 重))
+    破 = False
+    if K is not None and len(K) > 12:
+        c = K.sort_values("date")["close"].astype(float)
+        a, b = _站上均線(c, 5), _站上均線(c, 10)
+        條件.append(("加權站上 5 日線", a))
+        條件.append(("加權站上 10 日線", b))
+        破 = (not a) and (not b)
+    if not 條件:
+        return None
+    全 = all(v for _, v in 條件)
+    燈 = "🟢" if 全 else ("🔴" if (破 or 重) else "🟡")
+    話 = {"🟢": "條件都成立，反彈有機會延續（老王的說法）。", "🟡": "有條件沒過，反彈延續性要打折，留意是哪一項轉弱。",
+         "🔴": "加權跌破 5、10 日線或台幣重貶：照老王的說法，反彈暫時告一段落。"}[燈]
+    return {"燈": 燈, "條件": 條件, "說明": 話}
+
+
+def 反彈延續回測(美股, 匯率, K, 重貶=1.0):
+    """把 反彈延續燈 的條件放到歷史：每天收盤後條件全成立 vs 沒有全成立，之後 5、20 個交易日加權報酬。
+    美股用「台股日以前最近一個美股交易日」，避免偷看。回傳 DataFrame（組別、天數、次數、平均%、上漲機率%）。"""
+    if 美股 is None or K is None or 匯率 is None or "費城半導體" not in 美股 or "那斯達克" not in 美股:
+        return pd.DataFrame()
+    k = K.sort_values("date").set_index("date")["close"].astype(float)
+    ok = (k > k.rolling(5).mean()) & (k > k.rolling(10).mean())
+    u = ((美股["費城半導體"] > 美股["費城半導體"].rolling(5).mean()) & (美股["那斯達克"] > 美股["那斯達克"].rolling(5).mean())).dropna()
+    位 = u.index.searchsorted(k.index, side="left") - 1
+    美 = pd.Series(np.where(位 >= 0, u.to_numpy()[np.clip(位, 0, None)], False), index=k.index)
+    m = 匯率.sort_values("date").set_index("date")["usdtwd"].astype(float)
+    變 = (m / m.shift(5) - 1) * 100
+    台 = (變.reindex(k.index, method="ffill") < 重貶).fillna(False)
+    全 = ok & 美 & 台
+    起 = u.index.min() + pd.Timedelta(days=10)
+    列們 = []
+    for n in (5, 20):
+        fwd = (k.shift(-n) / k - 1) * 100
+        for 名, 遮 in (("條件全成立", 全), ("沒有全成立", ~全)):
+            v = fwd[遮 & (k.index >= 起)].dropna()
+            if len(v):
+                列們.append({"組別": 名, "天數": n, "次數": len(v), "平均%": round(float(v.mean()), 2),
+                           "上漲機率%": round(float((v > 0).mean() * 100), 0)})
+    return pd.DataFrame(列們)
+
+
+def 國安隔日一季(表, 門檻=3.0):
+    """兆華艾綸說：國安進場後隔天多半噴出 3% 以上，但一季後 4 勝 5 敗。用 國安基金統計 的表對答案
+    （一季＝60 個交易日，從決議日收盤起算）。回傳 dict；沒有任何一次可算回傳 None。"""
+    if 表 is None or 表.empty or "1日%" not in 表 or "60日%" not in 表:
+        return None
+    a = 表["1日%"].dropna()
+    b = 表["60日%"].dropna()
+    if not len(a):
+        return None
+    return {"隔日次數": len(a), "隔日噴出": int((a >= 門檻).sum()), "隔日上漲": int((a > 0).sum()), "門檻": 門檻,
+            "一季次數": len(b), "一季上漲": int((b > 0).sum()), "一季平均%": round(float(b.mean()), 1) if len(b) else np.nan}
+
+
+def 營收動能名單(今日=None, 營收=None, 下限千元=300000, 筆數=80):
+    """股魚：優先選「短期營收動能優於長期、而且營收還在成長」的公司。
+    近 3 個月營收合計年增（短期）> 近 12 個月合計年增（長期）> -∞，且短期年增 > 0；
+    近 3 個月營收合計（今年與去年同期都要）低於 下限千元（預設 3 億）不列，避免基期很小、年增上萬 % 的公司。回傳 DataFrame（依動能差由大到小）。"""
+    if 營收 is None:
+        來源 = 資料夾 / "fundamental"
+        表們 = [pd.read_csv(來源 / 名, dtype={"code": str}) for 名 in ("revenue_history.csv", "revenue.csv") if (來源 / 名).exists()]
+        if not 表們:
+            return pd.DataFrame()
+        營收 = pd.concat([t[["code", "month", "revenue"]] for t in 表們]).dropna().drop_duplicates(["code", "month"], keep="last")
+    p = 營收.pivot_table(index="month", columns="code", values="revenue").sort_index()
+    家 = p.notna().sum(axis=1)
+    p = p[家 >= 50] if (家 >= 50).any() else p
+    if len(p) < 25:
+        return pd.DataFrame()
+    s3, s12 = p.rolling(3).sum(), p.rolling(12).sum()
+    y3 = (s3.iloc[-1] / s3.iloc[-13] - 1) * 100
+    y12 = (s12.iloc[-1] / s12.iloc[-13] - 1) * 100
+    t = pd.DataFrame({"近3月年增": y3, "近12月年增": y12, "近3月營收": s3.iloc[-1], "去年同期": s3.iloc[-13]}).dropna()
+    t = t[(t["近3月營收"] >= 下限千元) & (t["去年同期"] >= 下限千元) & (t["近3月年增"] > 0) & (t["近3月年增"] > t["近12月年增"])]
+    t = t.drop(columns="去年同期")
+    t["動能差"] = t["近3月年增"] - t["近12月年增"]
+    t = t.round(1).sort_values("動能差", ascending=False).head(筆數)
+    t.index.name = "代號"
+    t = t.reset_index()
+    t["月份"] = p.index[-1]
+    if 今日 is not None and len(t):
+        d = 今日.drop_duplicates("代號").set_index("代號")
+        for 欄 in ("名稱", "收盤", "投信連買", "融資20日增減"):
+            if 欄 in d:
+                t[欄] = t["代號"].map(d[欄])
+        t = t[t["名稱"].notna()] if "名稱" in t else t
+    return t.reset_index(drop=True)
+
+
+def 價位量級提示(影片們, 現價, 天數=14, 今天=None):
+    """網紅說的價位（「…元」）跟現價差約 10 倍時，多半是字幕漏了一位數（例如 667 元念成 66 元）。
+    現價＝{代號: 收盤}。只看 理由／原文看法 裡的「數字＋元」，倍數 8～12 倍才提示。回傳 DataFrame。"""
+    今天 = pd.Timestamp(今天 or pd.Timestamp.now().normalize())
+    列們 = []
+    for v in 影片們:
+        日 = pd.to_datetime(v.get("日期"), errors="coerce")
+        if pd.isna(日) or (今天 - 日).days > 天數:
+            continue
+        for x in v.get("股票", []):
+            價 = 現價.get(str(x.get("代號") or ""))
+            if not 價 or 價 <= 0:
+                continue
+            文 = f"{x.get('理由') or ''} {x.get('原文看法') or ''}"
+            for m in re.findall(r"(\d+(?:\.\d+)?)\s*元", 文):
+                n = float(m)
+                if n > 0 and 8 <= 價 / n <= 12:
+                    列們.append({"影片日": 日, "頻道": v.get("頻道", ""), "股票": f"{x.get('代號')} {x.get('名稱', '')}".strip(),
+                               "影片說": f"{m} 元", "現價": 價, "倍數": round(價 / n, 1)})
+    return pd.DataFrame(列們).drop_duplicates() if 列們 else pd.DataFrame()
