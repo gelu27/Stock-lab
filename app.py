@@ -234,6 +234,22 @@ a.cardlink:hover .card, a.cardlink:active .card {{ border-color: {青}; backgrou
 .steps b {{ color: {青}; display: block; margin-bottom: 4px; }}
 .steps span {{ font-size: 13px; color: #BDBDBD; }}
 @media (max-width: 640px) {{ .steps {{ grid-template-columns: 1fr; }} }}
+/* 手機大圖示選單 */
+.menu {{ display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid #1C2A30; border-left: 1px solid #1C2A30;
+    margin: 4px 0 10px; background: #071014; }}
+.menu a {{ display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; aspect-ratio: 1 / .92;
+    border-right: 1px solid #1C2A30; border-bottom: 1px solid #1C2A30; text-decoration: none !important; color: #EDEDED !important; }}
+.menu a svg {{ width: 46%; max-width: 64px; color: #7FE9FF; filter: drop-shadow(0 0 6px rgba(0,229,255,.45)); }}
+.menu a span {{ font-family: 'Noto Sans TC', sans-serif; font-size: 19px; font-weight: 700; letter-spacing: .04em; }}
+.menu a:active, .menu a:hover {{ background: #0C1C22; }}
+.menu a.on {{ background: #0B1A20; box-shadow: inset 0 -3px 0 {青}; }}
+.menu-s {{ display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; margin: 2px 0 8px; }}
+.menu-s::-webkit-scrollbar {{ display: none; }}
+.menu-s a {{ flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 4px; width: 68px; padding: 8px 2px 6px;
+    border: 1px solid #1C2A30; background: #071014; text-decoration: none !important; color: #BDBDBD !important; }}
+.menu-s a svg {{ width: 26px; height: 26px; color: #7FE9FF; }}
+.menu-s a span {{ font-family: 'Noto Sans TC', sans-serif; font-size: 13px; white-space: nowrap; }}
+.menu-s a.on {{ border-color: {青}; color: #FFF !important; background: #0B1A20; }}
 /* 今天必須知道 */
 .must {{ border: 1px solid #1E1E1E; border-left: 3px solid {青}; background: #050505; margin: 6px 0 4px; }}
 .must div {{ display: flex; gap: 10px; padding: 12px 14px; border-bottom: 1px solid #141414;
@@ -296,8 +312,7 @@ html {{ font-size: 18px; }}
 .lamp .t {{ font-size: 17px; }} .lamp .s {{ font-size: 14px; }}
 .jump a {{ font-size: 15px; padding: 6px 12px; }}
 .ticker span {{ font-size: 15px; }}
-.st-key-nav button p {{ font-size: 14px !important; }}
-.st-key-nav button {{ min-height: 42px !important; }}
+.st-key-nav {{ display: none; }}
 .stButton > button {{ min-height: 46px; }}
 .stTabs [data-baseweb="tab"] {{ padding: 12px 14px; }}
 .tip {{ font-size: 13px; }}
@@ -906,6 +921,33 @@ with st.container(key="nav"):
     頁面 = st.segmented_control("頁面", 頁面們, key="頁面", label_visibility="collapsed") or 頁面們[0]
 if st.query_params.get("p") != 頁面[:2]:
     st.query_params["p"] = 頁面[:2]
+
+# ---------- 手機模式：大圖示選單（首頁一排三格大圖示；其他頁上方一排小圖示可左右滑） ----------
+_圖示路徑 = {  # 自繪線條圖示（24×24）
+    "01": '<polyline points="2,13 6,13 8.5,6 11.5,19 14.5,9 16.5,13 22,13"/>',
+    "02": '<rect x="3" y="6" width="18" height="14" rx="2"/><path d="M8 6V4h8v2"/><polygon points="12,9.5 13.2,12 15.9,12.3 13.9,14.1 14.4,16.8 12,15.4 9.6,16.8 10.1,14.1 8.1,12.3 10.8,12"/>',
+    "03": '<circle cx="10.5" cy="10.5" r="6.5"/><line x1="15.3" y1="15.3" x2="21" y2="21"/><line x1="8" y1="8" x2="8" y2="13"/><line x1="10.5" y1="7" x2="10.5" y2="14"/><line x1="13" y1="9" x2="13" y2="12"/>',
+    "04": '<path d="M3 4h18l-7 8.5V19l-4 2v-8.5z"/>',
+    "05": '<line x1="3" y1="21" x2="21" y2="21"/><rect x="4.5" y="13" width="3" height="6"/><rect x="10.5" y="9" width="3" height="10"/><rect x="16.5" y="5" width="3" height="14"/><polyline points="4,9 10,5 14,7 20,2"/>',
+    "06": '<circle cx="12" cy="12" r="9"/><path d="M12 3v9l7.5 5"/><path d="M12 12L4.5 17"/>',
+    "07": '<path d="M3.5 17a9 9 0 1 1 17 0"/><line x1="12" y1="15" x2="16.5" y2="9"/><circle cx="12" cy="15" r="1.4"/><line x1="5" y1="12" x2="6.5" y2="12.4"/><line x1="19" y1="12" x2="17.5" y2="12.4"/>',
+    "08": '<path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"/><polyline points="3,3.5 3.5,8 8,7.5"/><polyline points="12,7.5 12,12 15,14"/>',
+    "09": '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.6 2.7-6 6-6s6 2.4 6 6"/><circle cx="17" cy="9" r="2.4"/><path d="M15.5 14.3c3.2-.6 5.5 1.6 5.5 5"/>',
+}
+_圖示名 = {"01": "大盤總覽", "02": "我的股票", "03": "個股查詢", "04": "選股", "05": "月營收", "06": "主動 ETF",
+         "07": "每日評分", "08": "回測", "09": "使用統計"}
+
+
+def 圖示選單(小=False):
+    格 = "".join(
+        f'<a href="?p={碼}" target="_self" class="{"on" if 頁面.startswith(碼) else ""}">'
+        f'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">{路}</svg>'
+        f'<span>{_圖示名[碼]}</span></a>' for 碼, 路 in _圖示路徑.items())
+    st.markdown(f'<div class="{"menu-s" if 小 else "menu"}">{格}</div>', unsafe_allow_html=True)
+
+
+if 手機:
+    圖示選單(小=頁面 != 頁面們[0])
 st.session_state["_網址p"] = 頁面[:2]
 
 
