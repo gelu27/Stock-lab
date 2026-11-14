@@ -961,7 +961,7 @@ def 抓台指期價差(天數=400):
     if not 有資料:
         return
     今天 = pd.Timestamp(max(有資料)).date()
-    有K = len(舊) and "fut_open" in 舊.columns   # 舊檔沒有開高低：整段重抓一次，網站才畫得出台指期 K 線
+    有K = len(舊) and "fut_volume" in 舊.columns   # 舊檔沒有開高低：整段重抓一次，網站才畫得出台指期 K 線
     起 = (pd.Timestamp(舊["date"].max()).date() + dt.timedelta(days=1)) if 有K else 今天 - dt.timedelta(days=天數)
     列們 = []
     while 起 <= 今天:
@@ -979,6 +979,7 @@ def 抓台指期價差(天數=400):
                        open=pd.to_numeric(量["開盤價"], errors="coerce"),
                        high=pd.to_numeric(量["最高價"], errors="coerce"),
                        low=pd.to_numeric(量["最低價"], errors="coerce"),
+                       vol=pd.to_numeric(量["成交量"], errors="coerce"),
                        oi=pd.to_numeric(量["未沖銷契約數"], errors="coerce"))
         for 日, g in 量.groupby("date"):
             有價 = g.dropna(subset=["close"]).sort_values("month")
@@ -986,7 +987,8 @@ def 抓台指期價差(天數=400):
                 continue
             近 = 有價.iloc[0]
             列們.append({"date": 日, "month": 近["month"], "fut_close": float(近["close"]),
-                        "total_oi": int(g["oi"].sum()), "fut_open": 近["open"], "fut_high": 近["high"], "fut_low": 近["low"]})
+                        "total_oi": int(g["oi"].sum()), "fut_open": 近["open"], "fut_high": 近["high"], "fut_low": 近["low"],
+                        "fut_volume": 近["vol"]})
         起 = 迄 + dt.timedelta(days=1)
     if not 列們:
         print("台指期價差沒有新資料")
