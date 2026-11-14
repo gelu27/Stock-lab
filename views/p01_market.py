@@ -2648,7 +2648,7 @@ def 反彈延續區():
 
 
 def 必知項目():
-    """手機模式首頁最上面：今天必須知道的 5～8 件事（規則整理，不用 AI）。回傳 [(圖示, HTML 文字, 是否警示)]。"""
+    """手機模式首頁最上面：今天必須知道的 5～8 件事（規則整理，不用 AI）。回傳 [(圖示, HTML 文字, 是否警示[, 迷你圖 SVG])]。"""
     項 = []
     每日 = 市場每日(_版本)
     上漲, 下跌 = int((今日["漲跌"] > 0).sum()), int((今日["漲跌"] < 0).sum())
@@ -2665,7 +2665,8 @@ def 必知項目():
         均 = 每日["成交金額"].tail(6).iloc[:-1].mean() if len(每日) >= 6 else np.nan
         量字 = f"，成交 {量:,.0f} 億" + (f"（比 5 日均量{'多' if 量 >= 均 else '少'} {abs(量 / 均 - 1) * 100:.0f}%）" if pd.notna(均) and 均 else "")
         項.append(("📈" if r["change"] >= 0 else "📉",
-                  f'<b>加權 {r["close"]:,.0f}</b>（{r["change"]:+,.0f}，<span style="color:{漲跌色(幅)}">{幅:+.2f}%</span>）{量字}', False))
+                  f'<b>加權 {r["close"]:,.0f}</b>（{r["change"]:+,.0f}，<span style="color:{漲跌色(幅)}">{幅:+.2f}%</span>）{量字}', False,
+                  迷你線(加權["close"].tail(20))))
     項.append(("⚖️", f'漲 <span style="color:{紅}">{上漲}</span> 家・跌 <span style="color:{綠}">{下跌}</span> 家'
                + ("，<b>多數股票在漲</b>" if 上漲 > 下跌 * 1.5 else ("，<b>多數股票在跌</b>" if 下跌 > 上漲 * 1.5 else "，漲跌互見")), False))
     try:
@@ -2683,11 +2684,12 @@ def 必知項目():
                + (f"，建議持股約 <b>{水位:.0f}%</b>" if 水位 is not None else ""), "空" in 判["狀態"]))
     if "外資" in 每日 and 每日["外資"].notna().any():
         今外, 五外 = float(每日["外資"].iloc[-1]), float(每日["外資"].tail(5).sum())
-        項.append(("🏦", f'外資今天{"買" if 今外 >= 0 else "賣"}超約 <b>{abs(今外):,.0f} 億</b>，近 5 日{"買" if 五外 >= 0 else "賣"}超 {abs(五外):,.0f} 億', 五外 < -500))
+        項.append(("🏦", f'外資今天{"買" if 今外 >= 0 else "賣"}超約 <b>{abs(今外):,.0f} 億</b>，近 5 日{"買" if 五外 >= 0 else "賣"}超 {abs(五外):,.0f} 億', 五外 < -500,
+                  迷你柱(每日["外資"].tail(10))))
     if "維持率" in 每日 and 每日["維持率"].notna().any():
         維 = float(每日["維持率"].dropna().iloc[-1])
         級, _ = 維持率等級(維)
-        項.append(("💳", f"融資維持率 <b>{維:.0f}%</b>：{級}", 維 < 150))
+        項.append(("💳", f"融資維持率 <b>{維:.0f}%</b>：{級}", 維 < 150, 迷你線(每日["維持率"].tail(20), "#FFB020")))
     try:
         _, 行, _, _ = 總經資料(_版本)
         事 = macro.下一個大事(行)
@@ -2731,17 +2733,112 @@ def 必知區():
     段落("MUST KNOW // 今天必須知道")
     項 = 必知項目()
     st.markdown('<div class="must">' + "".join(
-        f'<div class="{"warn" if 警 else ""}"><i>{圖}</i><span>{字}</span></div>' for 圖, 字, 警 in 項) + "</div>",
+        f'<div class="{"warn" if x[2] else ""}"><i>{x[0]}</i><span>{x[1]}</span>{x[3] if len(x) > 3 else ""}</div>' for x in 項) + "</div>",
         unsafe_allow_html=True)
-    st.caption("依收盤資料用規則整理，不是買賣建議。" + ("" if 可編輯() else "解鎖後（02 / 我的股票）也會列出你的股票到價、警示、大漲大跌。"))
+    st.caption("依收盤資料用規則整理，不是買賣建議。右邊小圖：加權、融資維持率是近 20 日走勢，外資是近 10 日買賣超（紅買綠賣）。" + ("" if 可編輯() else "解鎖後（02 / 我的股票）也會列出你的股票到價、警示、大漲大跌。"))
 
 
-首頁區塊 = ["必知", "30秒", "市場", "狀態", "價位", "AI解讀", "焦點", "國際", "總經", "連動", "加權指數", "權值", "資金", "跌深", "止跌", "護盤", "選擇權", "情緒", "水位", "族群", "行事曆", "事件", "輝達", "延續", "排行"]
+def 漲跌月曆區():
+    """加權指數近 3 個月每天漲跌的月曆熱圖：一格一天，紅漲綠跌、越深漲跌越大，連漲連跌一眼看出。"""
+    段落("CALENDAR // 加權漲跌月曆（近 3 個月）")
+    if 加權 is None or len(加權) < 10:
+        st.caption("資料不足。")
+        return
+    K = 加權.sort_values("date").tail(66).copy()
+    K["幅"] = K["change"] / (K["close"] - K["change"]) * 100
+    K["週"] = K["date"] - pd.to_timedelta(K["date"].dt.weekday, unit="D")
+    K["星期"] = K["date"].dt.weekday
+    週們 = sorted(K["週"].unique())
+    z = [[None] * len(週們) for _ in range(5)]
+    字 = [[""] * len(週們) for _ in range(5)]
+    提示 = [[""] * len(週們) for _ in range(5)]
+    for _, r in K.iterrows():
+        if r["星期"] > 4:
+            continue
+        j = 週們.index(r["週"])
+        z[r["星期"]][j] = float(r["幅"])
+        字[r["星期"]][j] = f'{r["date"].day}'
+        提示[r["星期"]][j] = f'{r["date"]:%m/%d}（{"一二三四五"[r["星期"]]}）加權 {r["close"]:,.0f}　{r["幅"]:+.2f}%'
+    界 = max(2.0, float(K["幅"].abs().quantile(.9)))
+    圖 = go.Figure(go.Heatmap(
+        z=z, x=[f"{pd.Timestamp(w):%m/%d}" for w in 週們], y=["一", "二", "三", "四", "五"], text=字, customdata=提示,
+        texttemplate="%{text}", textfont=dict(size=12 if 手機 else 11, color="#EDEDED"),
+        colorscale=[[0, "#00A870"], [.5, "#2A2A2A"], [1, "#E0244A"]], zmin=-界, zmax=界, zmid=0,
+        xgap=3, ygap=3, showscale=False, hovertemplate="%{customdata}<extra></extra>"))
+    圖表外觀(圖, 230 if 手機 else 210).update_layout(
+        hovermode="closest", yaxis=dict(autorange="reversed", gridcolor="rgba(0,0,0,0)", fixedrange=True),
+        xaxis=dict(side="top", gridcolor="rgba(0,0,0,0)", tickfont=dict(size=10), fixedrange=True, dtick=2 if 手機 else 1),
+        margin=dict(l=4, r=4, t=26, b=4))
+    st.plotly_chart(圖, width="stretch", config={"displayModeBar": False})
+    連 = 0
+    for v in K["幅"].iloc[::-1]:
+        if 連 == 0:
+            連 = 1 if v > 0 else -1
+        elif (v > 0) == (連 > 0):
+            連 += 1 if 連 > 0 else -1
+        else:
+            break
+    漲日 = int((K["幅"] > 0).sum())
+    st.caption(f"近 {len(K)} 個交易日：上漲 {漲日} 天、下跌 {len(K) - 漲日} 天；目前{'連漲' if 連 > 0 else '連跌'} {abs(連)} 天。"
+               f"一格一天，格子裡是日期；顏色越深漲跌越大（±{界:.1f}% 以上最深）。上方是每週一的日期。")
 
 
-新手區塊 = ["30秒", "市場", "狀態", "水位", "AI解讀", "焦點", "排行"]
-手機區塊 = ["必知", "30秒", "焦點"]
-版面們 = {"手機": "今天必須知道＋三十秒看盤＋焦點股，字大好讀", "新手": "只看 7 個重點區塊", "完整": "全部區塊", "自訂": "自己挑、自己排順序"}
+漲跌區間 = [(-99, -9.5, "跌停"), (-9.5, -7, "−7<br>−9.5"), (-7, -5, "−5<br>−7"), (-5, -3, "−3<br>−5"), (-3, -1, "−1<br>−3"), (-1, -1e-9, "0<br>−1"),
+          (-1e-9, 1e-9, "平盤"), (1e-9, 1, "0<br>+1"), (1, 3, "+1<br>+3"), (3, 5, "+3<br>+5"), (5, 7, "+5<br>+7"), (7, 9.5, "+7<br>+9.5"), (9.5, 99, "漲停")]
+
+
+def 漲跌分布表(表):
+    """把每檔股票的漲跌幅分到 13 個區間（跌停…平盤…漲停），回傳 [(標籤, 家數, 中點)]。ETF 不算。"""
+    幅 = 表.loc[~表["代號"].str.startswith("0") & (表["成交張數"] > 0), "漲跌幅"].dropna()
+    列 = []
+    for 低, 高, 名 in 漲跌區間:
+        if 名 == "平盤":
+            n = int((幅.abs() < 1e-9).sum())
+        elif 高 <= 0:
+            n = int(((幅 > 低) & (幅 <= 高)).sum()) if 低 > -99 else int((幅 <= 高).sum())
+        else:
+            n = int(((幅 >= 低) & (幅 < 高)).sum()) if 高 < 99 else int((幅 >= 低).sum())
+        列.append((名, n, (max(低, -10) + min(高, 10)) / 2))
+    return 列, 幅
+
+
+def 漲跌分布區():
+    """市場溫度帶：全部股票今天的漲跌幅分布。一眼看出是「普漲」「普跌」還是「少數權值股撐盤」。"""
+    段落("SPREAD // 漲跌溫度帶")
+    列, 幅 = 漲跌分布表(今日)
+    if not len(幅):
+        st.caption("資料不足。")
+        return
+    名們 = [x[0] for x in 列]
+    數們 = [x[1] for x in 列]
+    # 顏色：越往兩端越深（綠跌、紅漲），平盤灰
+    色們 = ["#5A5A5A" if i == 6 else
+            (f"rgba(255,59,92,{.32 + .68 * (i - 7) / 5:.2f})" if i > 6 else f"rgba(0,214,143,{.32 + .68 * (5 - i) / 5:.2f})")
+            for i in range(len(列))]
+    上, 下 = int((幅 > 0).sum()), int((幅 < 0).sum())
+    全 = len(幅)
+    卡片格([卡片("上漲比例", f"{上 / 全 * 100:.0f}%", f"{上} 家", 紅), 卡片("中位數漲跌", f"{幅.median():+.2f}%", "一半股票漲超過這個數", 漲跌色(幅.median())),
+           卡片("漲停／跌停", f"{數們[-1]} / {數們[0]}", "約略計算（≥9.5%）", "#EDEDED")])
+    圖 = go.Figure(go.Bar(x=名們, y=數們, marker=dict(color=色們, line=dict(width=0), cornerradius=4),
+                          text=[f"{n:,}" if n else "" for n in 數們], textposition="outside", cliponaxis=False,
+                          textfont=dict(color="#BDBDBD", size=13 if 手機 else 11),
+                          customdata=[x.replace("<br>", "～") for x in 名們], hovertemplate="%{customdata}%：%{y:,} 家<extra></extra>"))
+    圖表外觀(圖, 260 if 手機 else 240).update_layout(bargap=.18, hovermode="closest", showlegend=False,
+                                                yaxis=dict(visible=False), xaxis=dict(tickangle=0, tickfont=dict(size=11 if 手機 else 11), gridcolor="rgba(0,0,0,0)"),
+                                                margin=dict(l=4, r=4, t=24, b=4))
+    st.plotly_chart(圖, width="stretch", config={"displayModeBar": False})
+    判 = ("普漲：大部分股票都在漲" if 上 / 全 > .65 else "普跌：大部分股票都在跌" if 下 / 全 > .65
+         else "漲跌互見：個股表現分歧")
+    尾 = 數們[-1] + 數們[-2] - 數們[0] - 數們[1]
+    st.caption(f"{判}；大漲（7% 以上）比大跌多 {尾:+d} 家。每根柱子＝漲跌幅落在那個區間（%）的股票家數，越往兩邊顏色越亮代表漲跌越大；只算上市櫃普通股，不含 ETF。")
+
+
+首頁區塊 = ["必知", "30秒", "市場", "分布", "狀態", "價位", "AI解讀", "焦點", "國際", "總經", "連動", "加權指數", "月曆", "權值", "資金", "跌深", "止跌", "護盤", "選擇權", "情緒", "水位", "族群", "行事曆", "事件", "輝達", "延續", "排行"]
+
+
+新手區塊 = ["30秒", "市場", "分布", "狀態", "水位", "AI解讀", "焦點", "排行"]
+手機區塊 = ["必知", "分布", "30秒", "月曆", "焦點"]
+版面們 = {"手機": "今天必須知道＋漲跌溫度帶＋三十秒看盤＋漲跌月曆＋焦點股，字大好讀", "新手": "只看 8 個重點區塊", "完整": "全部區塊", "自訂": "自己挑、自己排順序"}
 預設版面 = "手機" if 手機 else "新手"
 
 
@@ -2782,7 +2879,7 @@ def _國際():
         國際行情()
     except Exception:
         st.caption("國際行情暫時無法顯示。")
-區塊函式 = {"必知": 必知區, "30秒": 三十秒卡, "市場": 市場卡片, "狀態": 狀態區, "價位": 關鍵價位區, "AI解讀": AI解讀區, "焦點": 焦點區, "國際": _國際, "總經": 總經區, "連動": 連動區,
+區塊函式 = {"必知": 必知區, "分布": 漲跌分布區, "月曆": 漲跌月曆區, "30秒": 三十秒卡, "市場": 市場卡片, "狀態": 狀態區, "價位": 關鍵價位區, "AI解讀": AI解讀區, "焦點": 焦點區, "國際": _國際, "總經": 總經區, "連動": 連動區,
          "加權指數": 加權圖 if 加權 is not None and len(加權) > 1 else None, "權值": 權值區, "資金": 資金面區, "跌深": 跌深區, "止跌": 止跌訊號區, "護盤": 護盤區, "選擇權": 選擇權區, "事件": 事件區, "輝達": 輝達週區, "延續": 反彈延續區,
          "情緒": 情緒區, "水位": 資金水位區, "族群": 族群熱力圖, "行事曆": 行事曆區, "排行": 排行區}
 要畫 = [x for x in 顯示 if 區塊函式.get(x)]
@@ -2821,6 +2918,6 @@ if 模式 == "手機":
         st.session_state["首頁版面"] = 值
     段落("MORE // 想看更多")
     a, b = st.columns(2)
-    a.button("🔰 新手版首頁（7 區塊）", on_click=_換版面, args=("新手",), key="換新手版面", width="stretch")
+    a.button("🔰 新手版首頁（8 區塊）", on_click=_換版面, args=("新手",), key="換新手版面", width="stretch")
     b.button("📚 完整首頁（全部區塊）", on_click=_換版面, args=("完整",), key="換完整版面", width="stretch")
-    st.caption("手機版首頁只放最重要的三塊；其他頁面（個股查詢、我的股票…）從上方選單進入，字體一樣會放大。")
+    st.caption("手機版首頁只放最重要的五塊；其他頁面（個股查詢、我的股票…）從上方選單進入，字體一樣會放大。")

@@ -250,6 +250,9 @@ a.cardlink:hover .card, a.cardlink:active .card {{ border-color: {青}; backgrou
 .menu-s a svg {{ width: 26px; height: 26px; color: #7FE9FF; }}
 .menu-s a span {{ font-family: 'Noto Sans TC', sans-serif; font-size: 13px; white-space: nowrap; }}
 .menu-s a.on {{ border-color: {青}; color: #FFF !important; background: #0B1A20; }}
+/* 區塊標題：英文 // 中文 */
+.sec .en {{ color: {青}; }} .sec b {{ font-family: 'Noto Sans TC', sans-serif; font-weight: 700; color: #EDEDED; font-size: 15px; letter-spacing: .08em; }}
+svg.spark {{ flex: 0 0 auto; align-self: center; margin-left: auto; }}
 /* 今天必須知道 */
 .must {{ border: 1px solid #1E1E1E; border-left: 3px solid {青}; background: #050505; margin: 6px 0 4px; }}
 .must div {{ display: flex; gap: 10px; padding: 12px 14px; border-bottom: 1px solid #141414;
@@ -301,7 +304,19 @@ html {{ font-size: 18px; }}
 .grid3 .card .k, .grid2 .card .k {{ font-size: 13px; letter-spacing: .05em; color: #A0A0A0; }}
 .grid3 .card .v, .grid2 .card .v {{ font-size: clamp(20px, 6.4vw, 26px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
 .grid3 .card .d, .grid2 .card .d {{ font-size: 14px; line-height: 1.4; }}
-.sec {{ font-size: 14px; letter-spacing: .08em; margin-top: 24px; }}
+.sec {{ font-size: 12px; letter-spacing: .08em; margin-top: 28px; padding-bottom: 8px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }}
+.sec .en {{ font-size: 11px; opacity: .8; }}
+.sec b {{ font-family: 'Noto Sans TC', sans-serif; font-size: 21px; font-weight: 900; color: #FFF; letter-spacing: .02em; }}
+.hero {{ background: linear-gradient(120deg, #06161B 0%, #000 70%); border-color: #12313A; }}
+.must {{ border-left-width: 0; background: transparent; border: 0; display: grid; gap: 8px; }}
+.must div {{ border: 1px solid #1A262B !important; background: linear-gradient(180deg, #0A1013, #050708); border-radius: 10px; align-items: center; }}
+.must div i {{ width: 38px; height: 38px; border-radius: 50%; background: #0F1D22; display: flex; align-items: center; justify-content: center; font-size: 19px; }}
+.must div.warn {{ border-color: #4A3A12 !important; background: linear-gradient(180deg, #17130A, #0A0805); }}
+.grid3 .card, .grid2 .card {{ border-radius: 10px; }}
+.flist a {{ border: 1px solid #1A262B; border-radius: 10px; margin-bottom: 8px; padding: 12px 14px; background: #070B0D; }}
+.menu {{ border: 0; gap: 8px; background: transparent; }}
+.menu a {{ border: 1px solid #16323A !important; border-radius: 14px; background: radial-gradient(120% 90% at 50% 0%, #0E2A31 0%, #061014 60%, #04080A 100%); aspect-ratio: 1 / .95; }}
+.menu-s a {{ border-radius: 10px; }}
 [data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] li {{ font-size: 18px; line-height: 1.7; }}
 [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {{ font-size: 15px !important; color: #A8A8A8; line-height: 1.6; }}
 .verdict {{ font-size: 18px !important; line-height: 1.75; padding: 12px 14px; }}
@@ -350,7 +365,39 @@ def 漲跌色(值):
 
 
 def 段落(文字):
-    st.markdown(f'<div class="sec">{文字}</div>', unsafe_allow_html=True)
+    英, 分, 中 = str(文字).partition(" // ")
+    內 = f'<span class="en">{英} //</span> <b>{中}</b>' if 分 else 文字  # 手機模式：英文小字、中文大字
+    st.markdown(f'<div class="sec">{內}</div>', unsafe_allow_html=True)
+
+
+def 迷你線(值們, 顏色=None, 寬=64, 高=26):
+    """一行字旁邊的小走勢線（SVG），最後一點加圓點；顏色預設依頭尾漲跌（紅漲綠跌）。"""
+    v = [float(x) for x in 值們 if pd.notna(x)]
+    if len(v) < 2:
+        return ""
+    lo, hi = min(v), max(v)
+    hi = hi if hi > lo else lo + 1
+    xs = [2 + i * (寬 - 6) / (len(v) - 1) for i in range(len(v))]
+    ys = [高 - 3 - (x - lo) / (hi - lo) * (高 - 6) for x in v]
+    色 = 顏色 or (紅 if v[-1] >= v[0] else 綠)
+    點 = " ".join(f"{x:.1f},{y:.1f}" for x, y in zip(xs, ys))
+    return (f'<svg class="spark" width="{寬}" height="{高}" viewBox="0 0 {寬} {高}"><polyline points="{點}" fill="none" '
+            f'stroke="{色}" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>'
+            f'<circle cx="{xs[-1]:.1f}" cy="{ys[-1]:.1f}" r="2.6" fill="{色}"/></svg>')
+
+
+def 迷你柱(值們, 寬=64, 高=26):
+    """正負小柱狀（紅正綠負），例如外資每日買賣超。"""
+    v = [0.0 if pd.isna(x) else float(x) for x in 值們]
+    if not v:
+        return ""
+    m = max(abs(x) for x in v) or 1
+    w = (寬 - 2) / len(v)
+    中 = 高 / 2
+    柱 = "".join(f'<rect x="{1 + i * w + 1:.1f}" y="{(中 - x / m * (中 - 2)) if x > 0 else 中:.1f}" width="{max(w - 2, 1):.1f}" '
+                f'height="{max(abs(x) / m * (中 - 2), 1):.1f}" rx="1" fill="{紅 if x > 0 else 綠}"/>' for i, x in enumerate(v))
+    return (f'<svg class="spark" width="{寬}" height="{高}" viewBox="0 0 {寬} {高}">'
+            f'<line x1="0" y1="{中}" x2="{寬}" y2="{中}" stroke="#333" stroke-width="1"/>{柱}</svg>')
 
 
 def 圖表外觀(圖, 高=380):
