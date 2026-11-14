@@ -124,7 +124,8 @@ def 加權圖():
         if K is None or len(K) < 2:
             st.info(f"{指數}資料暫時抓不到。")
             return
-        大盤日K(K, 區間, {"1月": 31, "1季": 92, "半年": 183, "1年": 365}[區間], 指數)
+        量 = K.set_index("date")["volume"] if "volume" in K.columns else None
+        大盤日K(K, 區間, {"1月": 31, "1季": 92, "半年": 183, "1年": 365}[區間], 指數, 量=量, 量名="成交量（口）")
         st.caption("台指期是大台近月合約（期交所一般盤），換月那天價格會跳一下。" if 指數 == "台指期" else
                    "美元/台幣：數字變大＝台幣貶值（外資常同時賣超台股），變小＝台幣升值。")
         return
@@ -166,7 +167,7 @@ def 加權圖():
         天數 = {"1月": 31, "1季": 92, "半年": 183, "1年": 365, "3年": 365 * 3, "5年": 365 * 5}[區間]
         K = 指數K線(K代號, _版本)
         if engine.有開高低(K):
-            大盤日K(K, 區間, 天數, "櫃買" if 櫃 else "加權")
+            大盤日K(K, 區間, 天數, "櫃買" if 櫃 else "加權", 量=指數成交值(K代號, _版本))
             return
         資料 = 日線[日線["date"] >= 日線["date"].max() - pd.Timedelta(days=天數)]
         x, y = 資料["date"], 資料["close"]
@@ -185,50 +186,93 @@ def 加權圖():
     st.plotly_chart(圖表外觀(圖, 300), width="stretch")
 
 
-def 大盤日K(K, 區間, 天數, 名稱="加權"):
-    """加權／櫃買指數日 K 線＋5 日／月線／季線；3 年、5 年改看週 K，K 棒才不會擠成一條線。"""
+def 大盤日K(K, 區間, 天數, 名稱="加權", 量=None, 量名="成交金額（億）"):
+    """日 K 線＋5 日／月線／季線＋下方量能副圖；3 年、5 年改看週 K，K 棒才不會擠成一條線。
+    量：index＝date 的 Series（成交金額或成交口數），沒有就不畫副圖。圖上標最新價、區間最高最低。"""
+    from plotly.subplots import make_subplots
     k = K.copy()
     週K = 區間 in ("3年", "5年")
+    if 量 is not None and len(量):
+        k = k.merge(量.rename("量").rename_axis("date").reset_index(), on="date", how="left")
     if 週K:
-        k = (k.set_index("date").resample("W-FRI").agg({"open": "first", "high": "max", "low": "min", "close": "last"})
-             .dropna().reset_index())
+        聚 = {"open": "first", "high": "max", "low": "min", "close": "last"}
+        if "量" in k.columns:
+            聚["量"] = "sum"
+        k = k.set_index("date").resample("W-FRI").agg(聚).dropna(subset=["close"]).reset_index()
     均線們 = ((5, "#FFC24B", "5週線"), (13, 青, "季線"), (52, "#FF00E5", "年線")) if 週K else \
         ((5, "#FFC24B", "5日線"), (20, 青, "月線"), (60, "#FF00E5", "季線"))
     for n, _, _ in 均線們:
         k[f"MA{n}"] = k["close"].rolling(n).mean()
+    k["前收"] = k["close"].shift()
     k = k[k["date"] >= k["date"].max() - pd.Timedelta(days=天數)].reset_index(drop=True)
     if len(k) < 2:
         st.info("日 K 資料暫時抓不到。")
         return
     尾 = k.iloc[-1]
-    前收 = k["close"].iloc[-2]
-    if engine.有開高低(k):
-        圖 = go.Figure(go.Candlestick(x=k["date"], open=k["open"], high=k["high"], low=k["low"], close=k["close"],
-                                      name="K 線", increasing=dict(line=dict(color=紅, width=1), fillcolor=紅),
-                                      decreasing=dict(line=dict(color=綠, width=1), fillcolor=綠)))
-    else:   # 還沒有開高低資料（剛開始收集）先畫收盤線
-        圖 = go.Figure(go.Scatter(x=k["date"], y=k["close"], name="收盤", line=dict(color="#EDEDED", width=1.6)))
-    for n, 色, 名 in 均線們:
-        圖.add_trace(go.Scatter(x=k["date"], y=k[f"MA{n}"], name=名, line=dict(color=色, width=1.2), hoverinfo="skip"))
-    全日 = pd.date_range(k["date"].min(), k["date"].max(), freq="W-FRI" if 週K else "D")
-    缺 = sorted(set(全日) - set(k["date"]))
-    if not 週K:   # 跳過週末與休市日，K 棒才會連在一起
-        圖.update_xaxes(rangebreaks=[dict(values=[d.strftime("%Y-%m-%d") for d in 缺])])
-    圖.update_layout(xaxis_rangeslider_visible=False, showlegend=True,
-                    legend=dict(orientation="h", y=1.02, yanchor="bottom", x=0, font=dict(size=11)))
+    前收 = 尾["前收"] if pd.notna(尾["前收"]) else k["close"].iloc[-2]
     格 = ",.0f" if 尾["close"] >= 1000 else ",.3f" if 尾["close"] < 100 else ",.2f"   # 匯率看到小數第三位
+    價格 = 格.replace(",.0f", ",.2f")
+    # 重點卡：收盤、當日（本週）、區間漲跌
+    當日 = 尾["close"] - 前收
+    漲跌 = 尾["close"] - k["close"].iloc[0]
+    卡片格([卡片(f"{名稱} · {尾['date']:%m/%d} 收盤", f"{尾['close']:{價格}}", f"{當日:+{格}}（{當日 / 前收 * 100:+.2f}%）", 漲跌色(當日)),
+           卡片(f"{區間}漲跌", f"{漲跌 / k['close'].iloc[0] * 100:+.2f}%", f"{漲跌:+{格}}", 漲跌色(漲跌)),
+           卡片(f"{區間}高／低", f"{k['high'].max():{格}}", f"低 {k['low'].min():{格}}")])
     位置 = []
     for n, _, 名 in 均線們[1:]:
         v = 尾[f"MA{n}"]
         if pd.notna(v):
-            位置.append(f"{'站上' if 尾['close'] >= v else '跌破'}{名} {v:{格}}")
-    漲跌 = 尾["close"] - k["close"].iloc[0]
-    st.caption(f"{名稱} {尾['date']:%Y/%m/%d} 收 {尾['close']:{格.replace(',.0f', ',.2f')}}（{'本週' if 週K else '當日'} {尾['close'] - 前收:+{格}}）｜"
-               f"{區間}漲跌 {漲跌:+{格}}（{漲跌 / k['close'].iloc[0] * 100:+.2f}%）｜" + "、".join(位置))
-    st.plotly_chart(圖表外觀(圖, 300 if 手機 else 380), width="stretch")
-    if engine.有開高低(k):
-        st.caption(("週 K" if 週K else "日 K") + "：紅棒收漲、綠棒收跌；細線是均線，價格在均線上方代表短中期趨勢偏多。")
-
+            位置.append(f"{'✅ 站上' if 尾['close'] >= v else '⚠️ 跌破'}{名} {v:{格}}")
+    if 位置:
+        st.caption("　".join(位置))
+    有量 = "量" in k.columns and k["量"].notna().sum() > len(k) * 0.5
+    有K = engine.有開高低(k)
+    圖 = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.76, 0.24]) if 有量 \
+        else make_subplots(rows=1, cols=1)
+    漲 = k["close"] >= k["open"] if 有K else k["close"] >= k["前收"].fillna(k["close"])
+    幅 = (k["close"] / k["前收"] - 1) * 100
+    提示 = [f"{d:%Y/%m/%d}<br>開 {o:{格}}　高 {h:{格}}<br>低 {l:{格}}　收 {c:{格}}<br>漲跌 {'—' if pd.isna(f) else f'{f:+.2f}%'}"
+            for d, o, h, l, c, f in zip(k["date"], k["open"], k["high"], k["low"], k["close"], 幅)]
+    if 有K:
+        圖.add_trace(go.Candlestick(x=k["date"], open=k["open"], high=k["high"], low=k["low"], close=k["close"],
+                                    name="K 線", text=提示, hoverinfo="text",
+                                    increasing=dict(line=dict(color=紅, width=1), fillcolor=紅),
+                                    decreasing=dict(line=dict(color=綠, width=1), fillcolor=綠)), row=1, col=1)
+    else:   # 還沒有開高低資料先畫收盤線
+        圖.add_trace(go.Scatter(x=k["date"], y=k["close"], name="收盤", text=提示, hoverinfo="text",
+                                line=dict(color="#EDEDED", width=1.6)), row=1, col=1)
+    for n, 色, 名 in 均線們:
+        圖.add_trace(go.Scatter(x=k["date"], y=k[f"MA{n}"], name=名, line=dict(color=色, width=1.2), hoverinfo="skip"),
+                    row=1, col=1)
+    if 有量:
+        圖.add_trace(go.Bar(x=k["date"], y=k["量"], name=量名, showlegend=False,
+                            marker=dict(color=[紅 if u else 綠 for u in 漲], opacity=0.55),
+                            hovertemplate=f"{量名} %{{y:,.0f}}<extra></extra>"), row=2, col=1)
+        圖.update_yaxes(row=2, col=1, showgrid=False, tickfont=dict(size=9), nticks=3)
+    # 最新價虛線＋右側標籤；區間最高、最低標出來
+    最新色 = 漲跌色(當日)
+    圖.add_hline(y=尾["close"], line=dict(color=最新色, width=1, dash="dot"), row=1, col=1)
+    圖.add_annotation(x=1, xref="paper", y=尾["close"], yref="y", xanchor="left", showarrow=False,
+                      text=f"{尾['close']:{格}}", font=dict(size=11, color="#000"), bgcolor=最新色, borderpad=2)
+    高i, 低i = k["high"].idxmax(), k["low"].idxmin()
+    圖.add_annotation(x=k["date"][高i], y=k["high"][高i], yref="y", text=f"高 {k['high'][高i]:{格}}", showarrow=True,
+                      arrowhead=0, ax=0, ay=-18, font=dict(size=10, color=紅))
+    圖.add_annotation(x=k["date"][低i], y=k["low"][低i], yref="y", text=f"低 {k['low'][低i]:{格}}", showarrow=True,
+                      arrowhead=0, ax=0, ay=18, font=dict(size=10, color=綠))
+    if not 週K:   # 跳過週末與休市日，K 棒才會連在一起
+        缺 = sorted(set(pd.date_range(k["date"].min(), k["date"].max(), freq="D")) - set(k["date"]))
+        圖.update_xaxes(rangebreaks=[dict(values=[d.strftime("%Y-%m-%d") for d in 缺])])
+    圖表外觀(圖, (360 if 有量 else 300) if 手機 else (440 if 有量 else 380))
+    圖.update_layout(xaxis_rangeslider_visible=False, showlegend=True, hovermode="x",
+                    margin=dict(l=8, r=62, t=10, b=10),
+                    legend=dict(orientation="h", y=1.01, yanchor="bottom", x=0, font=dict(size=10 if 手機 else 11)))
+    圖.update_xaxes(showspikes=True, spikemode="across", spikethickness=1, spikecolor="#555", spikedash="dot")
+    圖.update_xaxes(nticks=5 if 手機 else 8)
+    st.plotly_chart(圖, width="stretch")
+    說明 = ("週 K" if 週K else "日 K") + "：紅棒收漲、綠棒收跌；細線是均線，價格在均線上方代表短中期趨勢偏多。" if 有K else "目前只有收盤價，先畫收盤線。"
+    if 有量:
+        說明 += f"下方柱子是{量名}，紅柱＝當天收漲。"
+    st.caption(說明)
 
 def 國際行情():
     段落("GLOBAL // 國際行情與台指期")

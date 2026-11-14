@@ -1236,10 +1236,10 @@ def 讀取台指期K線():
     if not f.exists():
         return None
     t = pd.read_csv(f, parse_dates=["date"], dtype={"month": str}).sort_values("date")
-    t = t.rename(columns={"fut_close": "close", "fut_open": "open", "fut_high": "high", "fut_low": "low"})
+    t = t.rename(columns={"fut_close": "close", "fut_open": "open", "fut_high": "high", "fut_low": "low", "fut_volume": "volume"})
     for k in ("open", "high", "low"):
         t[k] = t[k].fillna(t["close"]) if k in t.columns else t["close"]
-    return t[["date", "open", "high", "low", "close", "month"]].reset_index(drop=True)
+    return t[["date", "open", "high", "low", "close", "month"] + (["volume"] if "volume" in t.columns else [])].reset_index(drop=True)
 
 
 def _升降單位(價):
