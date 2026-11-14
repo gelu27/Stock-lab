@@ -2783,6 +2783,74 @@ def 漲跌月曆區():
                f"一格一天，格子裡是日期；顏色越深漲跌越大（±{界:.1f}% 以上最深）。上方是每週一的日期。")
 
 
+def 城市資料(期間欄):
+    """台股城市：市值前 8 大產業各一排，每排放該產業市值前 8 檔；樓高＝市值（開根號，避免台積電一棟太高），顏色＝漲跌。"""
+    t = 今日[~今日["代號"].str.startswith("0") & 今日["產業"].notna() & 今日["發行股數"].notna()].copy()
+    t["市值億"] = t["收盤"] * t["發行股數"] / 1e8
+    t = t[t["市值億"] > 0]
+    產業們 = t.groupby("產業")["市值億"].sum().nlargest(8).index.tolist()
+    列 = []
+    for j, 業 in enumerate(產業們):
+        for i, (_, r) in enumerate(t[t["產業"] == 業].nlargest(8, "市值億").iterrows()):
+            列.append(dict(x=i, y=j, 產業=業, 代號=r["代號"], 名稱=r["名稱"], 市值億=r["市值億"], 收盤=r["收盤"],
+                          幅=float(r.get(期間欄, np.nan)) if pd.notna(r.get(期間欄, np.nan)) else 0.0))
+    return pd.DataFrame(列), 產業們
+
+
+def 城市區():
+    """3D 上帝視角：整個台股像一座城市，可以用手指（滑鼠）旋轉、縮放。"""
+    段落("CITY // 3D 台股城市（上帝視角）")
+    a, b = st.columns(2)
+    期 = a.segmented_control("漲跌期間", ["今日", "5 日", "20 日"], default="今日", key="城市期間", label_visibility="collapsed") or "今日"
+    視 = b.segmented_control("視角", ["斜看", "俯瞰", "平視"], default="斜看", key="城市視角", label_visibility="collapsed") or "斜看"
+    欄 = {"今日": "漲跌幅", "5 日": "5日漲幅", "20 日": "20日漲幅"}[期]
+    d, 產業們 = 城市資料(欄)
+    if d.empty:
+        st.caption("資料不足。")
+        return
+    界 = {"今日": 5, "5 日": 10, "20 日": 20}[期]
+    高 = np.sqrt(d["市值億"]) / np.sqrt(d["市值億"].max()) * 6 + .15
+    X, Y, Z, I, J, K, 強, 字 = [], [], [], [], [], [], [], []
+    w = .38  # 半個樓寬
+    for n, (r, h) in enumerate(zip(d.itertuples(), 高)):
+        x0, y0 = r.x * 1.25, r.y * 1.6
+        角 = [(x0 - w, y0 - w, 0), (x0 + w, y0 - w, 0), (x0 + w, y0 + w, 0), (x0 - w, y0 + w, 0),
+             (x0 - w, y0 - w, h), (x0 + w, y0 - w, h), (x0 + w, y0 + w, h), (x0 - w, y0 + w, h)]
+        o = n * 8
+        for x, y, z in 角:
+            X.append(x); Y.append(y); Z.append(z)
+            強.append(max(-界, min(界, r.幅)))
+            字.append(f"{r.代號} {r.名稱}<br>{r.產業}<br>市值 {r.市值億:,.0f} 億<br>{期}漲跌 {r.幅:+.2f}%")
+        for a1, b1, c1 in ((0, 1, 2), (0, 2, 3), (4, 5, 6), (4, 6, 7), (0, 1, 5), (0, 5, 4), (1, 2, 6), (1, 6, 5),
+                           (2, 3, 7), (2, 7, 6), (3, 0, 4), (3, 4, 7)):
+            I.append(o + a1); J.append(o + b1); K.append(o + c1)
+    樓 = go.Mesh3d(x=X, y=Y, z=Z, i=I, j=J, k=K, intensity=強, cmin=-界, cmax=界,
+                  colorscale=[[0, "#00D68F"], [.42, "#0F3A2E"], [.5, "#3A3A3A"], [.58, "#4A1420"], [1, "#FF3B5C"]],
+                  flatshading=True, showscale=False, hovertext=字, hoverinfo="text",
+                  lighting=dict(ambient=.55, diffuse=.8, specular=.25, roughness=.6), lightposition=dict(x=100, y=-200, z=300))
+    地 = go.Mesh3d(x=[-.8, 12.5, 12.5, -.8], y=[-1, -1, len(產業們) * 1.6, len(產業們) * 1.6], z=[0, 0, 0, 0],
+                  i=[0, 0], j=[1, 2], k=[2, 3], color="#06161B", opacity=1, hoverinfo="skip")
+    街名 = go.Scatter3d(x=[9.4] * len(產業們), y=[j * 1.6 for j in range(len(產業們))], z=[0.05] * len(產業們), mode="text",
+                       text=產業們, textposition="middle right", textfont=dict(color="#7FE9FF", size=12 if 手機 else 13), hoverinfo="skip")
+    高樓 = d.assign(h=高).nlargest(4, "市值億")
+    樓名 = go.Scatter3d(x=高樓["x"] * 1.25, y=高樓["y"] * 1.6, z=高樓["h"] + .5, mode="text", text=高樓["名稱"],
+                       textfont=dict(color="#FFFFFF", size=11 if 手機 else 12), hoverinfo="skip")
+    眼 = {"斜看": dict(x=-1.15, y=-1.3, z=.75), "俯瞰": dict(x=0.01, y=-0.05, z=1.7), "平視": dict(x=-0.25, y=-1.6, z=.25)}[視]
+    圖 = go.Figure([地, 樓, 街名, 樓名])
+    軸 = dict(visible=False, showbackground=False)
+    圖.update_layout(height=420 if 手機 else 560, paper_bgcolor="rgba(0,0,0,0)", margin=dict(l=0, r=0, t=0, b=0), showlegend=False,
+                    font=dict(family="JetBrains Mono, Noto Sans TC, sans-serif"),
+                    hoverlabel=dict(bgcolor="#0A0A0A", bordercolor="#333", font=dict(family="JetBrains Mono, Noto Sans TC", size=13)),
+                    scene=dict(xaxis=軸, yaxis=軸, zaxis=軸, aspectmode="manual", aspectratio=dict(x=1.5, y=1.2, z=.8),
+                               camera=dict(eye=眼, up=dict(x=0, y=0, z=1), center=dict(x=0, y=0, z=-.35)), bgcolor="rgba(0,0,0,0)"),
+                    uirevision=視)
+    st.plotly_chart(圖, width="stretch", config={"displayModeBar": False}, key=f"城市圖{視}")
+    最強 = d.groupby("產業")["幅"].apply(lambda s: np.average(s, weights=d.loc[s.index, "市值億"])).sort_values()
+    st.caption(f"一棟樓＝一檔股票，樓越高市值越大（開根號），紅漲綠跌、顏色越亮漲跌越大（±{界}% 以上最亮）。"
+               f"每一條街是一個產業（市值前 8 大），街上是該產業市值前 8 檔。{期}最強的街：{最強.index[-1]}（{最強.iloc[-1]:+.1f}%），"
+               f"最弱：{最強.index[0]}（{最強.iloc[0]:+.1f}%）。手指拖曳可旋轉、兩指縮放，點樓看名稱。")
+
+
 漲跌區間 = [(-99, -9.5, "跌停"), (-9.5, -7, "−7<br>−9.5"), (-7, -5, "−5<br>−7"), (-5, -3, "−3<br>−5"), (-3, -1, "−1<br>−3"), (-1, -1e-9, "0<br>−1"),
           (-1e-9, 1e-9, "平盤"), (1e-9, 1, "0<br>+1"), (1, 3, "+1<br>+3"), (3, 5, "+3<br>+5"), (5, 7, "+5<br>+7"), (7, 9.5, "+7<br>+9.5"), (9.5, 99, "漲停")]
 
@@ -2833,12 +2901,12 @@ def 漲跌分布區():
     st.caption(f"{判}；大漲（7% 以上）比大跌多 {尾:+d} 家。每根柱子＝漲跌幅落在那個區間（%）的股票家數，越往兩邊顏色越亮代表漲跌越大；只算上市櫃普通股，不含 ETF。")
 
 
-首頁區塊 = ["必知", "30秒", "市場", "分布", "狀態", "價位", "AI解讀", "焦點", "國際", "總經", "連動", "加權指數", "月曆", "權值", "資金", "跌深", "止跌", "護盤", "選擇權", "情緒", "水位", "族群", "行事曆", "事件", "輝達", "延續", "排行"]
+首頁區塊 = ["必知", "30秒", "市場", "分布", "狀態", "價位", "AI解讀", "焦點", "國際", "總經", "連動", "加權指數", "月曆", "城市", "權值", "資金", "跌深", "止跌", "護盤", "選擇權", "情緒", "水位", "族群", "行事曆", "事件", "輝達", "延續", "排行"]
 
 
-新手區塊 = ["30秒", "市場", "分布", "狀態", "水位", "AI解讀", "焦點", "排行"]
-手機區塊 = ["必知", "分布", "30秒", "月曆", "焦點"]
-版面們 = {"手機": "今天必須知道＋漲跌溫度帶＋三十秒看盤＋漲跌月曆＋焦點股，字大好讀", "新手": "只看 8 個重點區塊", "完整": "全部區塊", "自訂": "自己挑、自己排順序"}
+新手區塊 = ["30秒", "市場", "分布", "城市", "狀態", "水位", "AI解讀", "焦點", "排行"]
+手機區塊 = ["必知", "分布", "30秒", "城市", "月曆", "焦點"]
+版面們 = {"手機": "今天必須知道＋漲跌溫度帶＋三十秒看盤＋3D 台股城市＋漲跌月曆＋焦點股，字大好讀", "新手": "只看 9 個重點區塊", "完整": "全部區塊", "自訂": "自己挑、自己排順序"}
 預設版面 = "手機" if 手機 else "新手"
 
 
@@ -2879,7 +2947,7 @@ def _國際():
         國際行情()
     except Exception:
         st.caption("國際行情暫時無法顯示。")
-區塊函式 = {"必知": 必知區, "分布": 漲跌分布區, "月曆": 漲跌月曆區, "30秒": 三十秒卡, "市場": 市場卡片, "狀態": 狀態區, "價位": 關鍵價位區, "AI解讀": AI解讀區, "焦點": 焦點區, "國際": _國際, "總經": 總經區, "連動": 連動區,
+區塊函式 = {"必知": 必知區, "分布": 漲跌分布區, "月曆": 漲跌月曆區, "城市": 城市區, "30秒": 三十秒卡, "市場": 市場卡片, "狀態": 狀態區, "價位": 關鍵價位區, "AI解讀": AI解讀區, "焦點": 焦點區, "國際": _國際, "總經": 總經區, "連動": 連動區,
          "加權指數": 加權圖 if 加權 is not None and len(加權) > 1 else None, "權值": 權值區, "資金": 資金面區, "跌深": 跌深區, "止跌": 止跌訊號區, "護盤": 護盤區, "選擇權": 選擇權區, "事件": 事件區, "輝達": 輝達週區, "延續": 反彈延續區,
          "情緒": 情緒區, "水位": 資金水位區, "族群": 族群熱力圖, "行事曆": 行事曆區, "排行": 排行區}
 要畫 = [x for x in 顯示 if 區塊函式.get(x)]
@@ -2918,6 +2986,6 @@ if 模式 == "手機":
         st.session_state["首頁版面"] = 值
     段落("MORE // 想看更多")
     a, b = st.columns(2)
-    a.button("🔰 新手版首頁（8 區塊）", on_click=_換版面, args=("新手",), key="換新手版面", width="stretch")
+    a.button("🔰 新手版首頁（9 區塊）", on_click=_換版面, args=("新手",), key="換新手版面", width="stretch")
     b.button("📚 完整首頁（全部區塊）", on_click=_換版面, args=("完整",), key="換完整版面", width="stretch")
-    st.caption("手機版首頁只放最重要的五塊；其他頁面（個股查詢、我的股票…）從上方選單進入，字體一樣會放大。")
+    st.caption("手機版首頁只放最重要的幾塊；其他頁面（個股查詢、我的股票…）從上方選單進入，字體一樣會放大。")
