@@ -4,6 +4,7 @@
 import datetime as dt
 import hashlib
 import hmac
+import html
 import io
 import json
 import os
@@ -233,6 +234,34 @@ a.cardlink:hover .card, a.cardlink:active .card {{ border-color: {青}; backgrou
 .steps b {{ color: {青}; display: block; margin-bottom: 4px; }}
 .steps span {{ font-size: 13px; color: #BDBDBD; }}
 @media (max-width: 640px) {{ .steps {{ grid-template-columns: 1fr; }} }}
+/* 手機大圖示選單 */
+.menu {{ display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid #1C2A30; border-left: 1px solid #1C2A30;
+    margin: 4px 0 10px; background: #071014; }}
+.menu a {{ display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; aspect-ratio: 1 / .92;
+    border-right: 1px solid #1C2A30; border-bottom: 1px solid #1C2A30; text-decoration: none !important; color: #EDEDED !important; }}
+.menu a svg {{ width: 46%; max-width: 64px; color: #7FE9FF; filter: drop-shadow(0 0 6px rgba(0,229,255,.45)); }}
+.menu a span {{ font-family: 'Noto Sans TC', sans-serif; font-size: 19px; font-weight: 700; letter-spacing: .04em; }}
+.menu a:active, .menu a:hover {{ background: #0C1C22; }}
+.menu a.on {{ background: #0B1A20; box-shadow: inset 0 -3px 0 {青}; }}
+.menu-s {{ display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; margin: 2px 0 8px; }}
+.menu-s::-webkit-scrollbar {{ display: none; }}
+.menu-s a {{ flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 4px; width: 68px; padding: 8px 2px 6px;
+    border: 1px solid #1C2A30; background: #071014; text-decoration: none !important; color: #BDBDBD !important; }}
+.menu-s a svg {{ width: 26px; height: 26px; color: #7FE9FF; }}
+.menu-s a span {{ font-family: 'Noto Sans TC', sans-serif; font-size: 13px; white-space: nowrap; }}
+.menu-s a.on {{ border-color: {青}; color: #FFF !important; background: #0B1A20; }}
+/* 今天必須知道 */
+.must {{ border: 1px solid #1E1E1E; border-left: 3px solid {青}; background: #050505; margin: 6px 0 4px; }}
+.must div {{ display: flex; gap: 10px; padding: 12px 14px; border-bottom: 1px solid #141414;
+    font-family: 'Noto Sans TC', sans-serif; font-size: 16px; line-height: 1.6; color: #E4E4E4; }}
+.must div:last-child {{ border-bottom: 0; }}
+.must div i {{ font-style: normal; flex: 0 0 auto; }}
+.must div b {{ color: #FFF; }}
+.must div.warn {{ background: rgba(255,176,32,.07); }}
+.must a {{ color: {青}; text-decoration: none; }}
+.flist a {{ display: block; padding: 10px 4px; border-bottom: 1px solid #141414; text-decoration: none; color: #E4E4E4;
+    font-family: 'Noto Sans TC', sans-serif; font-size: 16px; }}
+.flist a small {{ display: block; color: #9A9A9A; font-size: 13px; margin-top: 2px; line-height: 1.5; }}
 /* 站內導航（攔截連結、快捷鍵）不佔版面；足跡列小一點 */
 .st-key-navjs {{ position: absolute; width: 0; height: 0; overflow: hidden; }}
 .st-key-trail {{ margin-top: -8px; }}
@@ -258,6 +287,45 @@ a.cardlink:hover .card, a.cardlink:active .card {{ border-color: {青}; backgrou
 }}
 </style>
 """, unsafe_allow_html=True)
+
+
+# 手機模式：只在打開時加上，字體整體放大、卡片改兩欄、說明文字變亮
+手機CSS = f"""<style>
+html {{ font-size: 18px; }}
+.hero {{ padding: 10px 14px 8px; margin-bottom: 8px; }}
+.hero::after, .hero .kicker, .hero .sub {{ display: none; }}
+.hero .title {{ font-size: 28px; margin: 0; }}
+.grid3, .grid2 {{ grid-template-columns: repeat(2, 1fr); gap: 8px; }}
+.grid3 .card, .grid2 .card {{ padding: 12px 12px; }}
+.grid3 > :last-child:nth-child(odd), .grid2 > :last-child:nth-child(odd) {{ grid-column: span 2; }}
+.grid3 .card .k, .grid2 .card .k {{ font-size: 13px; letter-spacing: .05em; color: #A0A0A0; }}
+.grid3 .card .v, .grid2 .card .v {{ font-size: clamp(20px, 6.4vw, 26px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.grid3 .card .d, .grid2 .card .d {{ font-size: 14px; line-height: 1.4; }}
+.sec {{ font-size: 14px; letter-spacing: .08em; margin-top: 24px; }}
+[data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] li {{ font-size: 18px; line-height: 1.7; }}
+[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {{ font-size: 15px !important; color: #A8A8A8; line-height: 1.6; }}
+.verdict {{ font-size: 18px !important; line-height: 1.75; padding: 12px 14px; }}
+.verdict.sub {{ font-size: 16px !important; }}
+.rank td, .rank td.n {{ font-size: 17px !important; padding: 10px 6px !important; }}
+.rank td.n small {{ font-size: 13px; }}
+.rank th {{ font-size: 14px; }}
+.lamp .t {{ font-size: 17px; }} .lamp .s {{ font-size: 14px; }}
+.jump a {{ font-size: 15px; padding: 6px 12px; }}
+.ticker span {{ font-size: 15px; }}
+.st-key-nav {{ display: none; }}
+.stButton > button {{ min-height: 46px; }}
+.stTabs [data-baseweb="tab"] {{ padding: 12px 14px; }}
+.tip {{ font-size: 13px; }}
+.tip .tipbox {{ font-size: 15px; width: 240px; }}
+.st-key-toolbar [data-testid="stHorizontalBlock"] {{ flex-wrap: nowrap !important; gap: 6px !important; }}
+.st-key-toolbar [data-testid="stColumn"] {{ flex: 1 1 0 !important; width: auto !important; min-width: 0 !important; }}
+.st-key-toolbar [data-testid="stColumn"]:first-child {{ flex: 1.8 1 0 !important; }}
+.st-key-toolbar p {{ font-size: 15px !important; white-space: nowrap; }}
+.st-key-toolbar button {{ padding: 4px 6px !important; min-height: 40px; width: 100%; justify-content: center; }}
+.st-key-toolbar button [aria-hidden="true"] {{ display: none; }}
+.must div, .flist a {{ font-size: 18px; }}
+.flist a small {{ font-size: 15px; }}
+</style>"""
 
 
 def 卡片(標題, 數值, 小字="", 顏色="#EDEDED", 連結=None):
@@ -288,7 +356,7 @@ def 段落(文字):
 def 圖表外觀(圖, 高=380):
     圖.update_layout(
         template="plotly_dark", height=高, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=10, r=10, t=10, b=10), font=dict(family="JetBrains Mono, Noto Sans TC, sans-serif", size=11),
+        margin=dict(l=10, r=10, t=10, b=10), font=dict(family="JetBrains Mono, Noto Sans TC, sans-serif", size=14 if st.session_state.get("手機模式") else 11),
         hoverlabel=dict(bgcolor="#0A0A0A", bordercolor="#333", font=dict(family="JetBrains Mono, Noto Sans TC")),
         legend=dict(orientation="h", y=1.08, x=0), hovermode="x unified",
         xaxis=dict(gridcolor="#151515"), yaxis=dict(gridcolor="#151515"),
@@ -363,25 +431,65 @@ if 指標 is None:
     st.stop()
 
 最新日 = 指標["date"].max()
-if "精簡表格" not in st.session_state:  # 手機預設精簡
+def 是手機():
     try:
-        st.session_state["精簡表格"] = "Mobile" in st.context.headers.get("User-Agent", "")
+        return "Mobile" in st.context.headers.get("User-Agent", "")
     except Exception:
-        st.session_state["精簡表格"] = False
+        return False
+
+
+if "精簡表格" not in st.session_state:  # 手機預設精簡
+    st.session_state["精簡表格"] = 是手機()
 if "新手模式" not in st.session_state:  # 網址 ?n=1 記住新手模式
     st.session_state["新手模式"] = st.query_params.get("n") == "1"
-a, n, c, e, d, b = st.container(key="toolbar").columns([3, 1, 1, 1, 1, 1], vertical_alignment="center")
-a.caption(f"📅 資料日期 {最新日:%Y/%m/%d}　·　資料庫最後更新 {最後更新()}"
-          '<span class="hide-m">（每個交易日約 18:00 自動更新）</span>', unsafe_allow_html=True)
-n.toggle("🔰 新手模式", key="新手模式", help="打開後：首頁顯示三步驟看盤教學、個股頁先給白話一句話結論並收起進階指標；專有名詞旁的 ❓ 可看白話說明")
+if "手機模式" not in st.session_state:  # 網址 ?m=1／m=0 記住；沒指定時，用手機打開自動開啟
+    _m = st.query_params.get("m")
+    st.session_state["手機模式"] = _m == "1" if _m in ("0", "1") else 是手機()
+    if st.session_state["手機模式"]:
+        st.session_state["精簡表格"] = True
+
+
+def _切換手機():
+    if st.session_state.get("手機模式"):  # 開手機模式時表格一併精簡，不用左右滑
+        st.session_state["精簡表格"] = True
+    st.session_state.pop("首頁版面", None)  # 首頁版面回到該模式的預設（手機版面／新手版面）
+    st.query_params.pop("layout", None)
+
+
+手機說明 = "字體放大、卡片改兩欄；首頁先給「今天必須知道」重點摘要，個股頁直接攤開白話結論。關掉就回到完整版面。"
+_手 = bool(st.session_state.get("手機模式"))
+with st.container(key="toolbar"):
+    if _手:  # 手機模式：日期一行，按鈕一排，較少用的開關收進「⚙️ 設定」
+        st.caption(f"📅 資料 {最新日:%m/%d}　·　更新 {最後更新()}")
+        m, s, d, b = st.columns([1.8, 1, 1, 1], vertical_alignment="center")
+        m.toggle("📱 手機", key="手機模式", on_change=_切換手機)
+        with s.popover("⚙️ 設定"):
+            n, c, e = st, st, st
+            n.toggle("🔰 新手模式", key="新手模式", help="打開後：首頁顯示三步驟看盤教學、個股頁先給白話一句話結論並收起進階指標；專有名詞旁的 ❓ 可看白話說明")
+            c.toggle("📱 精簡表格", key="精簡表格", help="表格只留名稱、股價、漲跌等重點欄位，手機不用左右滑")
+            e.toggle("⬇️ 下載表格", key="顯示下載", help="打開後，每個表格下面會多一個「下載 Excel」按鈕")
+    else:
+        a, m, n, c, e, d, b = st.columns([3, 1, 1, 1, 1, 1, 1], vertical_alignment="center")
+        a.caption(f"📅 資料日期 {最新日:%Y/%m/%d}　·　資料庫最後更新 {最後更新()}"
+                  '<span class="hide-m">（每個交易日約 18:00 自動更新）</span>', unsafe_allow_html=True)
+        m.toggle("📱 手機模式", key="手機模式", on_change=_切換手機, help=手機說明)
+        n.toggle("🔰 新手模式", key="新手模式", help="打開後：首頁顯示三步驟看盤教學、個股頁先給白話一句話結論並收起進階指標；專有名詞旁的 ❓ 可看白話說明")
+        c.toggle("📱 精簡表格", key="精簡表格", help="表格只留名稱、股價、漲跌等重點欄位，手機不用左右滑")
+        e.toggle("⬇️ 下載表格", key="顯示下載", help="打開後，每個表格下面會多一個「下載 Excel」按鈕")
 新手 = bool(st.session_state.get("新手模式"))
 if (st.query_params.get("n") == "1") != 新手:
     if 新手:
         st.query_params["n"] = "1"
     else:
         del st.query_params["n"]
-c.toggle("📱 精簡表格", key="精簡表格", help="表格只留名稱、股價、漲跌等重點欄位，手機不用左右滑")
-e.toggle("⬇️ 下載表格", key="顯示下載", help="打開後，每個表格下面會多一個「下載 Excel」按鈕")
+手機 = bool(st.session_state.get("手機模式"))
+_預設m = 是手機()
+if 手機 == _預設m:  # 跟自動判斷一樣就不寫進網址
+    st.query_params.pop("m", None)
+else:
+    st.query_params["m"] = "1" if 手機 else "0"
+if 手機:
+    st.markdown(手機CSS, unsafe_allow_html=True)
 with d.popover("📖 名詞"):
     找 = st.text_input("查名詞", placeholder="例如：共振區、Beta、融資維持率", key="查名詞", label_visibility="collapsed")
     for 詞, (白, 用, 坑) in beginner.名詞卡.items():
@@ -813,6 +921,33 @@ with st.container(key="nav"):
     頁面 = st.segmented_control("頁面", 頁面們, key="頁面", label_visibility="collapsed") or 頁面們[0]
 if st.query_params.get("p") != 頁面[:2]:
     st.query_params["p"] = 頁面[:2]
+
+# ---------- 手機模式：大圖示選單（首頁一排三格大圖示；其他頁上方一排小圖示可左右滑） ----------
+_圖示路徑 = {  # 自繪線條圖示（24×24）
+    "01": '<polyline points="2,13 6,13 8.5,6 11.5,19 14.5,9 16.5,13 22,13"/>',
+    "02": '<rect x="3" y="6" width="18" height="14" rx="2"/><path d="M8 6V4h8v2"/><polygon points="12,9.5 13.2,12 15.9,12.3 13.9,14.1 14.4,16.8 12,15.4 9.6,16.8 10.1,14.1 8.1,12.3 10.8,12"/>',
+    "03": '<circle cx="10.5" cy="10.5" r="6.5"/><line x1="15.3" y1="15.3" x2="21" y2="21"/><line x1="8" y1="8" x2="8" y2="13"/><line x1="10.5" y1="7" x2="10.5" y2="14"/><line x1="13" y1="9" x2="13" y2="12"/>',
+    "04": '<path d="M3 4h18l-7 8.5V19l-4 2v-8.5z"/>',
+    "05": '<line x1="3" y1="21" x2="21" y2="21"/><rect x="4.5" y="13" width="3" height="6"/><rect x="10.5" y="9" width="3" height="10"/><rect x="16.5" y="5" width="3" height="14"/><polyline points="4,9 10,5 14,7 20,2"/>',
+    "06": '<circle cx="12" cy="12" r="9"/><path d="M12 3v9l7.5 5"/><path d="M12 12L4.5 17"/>',
+    "07": '<path d="M3.5 17a9 9 0 1 1 17 0"/><line x1="12" y1="15" x2="16.5" y2="9"/><circle cx="12" cy="15" r="1.4"/><line x1="5" y1="12" x2="6.5" y2="12.4"/><line x1="19" y1="12" x2="17.5" y2="12.4"/>',
+    "08": '<path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"/><polyline points="3,3.5 3.5,8 8,7.5"/><polyline points="12,7.5 12,12 15,14"/>',
+    "09": '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.6 2.7-6 6-6s6 2.4 6 6"/><circle cx="17" cy="9" r="2.4"/><path d="M15.5 14.3c3.2-.6 5.5 1.6 5.5 5"/>',
+}
+_圖示名 = {"01": "大盤總覽", "02": "我的股票", "03": "個股查詢", "04": "選股", "05": "月營收", "06": "主動 ETF",
+         "07": "每日評分", "08": "回測", "09": "使用統計"}
+
+
+def 圖示選單(小=False):
+    格 = "".join(
+        f'<a href="?p={碼}" target="_self" class="{"on" if 頁面.startswith(碼) else ""}">'
+        f'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">{路}</svg>'
+        f'<span>{_圖示名[碼]}</span></a>' for 碼, 路 in _圖示路徑.items())
+    st.markdown(f'<div class="{"menu-s" if 小 else "menu"}">{格}</div>', unsafe_allow_html=True)
+
+
+if 手機:
+    圖示選單(小=頁面 != 頁面們[0])
 st.session_state["_網址p"] = 頁面[:2]
 
 
