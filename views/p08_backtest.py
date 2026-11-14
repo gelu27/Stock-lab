@@ -17,6 +17,51 @@ def 績效卡(績, 基準名, 基準鍵):
     卡片格(卡們)
 
 
+def 時光機區():
+    """如果那天買了這檔（含除權息再投入），現在值多少？跟同一天買 0050 比。"""
+    段落("TIME MACHINE // 時光機：如果當時買了")
+    a, b, c = st.columns([2, 1.2, 1])
+    預設 = next((v for v in 股票選項 if v.startswith("2330 ")), 股票選項[0])
+    選 = a.selectbox("哪一檔", 股票選項, index=股票選項.index(預設), key="時光機股")
+    日 = b.date_input("哪一天買", value=(最新日 - pd.Timedelta(days=365)).date(), min_value=(最新日 - pd.Timedelta(days=365 * 5)).date(),
+                     max_value=(最新日 - pd.Timedelta(days=7)).date(), key="時光機日")
+    錢 = c.number_input("買多少錢", min_value=1000, value=100_000, step=10_000, key="時光機錢")
+    代號 = 選.split()[0]
+
+    def 走勢(碼):
+        h = 個股全史(碼, _版本)
+        if h is None or h.empty:
+            return None
+        h = h[h["date"] >= pd.Timestamp(日)].sort_values("date")
+        return None if h.empty else h.set_index("date")["還原價"]
+
+    主, 基 = 走勢(代號), 走勢("0050") if 代號 != "0050" else None
+    if 主 is None or len(主) < 2:
+        st.caption("這一天之後沒有這檔的資料（可能還沒上市），換一個日期試試。")
+        return
+    值 = 主 / 主.iloc[0] * 錢
+    報 = (值.iloc[-1] / 錢 - 1) * 100
+    年 = max((主.index[-1] - 主.index[0]).days / 365.25, 1 / 365)
+    年化 = ((值.iloc[-1] / 錢) ** (1 / 年) - 1) * 100 if 年 >= .5 else np.nan
+    回撤 = (值 / 值.cummax() - 1).min() * 100
+    卡們 = [卡片("現在價值", f"{值.iloc[-1]:,.0f}", f"{主.index[0]:%Y/%m/%d} 買 {錢:,.0f}", 漲跌色(報)),
+           卡片("總報酬", f"{報:+.1f}%", "含除權息再投入" + ("" if pd.isna(年化) else f"，年化 {年化:+.1f}%"), 漲跌色(報)),
+           卡片("中途最慘", f"{回撤:.1f}%", "從高點最多跌掉", 綠)]
+    圖 = go.Figure(go.Scatter(x=值.index, y=值, name=選, mode="lines", line=dict(color=青, width=2)))
+    if 基 is not None and len(基) >= 2:
+        基值 = 基 / 基.iloc[0] * 錢
+        基報 = (基值.iloc[-1] / 錢 - 1) * 100
+        卡們.append(卡片("同一天買 0050", f"{基值.iloc[-1]:,.0f}", f"{基報:+.1f}%，{'贏' if 報 >= 基報 else '輸'} {abs(報 - 基報):.1f} 個百分點",
+                       漲跌色(報 - 基報)))
+        圖.add_trace(go.Scatter(x=基值.index, y=基值, name="0050", mode="lines", line=dict(color="#8A8A8A", width=1.5, dash="dot")))
+    卡片格(卡們)
+    圖.add_hline(y=錢, line=dict(color="#333", width=1))
+    圖表外觀(圖, 300).update_layout(yaxis=dict(tickformat=",.0f", gridcolor="#151515"), hovermode="x unified")
+    圖.update_traces(hovertemplate="%{y:,.0f}")
+    st.plotly_chart(圖, width="stretch", config={"displayModeBar": False})
+    st.caption("用還原股價計算（配息配股都當作再買回去），不含手續費與稅。過去的報酬不代表未來，選日期很容易事後諸葛。")
+
+
 回測存檔 = "backtest_presets.json"
 
 
@@ -75,7 +120,7 @@ def 套用回測條件():
 
 
 套用回測條件()
-回測分頁 = st.tabs(["組合回測", "個股回測", "💰 定期定額"])
+回測分頁 = st.tabs(["組合回測", "個股回測", "💰 定期定額", "⏳ 時光機"])
 with 回測分頁[0]:
     回測條件存取()
     with st.expander("⚙️ 選股條件（跟 04 / 選股 共用）"):
@@ -498,3 +543,6 @@ else:
           卡片("之後 20 天年化波動", f"{_波['之後波動%']:.1f}%", f"全期間平均 {_波['全期間波動%']:.1f}%", 綠 if _波["之後波動%"] > _波["全期間波動%"] else "#EDEDED"),
           卡片("波動比平常大", f"{_波['放大次數']}／{_波['次數']}", "次數")])
     st.caption("標普 500 單日重挫 4% 以上，隔天起 20 個交易日的年化波動率平均，對照全期間 20 日波動率平均。波動放大不等於方向，只代表追價風險高；樣本少且集中在 2008、2020 年。")
+
+with 回測分頁[3]:
+    時光機區()
