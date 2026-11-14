@@ -1,0 +1,52 @@
+{
+ "4182eed522": {
+  "首次": "2026-11-01 20:53",
+  "次數": 2,
+  "最近": "2026-11-01 21:00",
+  "頁面": "01 首頁 總經",
+  "類型": "AttributeError",
+  "訊息": "module 'macro' has no attribute '費半回撤'",
+  "位置": "p01_market.py:1480",
+  "追蹤": "Traceback (most recent call last):\n  File \"/mount/src/stock-lab/views/p01_market.py\", line 1695, in 區塊片段\n    區塊函式[名]()\n    ~~~~~~~~~~~~^^\n  File \"/mount/src/stock-lab/views/p01_market.py\", line 1525, in 總經區\n    撤 = 費半回撤資料(_版本)\n         ~~~~~~~~~~~~^^^^^^^\n  File \"/home/adminuser/venv/lib/python3.14/site-packages/streamlit/runtime/caching/cache_utils.py\", line 757, in __call__\n    return self._get_or_create_cached_value(args, kwargs, spinner_message)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/adminuser/venv/lib/python3.14/site-packages/streamlit/runtime/caching/cache_utils.py\", line 813, in _get_or_create_cached_value\n    return self._handle_cache_miss(cache, value_key, func_args, func_kwargs)\n           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/adminuser/venv/lib/python3.14/site-packages/streamlit/runtime/caching/cache_utils.py\", line 875, in _handle_cache_miss\n    computed_value = self._info.func(*func_args, **func_kwargs)\n  File \"/mount/src/stock-lab/views/p01_market.py\", line 1480, in 費半回撤資料\n    return macro.費半回撤(macro.讀取費半長線())\n           ^^^^^^^^^^^^^^\nAttributeError: module 'macro' has no attribute '費半回撤'\n"
+ },
+ "65e9492c6a": {
+  "首次": "2026-11-01 20:53",
+  "次數": 2,
+  "最近": "2026-11-01 21:00",
+  "頁面": "01 首頁 資金",
+  "類型": "AttributeError",
+  "訊息": "module 'macro' has no attribute '讀取夜盤法人'",
+  "位置": "p01_market.py:1485",
+  "追蹤": "Traceback (most recent call last):\n  File \"/mount/src/stock-lab/views/p01_market.py\", line 1695, in 區塊片段\n    區塊函式[名]()\n    ~~~~~~~~~~~~^^\n  File \"/mount/src/stock-lab/views/p01_market.py\", line 460, in 資金面區\n    槓桿趨勢()\n    ~~~~~~~~^^\n  File \"/mount/src/stock-lab/views/p01_market.py\", line 518, in 槓桿趨勢\n    夜 = 夜盤法人資料(_版本)\n         ~~~~~~~~~~~~^^^^^^^\n  File \"/home/adminuser/venv/lib/python3.14/site-packages/streamlit/runtime/caching/cache_utils.py\", line 757, in __call__\n    return self._get_or_create_cached_value(args, kwargs, spinner_message)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/adminuser/venv/lib/python3.14/site-packages/streamlit/runtime/caching/cache_utils.py\", line 813, in _get_or_create_cached_value\n    return self._handle_cache_miss(cache, value_key, func_args, func_kwargs)\n           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/adminuser/venv/lib/python3.14/site-packages/streamlit/runtime/caching/cache_utils.py\", line 875, in _handle_cache_miss\n    computed_value = self._info.func(*func_args, **func_kwargs)\n  File \"/mount/src/stock-lab/views/p01_market.py\", line 1485, in 夜盤法人資料\n    return macro.讀取夜盤法人()\n           ^^^^^^^^^^^^^^^^^^\nAttributeError: module 'macro' has no attribute '讀取夜盤法人'\n"
+ },
+ "217d17fcc3": {
+  "首次": "2026-11-02 07:22",
+  "次數": 1,
+  "最近": "2026-11-02 07:22",
+  "頁面": "01 首頁 總經",
+  "類型": "AttributeError",
+  "訊息": "module 'macro' has no attribute '費半回撤'",
+  "位置": "p01_market.py:1484",
+  "追蹤": "Traceback (most recent call last):\n  File \"/mount/src/stock-lab/views/p01_market.py\", line 1767, in 區塊片段\n    區塊函式[名]()\n    ~~~~~~~~~~~~^^\n  File \"/mount/src/stock-lab/views/p01_market.py\", line 1597, in 總經區\n    撤 = 費半回撤資料(_版本)\n         ~~~~~~~~~~~~^^^^^^^\n  File \"/home/adminuser/venv/lib/python3.14/site-packages/streamlit/runtime/caching/cache_utils.py\", line 757, in __call__\n    return self._get_or_create_cached_value(args, kwargs, spinner_message)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/adminuser/venv/lib/python3.14/site-packages/streamlit/runtime/caching/cache_utils.py\", line 813, in _get_or_create_cached_value\n    return self._handle_cache_miss(cache, value_key, func_args, func_kwargs)\n           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/adminuser/venv/lib/python3.14/site-packages/streamlit/runtime/caching/cache_utils.py\", line 875, in _handle_cache_miss\n    computed_value = self._info.func(*func_args, **func_kwargs)\n  File \"/mount/src/stock-lab/views/p01_market.py\", line 1484, in 費半回撤資料\n    return macro.費半回撤(macro.讀取費半長線())\n           ^^^^^^^^^^^^^^\nAttributeError: module 'macro' has no attribute '費半回撤'\n"
+ },
+ "57a52865ef": {
+  "首次": "2026-11-02 07:22",
+  "次數": 1,
+  "最近": "2026-11-02 07:22",
+  "頁面": "01 首頁 資金",
+  "類型": "AttributeError",
+  "訊息": "module 'macro' has no attribute '讀取夜盤法人'",
+  "位置": "p01_market.py:1557",
+  "追蹤": "Traceback (most recent call last):\n  File \"/mount/src/stock-lab/views/p01_market.py\", line 1767, in 區塊片段\n    區塊函式[名]()\n    ~~~~~~~~~~~~^^\n  File \"/mount/src/stock-lab/views/p01_market.py\", line 460, in 資金面區\n    槓桿趨勢()\n    ~~~~~~~~^^\n  File \"/mount/src/stock-lab/views/p01_market.py\", line 518, in 槓桿趨勢\n    夜 = 夜盤法人資料(_版本)\n         ~~~~~~~~~~~~^^^^^^^\n  File \"/home/adminuser/venv/lib/python3.14/site-packages/streamlit/runtime/caching/cache_utils.py\", line 757, in __call__\n    return self._get_or_create_cached_value(args, kwargs, spinner_message)\n           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/adminuser/venv/lib/python3.14/site-packages/streamlit/runtime/caching/cache_utils.py\", line 813, in _get_or_create_cached_value\n    return self._handle_cache_miss(cache, value_key, func_args, func_kwargs)\n           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/adminuser/venv/lib/python3.14/site-packages/streamlit/runtime/caching/cache_utils.py\", line 875, in _handle_cache_miss\n    computed_value = self._info.func(*func_args, **func_kwargs)\n  File \"/mount/src/stock-lab/views/p01_market.py\", line 1557, in 夜盤法人資料\n    return macro.讀取夜盤法人()\n           ^^^^^^^^^^^^^^^^^^\nAttributeError: module 'macro' has no attribute '讀取夜盤法人'\n"
+ },
+ "9cdee4b4f0": {
+  "首次": "2026-11-09 09:29",
+  "次數": 9,
+  "最近": "2026-11-09 13:09",
+  "頁面": "01 首頁 權值",
+  "類型": "FragmentHandledException",
+  "訊息": "Invalid value '[  26.85   76.4     0.      0.      0.   1065.     18.5  8030.    529.\n  217.5    97.1     0.    173.    239.5   411.   2240.    132.5     0.\n   55.4   861.   1220.    894.    310.    740.    297.5  4065.    583.\n  932.    372.5    28.35  158.5   210.5  3725.    245.     57.4   107.5\n",
+  "位置": "fragment.py:816",
+  "追蹤": ".15   75.3    40.85  211.5     0.   2540.    489.\n  180.5   760.    444.    131.    693.    170.   6725.      0.   1705.\n 5710.      0.   1405.    564.    106.5    95.7   398.    102.5    51.2\n   27.85  538.   1360.     88.9  1640.      0.      0.    938.  ]' for dtype 'float32'\n\nDuring handling of the above exception, another exception occurred:\n\nTraceback (most recent call last):\n  File \"/mount/src/stock-lab/views/p01_market.py\", line 2591, in 區塊片段\n    區塊函式[名]()\n    ~~~~~~~~~~~~^^\n  File \"/home/adminuser/venv/lib/python3.14/site-packages/streamlit/runtime/fragment.py\", line 836, in wrap\n    return wrapped_fragment()\n  File \"/home/adminuser/venv/lib/python3.14/site-packages/streamlit/runtime/fragment.py\", line 816, in wrapped_fragment\n    raise FragmentHandledException(e)\nstreamlit.errors.FragmentHandledException: Invalid value '[  26.85   76.4     0.      0.      0.   1065.     18.5  8030.    529.\n  217.5    97.1     0.    173.    239.5   411.   2240.    132.5     0.\n   55.4   861.   1220.    894.    310.    740.    297.5  4065.    583.\n  932.    372.5    28.35  158.5   210.5  3725.    245.     57.4   107.5\n   43.6    28.1    17.35   49.5   154.    112.     34.7    47.2    69.9\n   52.9    40.25   42.15   75.3    40.85  211.5     0.   2540.    489.\n  180.5   760.    444.    131.    693.    170.   6725.      0.   1705.\n 5710.      0.   1405.    564.    106.5    95.7   398.    102.5    51.2\n   27.85  538.   1360.     88.9  1640.      0.      0.    938.  ]' for dtype 'float32'\n"
+ }
+}

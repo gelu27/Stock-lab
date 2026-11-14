@@ -1,0 +1,974 @@
+{
+ "seen": [
+  {
+   "id": "1WIT7pOw17_JzcHOpwY56gb06VMAdu2WDjw7wgKwJAEo",
+   "name": "[給通勤族的飆股報告書] 2026-10-28 智原漲停",
+   "date": "2026-10-28"
+  },
+  {
+   "id": "1bZYb-HQRMSutr-xSQTi_y1EuHT-iGWaxPilb5Qx_kjc",
+   "name": "[一綺聊股] 2026-10-28 記憶體漲真的嗎",
+   "date": "2026-10-28"
+  },
+  {
+   "id": "165nd07zJAaoo27oYyIc-2iAE0IK1m5A_To4pvA1iBws",
+   "name": "[總編當莊] 2026-10-28 藍新資訊（.txt 版）",
+   "date": "2026-10-28"
+  },
+  {
+   "id": "1fl91YXxpUnlrtV5z9WX4N4_sLZtWtzYB-mZ_TQ8mSso",
+   "name": "總編當莊 2026-10-28 藍新資訊（重複）",
+   "date": "2026-10-28"
+  },
+  {
+   "id": "1bVf-68CO_CvxNI9XosCh_RhOhkm2-WxoGyV1HjfIY8A",
+   "name": "[宏爺講股] 2026-10-28 美債殖利率5%保衛戰",
+   "date": "2026-10-28"
+  },
+  {
+   "id": "11KVw8ZLic_YP5FR3p9gvQeWyHXxLs2VvHWpAegi4HNg",
+   "name": "[統一投顧] 2026-10-28 外資期貨空單的對手",
+   "date": "2026-10-28"
+  },
+  {
+   "id": "1GKUbvHy304_VnWxjYdMe9ItY4vfmBB296JV0Uj2AU98",
+   "name": "[林睿閎分析師-John] 2026-10-28 主動型ETF越跌越買",
+   "date": "2026-10-28"
+  },
+  {
+   "id": "1Y7AMhr2RqALsXKhr2al8BoVcTPswOSLt8qqa1n8hQMg",
+   "name": "緯來財經 2026-10-29 日月光迎CPO時代",
+   "date": "2026-10-29"
+  },
+  {
+   "id": "1oB-DY35BnvEYzqxUPZ-bnK5kAoSkF619LbGUUK2V8jU",
+   "name": "給通勤族的飆股報告書 2026-10-29 聯電跌停",
+   "date": "2026-10-29"
+  },
+  {
+   "id": "1kGf_XRXUMP5NaSZydNkuOnRqdB9KqhGP9v6orwoBJAM",
+   "name": "[群益創富觀點] 2026-10-29 群益早安",
+   "date": "2026-10-29"
+  },
+  {
+   "id": "1SOcUSFogzHlFxeFmGeCTCUHLV5XQJk8vcePCgJsX128",
+   "name": "USTV 非凡電視 2026-10-29 錢線百分百",
+   "date": "2026-10-29"
+  },
+  {
+   "id": "1mNVtN46MKZD1OUFyELoQeV15OFYRPCoi51n54r64IQo",
+   "name": "[財女珍妮] 2026-10-14 AI Agent 讀財報（非個股，未寫入說法）",
+   "date": "2026-10-14"
+  },
+  {
+   "id": "1EOTRbzqOizEwezAyG9rB84xJ44H1YjCtZhQbdVXEp74",
+   "name": "[維維 AI 技術工坊] 2026-10-21 AI 訂閱比較（非股市，未寫入說法）",
+   "date": "2026-10-21"
+  },
+  {
+   "id": "1vWClN_9yUuuXGTyraR_Ju5NFVjap9GI3aRKZKcbmV08",
+   "name": "宏爺講股 2026-10-29 Google盤後狂瀉",
+   "date": "2026-10-29"
+  },
+  {
+   "id": "16OT0T2Tg2vnOyZvO13sBafHVUwRC_ePiPWxjqqlXfjg",
+   "name": "李永年 2026-10-29 你看不見的風險",
+   "date": "2026-10-29"
+  },
+  {
+   "id": "1gImfn1KZkTertnw3hpBe5ZQL-3H7TPEnkGjnsPL7e2Q",
+   "name": "李永年 2026-10-29 你看不見的風險（重複）",
+   "date": "2026-10-29"
+  },
+  {
+   "id": "1PV_ybyreOOshlcXGdYl0d_huWnAH6l1nYC_eNYzgUS4",
+   "name": "辣個分析師-黎志建(Vic) 2026-10-30 玻璃基板危險了",
+   "date": "2026-10-30"
+  },
+  {
+   "id": "1R0x6WLr1VcnCafiilVwHWa4MA4igd41Kh3cl3134so4",
+   "name": "老王愛說笑 2026-10-30 台積電要賣嗎",
+   "date": "2026-10-30"
+  },
+  {
+   "id": "1J6uGrTVo3tNFPpj6nvYob-1LyLtxa1S0_kIEffufbMo",
+   "name": "財訊 2026-10-30 AI下一波商機",
+   "date": "2026-10-30"
+  },
+  {
+   "id": "1b6Rb94gX1iGgs4C27hnKrOA2lVjHEhCAHp1Yu5Gk2AE",
+   "name": "自由女神邱沁宜 2026-10-30 高週轉策略",
+   "date": "2026-10-30"
+  },
+  {
+   "id": "1JjEvTCfYQihf0OukJC23_kweEsAns5U0qR9DDsFaoes",
+   "name": "雪寶學院 2026-10-30 融資還沒洗乾淨",
+   "date": "2026-10-30"
+  },
+  {
+   "id": "1NuSUmjEER6LMotvsqm0hdE_zvHynH80yrVWx3Mp11p0",
+   "name": "宏爺講股 2026-10-30 股市大逃殺",
+   "date": "2026-10-30"
+  },
+  {
+   "id": "1z-wscuUu3dJHPy2emLJSYzrvVNWLG_dy50qpZD70-QM",
+   "name": "財經希引力 2026-10-30 CPO測試黑馬",
+   "date": "2026-10-30"
+  },
+  {
+   "id": "14vOtSNTsHFjVMwwH7zxs83erW6XwKYDg77UJEQPDl9o",
+   "name": "Max大視界 2026-10-29 台積電4年漲7倍",
+   "date": "2026-10-29"
+  },
+  {
+   "id": "1totaVRsXwCuiOBnmPKSfRunyY3EFxdtaQ_umjeT1dmU",
+   "name": "投資伊森 2026-10-30 OCS光路交換器",
+   "date": "2026-10-30"
+  },
+  {
+   "id": "10isF_6F2cObqXF7Ad4HQCWO5LjVXyFfVJYHKXy3aBFc",
+   "name": "經濟日報EDN 2026-10-30 簡立峰AI五變革",
+   "date": "2026-10-30"
+  },
+  {
+   "id": "1owA6Vs4UTUSwMZwr7j9txVVUfF67a2qiMDGAyASFKOE",
+   "name": "三立財經iNEWS 2026-10-30 鴻海科技日",
+   "date": "2026-10-30"
+  },
+  {
+   "id": "1FFoFvrfdC3x9Z5qgYottCAJgeCwXJPb-MQ1wEGxi9ZU",
+   "name": "風傳媒 2026-10-31 張錫台積電5000",
+   "date": "2026-10-31"
+  },
+  {
+   "id": "1dikpbPq7-9QcGZ6TQM_5QVLx0oJgD8mXps71ELhHKtw",
+   "name": "TVBS財經 2026-10-30 輝達不等CPO NPO先登場",
+   "date": "2026-10-30"
+  },
+  {
+   "id": "1GFsIWW17suIbcXEqwaQawS4qg-5K4CioB620_oRPJ7M",
+   "name": "給通勤族的飆股報告書 2026-11-02 影片詳細整理",
+   "date": "2026-11-02"
+  },
+  {
+   "id": "1VsXLjLi6HZz3HG8YEpipI0NUYDb7VrEC9d1QXxRkEbY",
+   "name": "[M觀點] 2026-11-02 期中選舉、英特爾、市場看法",
+   "date": "2026-11-02"
+  },
+  {
+   "id": "1Y7CEcPAIxCIxzNl41F7CUTt3TXKbi6t_G0qvoEZtKhg",
+   "name": "[三立財經iNEWS] 2026-11-02 季辛格讚台灣",
+   "date": "2026-11-02"
+  },
+  {
+   "id": "1yddv7hdnEz41H999QVZJRWstxcgCSMm-DCksEI4hJio",
+   "name": "[林睿閎分析師-John] 2026-11-02 止跌倒數",
+   "date": "2026-11-02"
+  },
+  {
+   "id": "1EPc4Zh73aaqfAWdIQfSYGHbfguUs_5qs1fS5WP6qJaM",
+   "name": "[辣個分析師-黎志建] 2026-11-02 台達 HVDC 延後",
+   "date": "2026-11-02"
+  },
+  {
+   "id": "1CtJM9jYH3sFdTitxSf58vQWksM5_l8VC50YCYJ_8hk8",
+   "name": "[宏爺講股] 2026-11-02 外資砍倉近兆",
+   "date": "2026-11-02"
+  },
+  {
+   "id": "1L2WPqG3sdTDknQBYVpXcbuT4b07Sz3OwBMuMaReNL0c",
+   "name": "[給通勤族的飆股報告書] 2026-11-02 止跌（與前一份同支影片）",
+   "date": "2026-11-02"
+  },
+  {
+   "id": "1Mbmql-YZ8VYehiF9FtYQJo_h3do1DK6VHrS4-Pji5To",
+   "name": "[財訊] 2026-11-02 友達最大轉型",
+   "date": "2026-11-02"
+  },
+  {
+   "id": "1GUiOy8cbA_Err2P3_OUHXXZzdnRXuPGq-ZthXMh_6Jk",
+   "name": "[給通勤族的飆股報告書] 2026-11-03 極度恐慌 光通訊併購",
+   "date": "2026-11-03"
+  },
+  {
+   "id": "1HwUhtqU69jlmw2ecjuy9jPpBqr0Uqmz7JZaApoGDRNQ",
+   "name": "[鈔錢部署–華視優選] 2026-11-03 台達電跌不停",
+   "date": "2026-11-03"
+  },
+  {
+   "id": "1rsNWae0gYIJo_YSfmgqXKu0SoyusiT8sFounkdJEZgU",
+   "name": "[鈔錢部署–華視優選] 2026-11-03 台達電跌不停（與前一份同支影片）",
+   "date": "2026-11-03"
+  },
+  {
+   "id": "1S6naHyPpxATIshXRKbrFguRlJPAyNXCLOUsvpffws1E",
+   "name": "[94要賺錢] 2026-11-03 台達電市值被鴻海超越",
+   "date": "2026-11-03"
+  },
+  {
+   "id": "1f5iyzNUkIBAYqh6axJ5cimJiM_cpnDnYfswAETHXiic",
+   "name": "[緯來財經] 2026-11-03 CPO產業鏈分工",
+   "date": "2026-11-03"
+  },
+  {
+   "id": "1FN13vYFcoEM4lTxHQl9bzJBGUJXo1sdotGOeYocZxFI",
+   "name": "[操盤的智慧 汪海華] 2026-11-02 還會暴跌嗎",
+   "date": "2026-11-02"
+  },
+  {
+   "id": "1zhI1d3EgeyepASwzrzZehR6WFlFDnsQ1BnGXkELje1g",
+   "name": "[老王愛說笑] 2026-11-03 國巨破底、南亞科跌停",
+   "date": "2026-11-03"
+  },
+  {
+   "id": "1z8QEaG-XINybfu69yqXMthu7ZH2w0qxTQfVVuIi3JaQ",
+   "name": "[緯來財經] 2026-11-03 CPO產業鏈分工（與前一份同支影片）",
+   "date": "2026-11-03"
+  },
+  {
+   "id": "1L8LcE-wJ9UHb5fbFXjOMaCxYs7naZ0ijw8hBLo9ll88",
+   "name": "[投資優我罩—優分析] 2026-11-04 台積電殺到2300能買嗎（後半疑似混入賺錢放大術）",
+   "date": "2026-11-04"
+  },
+  {
+   "id": "18VAMTD90zFHVxLMlaN3oy0J7DHOLgUF3sdCGGyYrWrU",
+   "name": "[宏爺講股] 2026-11-04 融資單日暴減229億",
+   "date": "2026-11-04"
+  },
+  {
+   "id": "1v1Fu1FaqFDsBep6hI5IEEAk-fBFsoBsX9B4Khl2USEE",
+   "name": "[政經最前線] 2026-11-04 5.9億美金買全球動亂（政治專題，無股票）",
+   "date": "2026-11-04"
+  },
+  {
+   "id": "1H7l3XDYgqfBT0FmxkHZV0zaiw1XEIfR2DLyW-640ezM",
+   "name": "[給通勤族的飆股報告書] 2026-11-04 爆掉了 接下來要把握",
+   "date": "2026-11-04"
+  },
+  {
+   "id": "1diqMhardR8wGjO7O1womwwA7aWCVpjCIKvRIQKDRqlk",
+   "name": "[賺錢放大術] 2026-11-03 鄭廳宜砸千萬買台積電",
+   "date": "2026-11-03"
+  },
+  {
+   "id": "1RhpKii187RNmPo2O3OaO5vS-I3AqehIYLLBqX5HdetQ",
+   "name": "[給通勤族的飆股報告書] 2026-11-05 AI到頂了",
+   "date": "2026-11-05"
+  },
+  {
+   "id": "1vfe3a9L2t8Qvtke9C0lCUu5BhwFT6ZmQb4UnUttHnY4",
+   "name": "雪寶學院 2026-11-05 AI 篩跌深股",
+   "date": "2026-11-05"
+  },
+  {
+   "id": "1D1FL6YvAZcTsYhiiLYZkW-MC5s8jYXmCXz1czXdo4Qw",
+   "name": "[寰宇財經新聞] 2026-11-05 杜金龍短底",
+   "date": "2026-11-05"
+  },
+  {
+   "id": "1Fq3Ktl-AP3JQPXrJaZShj3gYz9BdJEZ2MwKCuIN8Imw",
+   "name": "[緯來財經] 2026-11-05 散熱重電",
+   "date": "2026-11-05"
+  },
+  {
+   "id": "1UN5XX8t4HGdjacuYJFnDcdZ9JLhfrPZHw72xuY2Mlp4",
+   "name": "[TVBS財經] 2026-11-04 融資大逃殺",
+   "date": "2026-11-04"
+  },
+  {
+   "id": "1OjAS2rP2eZSMEuYiZEH_oTvDjY1uiBLGAeu4HmaYm5U",
+   "name": "[Big Country Politics] 2026-10-31 德州政治（非股市，未寫入說法）",
+   "date": "2026-10-31"
+  },
+  {
+   "id": "1RCxEH_eL4dSvbO2ez1rE6h1BMhXUYEBc4rtPFKY57_o",
+   "name": "[宏爺講股] 2026-11-05 期中選舉變天",
+   "date": "2026-11-05"
+  },
+  {
+   "id": "1QeLOwLfXevhvIg3XQ55zJG_DXsE_d-4yoaKv1thb_2w",
+   "name": "[關我什麼事] 2026-11-06（重複）",
+   "date": "2026-11-06"
+  },
+  {
+   "id": "1kaM-QU3FX8CXt2tqEu9iQhv1pJ9_1tQifhPye8HdvKE",
+   "name": "[緯來財經] 2026-11-06 兩種下跌",
+   "date": "2026-11-06"
+  },
+  {
+   "id": "10Kl5YpxO_MqNX1aNqUnyyNAAEGeK8YE2080A-UsiqCU",
+   "name": "Untitled＝辣個分析師-黎志建 2026-11-06 AI泡沫 EP.65",
+   "date": "2026-11-06"
+  },
+  {
+   "id": "1aZL5j5Qzv3fwtVlSELWw3imer9pgQ3NVJkvN8UyiyQU",
+   "name": "[關我什麼事] 2026-11-06 德州暫停審批",
+   "date": "2026-11-06"
+  },
+  {
+   "id": "1-NtYHiAJVS1Et7jysn4P4Wc3OMbOyg3ZyY2baW8aY-A",
+   "name": "[宏爺講股] 2026-11-06 費半崩跌",
+   "date": "2026-11-06"
+  },
+  {
+   "id": "1zJYrwB9aDTZgjatoOyMf-nS3r8mtubB1ngWawR7YRgo",
+   "name": "[雪寶學院] 2026-11-07 融資減了1千億",
+   "date": "2026-11-07"
+  },
+  {
+   "id": "13ntZgjJ38et_kUuKxqISPtS237V2Bl0HkbtuLQ9x6WU",
+   "name": "宏爺 11/09",
+   "date": "2026-11-09"
+  },
+  {
+   "id": "1Pv3eN9eo4F5qqEPTIZAkrW3ae02CZOZM-JzjPJyjQ-A",
+   "name": "通勤族 11/09",
+   "date": "2026-11-09"
+  },
+  {
+   "id": "1T-TF9k-syAls0hmiyJWCA7Oal0g_e4PJ3Bpl5fFaxf4",
+   "name": "緯來 黃仁勳 11/09",
+   "date": "2026-11-09"
+  },
+  {
+   "id": "19u7qUqILG7P9FMh1VmWg70ECMGSC4IrDHFRvWky_nLg",
+   "name": "老王 國安 11/09",
+   "date": "2026-11-09"
+  },
+  {
+   "id": "1-Ev2iem9z0LM1klD8j0Ju7L7I-UoGot08OOmXkpF8Gk",
+   "name": "劉姸希 11/09",
+   "date": "2026-11-09"
+  },
+  {
+   "id": "1GPz8cHnpgwC-S98xwad8WKK7xbPGRw7Zf4v0fv5moW8",
+   "name": "緯來 ETF 11/09",
+   "date": "2026-11-09"
+  },
+  {
+   "id": "1cBeAxfdcnBAbMkzjUIedLloUsMdCjiEQNv_2QlPuap0",
+   "name": "Untitled（緯來 ETF 重複）",
+   "date": "2026-11-09"
+  },
+  {
+   "id": "1VlFWS1gOlqaBq37Fharu11PT_QkjGGlO6tF93UW_u84",
+   "name": "柴鼠 11/06",
+   "date": "2026-11-06"
+  },
+  {
+   "id": "1mIolmOnjG6vRemADAw_sPE1qa0-KDc1Vxc7GhU79Ijo",
+   "name": "懶錢包 11/09",
+   "date": "2026-11-09"
+  },
+  {
+   "id": "1_cIYjSS-YxgXLUH63PELXKEHw59mmI-_4a7aMUX7sHg",
+   "name": "老王 止跌三指標 11/06",
+   "date": "2026-11-06"
+  },
+  {
+   "id": "1iJmOghj57wulP06qI5R4pizHFVZu3S1tLOF78RKcFzs",
+   "name": "財經向前看 11/07",
+   "date": "2026-11-07"
+  },
+  {
+   "id": "1YDNYz-PaE6gafmpkJ4XudtC7dDAHQ8pECpRsJZHaAj4",
+   "name": "G MONEY 8/03",
+   "date": "2026-08-03"
+  },
+  {
+   "id": "1_3bAQlN9VATfmjq_Zb_4IxwDICb_K6Iihr4C6BY4Cls",
+   "name": "老王 8/01",
+   "date": "2026-08-01"
+  },
+  {
+   "id": "1FDyrAyJUOosM9HxqKYzkSsXmaoxq6xKxOIGZ9trVVfE",
+   "name": "杜金龍 7/30",
+   "date": "2026-07-30"
+  },
+  {
+   "id": "1UTE1ldjY6U4vu7uFyYD-UpkL0Ee-cdelZRon2d1Y7A4",
+   "name": "小宇宙 8/05",
+   "date": "2026-08-05"
+  },
+  {
+   "id": "1I-gb9bNXo6nChyWfvPdN3tYMfwqhPTwOju1O2au9Q3A",
+   "name": "AI 101 10/04",
+   "date": "2026-10-04"
+  },
+  {
+   "id": "12GytJJALIeHOxhRZMB9B9s4oAi2lMk0MMNo6TRMwbv0",
+   "name": "緯來 無人機 11/10",
+   "date": "2026-11-10"
+  },
+  {
+   "id": "1hl0YTDTnL5j0UuRvU5lIOKtsdiFRVaM65UChMuOp6RA",
+   "name": "曲博 3D DRAM 11/10",
+   "date": "2026-11-10"
+  },
+  {
+   "id": "1irWNzfXNjC1j1Q5HkyH5JN6I9pZj4empD42DQQ_Osw0",
+   "name": "通勤族 11/10",
+   "date": "2026-11-10"
+  },
+  {
+   "id": "1oUjEmUtOoIS67i-VJtfX9z58qvDFyL12jJjKSi5_tXc",
+   "name": "游庭皓 11/10",
+   "date": "2026-11-10"
+  },
+  {
+   "id": "1XViw6U1aoABh5Aqt51-FHEK4hoQI3ummkZ9OePc7t1Y",
+   "name": "美股重點 11/09（非影片）",
+   "date": "2026-11-09"
+  },
+  {
+   "id": "15pIZ6DuSIuR4Ku0OdEPkfzfs7cbByEmFYX61kWmKC10",
+   "name": "通勤族 11/11",
+   "date": "2026-11-11"
+  },
+  {
+   "id": "1jTFFeUVBcdO5y3iJPXo5p8Ma-81-O6Wdk3LkU3LjfzY",
+   "name": "通勤族 11/11（重複）",
+   "date": "2026-11-11"
+  },
+  {
+   "id": "1FCHZAQ-n1xMaNkDQgkFcm0NgTQiqbRnn7ncohHPK2GM",
+   "name": "理財達人秀 11/11",
+   "date": "2026-11-11"
+  },
+  {
+   "id": "1DXrX7a7tXGiG-AwN1iQFWv0RaWzjIBNzrl81GAzSMYM",
+   "name": "雪寶學院 11/10",
+   "date": "2026-11-10"
+  },
+  {
+   "id": "1bVY8xo3CiisVl-bUQT4aBZ3bymRIE1nzhfvzQxSFD38",
+   "name": "老王 11/10",
+   "date": "2026-11-10"
+  },
+  {
+   "id": "1NQ4-Dp1v0da72oC8i4qfi0uzoQFQshCO_iDzB2bVuEo",
+   "name": "蘇麗芬 11/10",
+   "date": "2026-11-10"
+  },
+  {
+   "id": "1IQ3thtQ7FPHXl_b4VYzWdpPMNST20FzCm3DegaGa2xk",
+   "name": "宏爺 11/12",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "168FMALgliNTSVxU5aBZDdZrHQI_YWMQX1J4iwwK6NF4",
+   "name": "通勤族 11/12",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1Q5YRW76vlDsfDdk-7S9pT4zBDRfhUCL7vzJ7Rt-Q-CU",
+   "name": "游庭皓 11/12",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1hmCTsSf4Pa37oh8s6_gJmqjeZrl7HQkzWe4eRFBG5ik",
+   "name": "游庭皓 11/12（長版）",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "16IR-9QJ_CzjSpvk_mssnxut6BYXmjd5fJFIQ2ENKOMc",
+   "name": "老王 333選股 11/12",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1EM-J9tMBfB8TCk_PDorZ-kRd9jsvtieISD9kLeFBTR4",
+   "name": "老王 記憶體短片 11/12",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1yhSiwRJJzEFf9hKDQhT72SvrmFIec70elTvcZYJ1axE",
+   "name": "郭哲榮 11/12（字幕版）",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1eAtBQ7f962r9QZwoel4NN4a6N2sRsnt2WHEklQCO6PI",
+   "name": "郭哲榮 11/12（直播，同支）",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1BufcEz6xyyoU1Ivvb253D7qR3_CMmSrKTnmGRvt6B6k",
+   "name": "郭哲榮 11/12（60秒）",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1Jn7fzJggD2bACC6mucaKIYACgBsX9VetuZiNzy8lNEQ",
+   "name": "緯來 5萬點 11/12",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1MhcDaobxjxOQVpCSY-M9UQKM-xPf39bPp0qetyUfFoU",
+   "name": "緯來 SST 11/12",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1FHpTzKVrRWCVOS9Ltd_MZpbdIcI68SRgpSG9Smb8350",
+   "name": "理財達人秀 兆華艾綸說（與11/11同支）",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "19PUV_by0_TPtdZv5LMutlf1n3Qbscch98evKVeSDq1U",
+   "name": "理財達人秀 楊雲翔 30分K",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1kRJccS4FAw1NRQC2Gkm1EUaP5g6QWJRNEa0Z00A_-_w",
+   "name": "理財達人秀 報價天王",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1ujlDkZbLRwyDe5FckdO0maIUWyZkc3YTkTV_R5gCfYU",
+   "name": "理財達人秀 朱家泓",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1c_btPvJzvLU43LHm3gE7Ek7yVCB3RgSte-TN9eqJBI4",
+   "name": "理財達人秀 產業隊長",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1rOaIsQXRotakVVlb246OZwXznZZm7mV59x0fWduNxio",
+   "name": "理財達人秀 艾綸",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1Nhy9LRjNs2uhkeFKFGfYe9lyp7rIutxnzbZTOu0z0DU",
+   "name": "理財達人秀 冠軍操盤手（未細讀）",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1B13E3VkDb9Oy2J9lvyLG3320mRnNdVmHcb_g4a9OCaU",
+   "name": "理財達人秀 冠軍操盤手2（未細讀）",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1DAb5k5fQHiseIpz6cnfbFX-wZXXU9j_FEIlmMc4E3RQ",
+   "name": "財經希引力 預告 11/12（無個股）",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1OceE2EE9OlQGIltJLDt8dfQrK1KA0ya1BDLmus2sZ78",
+   "name": "投資伊森 高盛 11/12（無個股）",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1kptj-4th9v5wMi9z8jM8HV1sw7XSMsh36OCxVJ0_grY",
+   "name": "宏爺 11/11",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1grue6eh1sgPrg40FBCMeUukXFCQkDwRj3ab4AuPVKjA",
+   "name": "李永年 11/11",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1eEs3ap6inaIpzFFGIb5gAnjaIlWPPZeJUwQYnGkcZro",
+   "name": "賺錢放大術 11/11",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1UTmCyKnfld_HqBepe5cfal2Z5r3E8Ik07wBbzxkmMCw",
+   "name": "老王 11/10（同支已收）",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1J_Te_6qXGCfk8Qb_amHcnQK2L-zGVuDV0bo8z1Ziy5E",
+   "name": "財經希引力 11/11（未細讀）",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1n4vQinHrVzx5-zJGRdsMiPuBecfJ26zSb8Z4Oo1Vxco",
+   "name": "投資伊森 直播 11/11（未細讀）",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1dgn-22H103lXGf4YD8qA6eYivh_N7Q9AGuvJdvz1TmA",
+   "name": "宏爺 11/11（長版）",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1xwxr14xehlzHEwzyF2zgKI0euhJi6xNxvgj0cSsQALY",
+   "name": "理財達人秀 11/11 電視完整版（未細讀）",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1KJXxhef-r3A4vEVqHquS5kx_rQpf0L3j2u2S3gMsHqM",
+   "name": "兆華艾綸說 11/11（長版）",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1G-v_Da5XApl9-2qoi4zr8NTV1ljJxv39EqNMu5EhOyU",
+   "name": "理財達人秀 11/10 電視完整版（未細讀）",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "18jeN5NjvJwvU9eN1xLIW7d-iV2gl3Q__DhVr5tusOo0",
+   "name": "一綺聊股 11/11（未細讀）",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1hnhY-WWAw0ecgNYCIIy7WKRSe9zmSC3XEVm6RJ4RtPs",
+   "name": "游庭皓 11/10（未細讀）",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1dBQsmVMtrIKpE8vZknvCJd1d4KWoZedJ0EVQeu5sduw",
+   "name": "游庭皓 11/11（未細讀）",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "118PPz_JYVJ3dXFL6yZT1uPzBXpgL1nInZTICChoDygs",
+   "name": "理財達人秀 紀緯明 11/11（未細讀）",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1M6Ibc9tK9qeP2_ooeryHwdy3KmzyWuiJrtie5C7vooM",
+   "name": "一綺聊股 11/10（未細讀）",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1Zl84dtJrS1D4gI7Q0iyuhF-hTRnVsTTc5lRzRAOIwLM",
+   "name": "投資伊森 11/11（未細讀）",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1YAuMSb45f8jdAIgY74XDUavoEYKuWQOxxoS3tC3v-lw",
+   "name": "理財達人秀 林漢偉 11/11（未細讀）",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1CrrN3TfFSQ6t95dapqELZvq6DKV0ctDqfD-kBUPE5Iw",
+   "name": "理財達人秀 陳唯泰 11/10（未細讀）",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1YZT04ccG4EObYa6jFSVyhA8mxGy79XBs-XW9ttOn2cA",
+   "name": "MacroMicro 11/10（未細讀）",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1xSkHJ7rRBlAm0YZWMl_yEvAEVWwCBWZa4EYzA1NyKqY",
+   "name": "理財達人秀 2026-11-12 艾綸爆料大盤反彈誰跑最快十月營收翻倍連四紅鎖定",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1qz-ZO7B-rQrGEraZKCjmY71Dprwt-5ORNYUFF8UyZQA",
+   "name": "理財達人秀 2026-11-12 冠軍操盤手楊雲翔親授資金淨流入戰術鎖定富喬台玻",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1Wt-xfoZ1pcVKbOYJQjm70-ZEZkqILw2n6ZTIVkFqJ9g",
+   "name": "理財達人秀 2026-11-12 冠軍操盤手楊雲翔親授30分鐘K線提早轉折聯發科",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1Y8SGh_e5OsmBuDXEbK7-7G7fAlpHGFrwx4u08YFNChM",
+   "name": "老王愛說笑 2026-11-12 333選股浦男搜股EP419",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "14AOwIOCoZ4GKp0G3lS493BCk9VhSPhPIzTRV5DlPq9c",
+   "name": "郭哲榮分析師 2026-11-12 黃仁勳又外遇台股狂殺千點直播",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1__kbqhGQ_Ht2FwvInWxhHT0fzwEIHDjkUpQ5lZ2mjoA",
+   "name": "緯來財經 2026-11-12 台股5萬點挑戰推遲年前該怎麼搶反彈",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1zAQFZDTnMaUTAFu3Ag6ONpAFIUmd8epDZNrRb9Bx8NY",
+   "name": "給通勤族的飆股報告書 2026-11-12 還有高點反彈結束了",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1p-DmtAo8uZIm2jZVkeALImb0YvgHnUOPwXE3huDZnmQ",
+   "name": "郭哲榮分析師 2026-11-12 黃仁勳又外遇台股狂殺千點字幕版",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "14AWp2qWU_D_SNRcO0eyGOrQnurqGe6lsIzEnh029Ajs",
+   "name": "郭哲榮分析師 2026-11-12 黃仁勳又外遇台股狂殺千點60秒shorts",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1CIjHkCAxi2wqYAqhRcGszizD2TH9gqQmvqy-jZudHgM",
+   "name": "緯來財經 2026-11-12 國安基金護盤也沒用台股暴跌千點原因",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1CTD4EJNkmEDm3E7Ey4JF4JwgmduMDUkbfGvcHo5UUN0",
+   "name": "理財達人秀 2026-11-12 兆華艾綸說12檔國安必買股3大主動式ETF實證",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "18LJtxGx2-2sBwlHxQmWe5dUbF-6ks4JdVfc--OqNv1k",
+   "name": "理財達人秀 2026-11-12 黃仁勳出軌台股AI大洗牌完整版",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1lRKaycHd6kS8Pj9Ed36VdWOgATAes2fFpSVA1KHH9XM",
+   "name": "緯來財經 2026-11-12 黃仁勳即刻卸任科技公司怎麼挑CEO",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1nTDZDYvYpnpXMY0oz783dDPKnNiGuh0OCAl2Hb_RvJM",
+   "name": "理財達人秀 2026-11-12 台股好傷勳吐千點打腳CPO挑低檔投信護中小",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1LOOAPCfvMGn024ALR-aL4iJjOM-Eyr9pyaKB0cKqAeA",
+   "name": "理財達人秀 2026-11-12 八卦初升段拉回就是買鎖績優股跟大戶搶資安",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1t0ep2ieBptda_aQTodOX6xFwGivNugDdzriP3pdDy-g",
+   "name": "理財達人秀 2026-11-12 AI獨角獸IPO算力大洗牌",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1Ne-lvCbzlwRxADtBG1w5ygM3HnkkXDKyhbDcgvPWkPs",
+   "name": "游庭皓的財經皓角 2026-11-13 黃仁勳退位輝達下一步輝達股價最壞時刻過了",
+   "date": "2026-11-13"
+  },
+  {
+   "id": "1sVwrMjqwTM9SktYheWQbIu5ypJAHYOLryDHIW8M3SMw",
+   "name": "老王愛說笑 2026-11-13 買友達還是買群創",
+   "date": "2026-11-13"
+  },
+  {
+   "id": "1S40ztfvLNtpZluAHTSLgUX-EUsD73qjWkZ2NaifndVc",
+   "name": "理財達人秀 2026-11-13 高憲容親授跌停別割在阿呆谷台積電歷史跌停",
+   "date": "2026-11-13"
+  },
+  {
+   "id": "1pvdtS4ClTV6ksPgpjM2dC7wlWerL0m3Xr01HdnQsjNk",
+   "name": "理財達人秀 2026-11-13 容逸燊外資狂倒別當冤大頭鎖定投信買超",
+   "date": "2026-11-13"
+  },
+  {
+   "id": "1mPeggcIbDYVMlHe56OYjQbutWPxCJdxKc9-hsE3JcZE",
+   "name": "理財達人秀 2026-11-13 主動式ETF破底套牢會創高嗎",
+   "date": "2026-11-13"
+  },
+  {
+   "id": "1e53ugwZI-7BOk8ORYjpp0jBKTLUXlPyw_8wA6-Y_QoA",
+   "name": "宏爺講股 2026-11-13 千萬別這樣最後一隻老鼠輝達神話破滅倒數",
+   "date": "2026-11-13"
+  },
+  {
+   "id": "1EVXOjinaXzNDNE-yZyJ8nDAxXVWnEw6kem-gmzmyxx4",
+   "name": "理財達人秀 2026-11-13 ETF教父股魚警告黃仁勳換掉台股玩完了",
+   "date": "2026-11-13"
+  },
+  {
+   "id": "1-lbvglLIxKHyiAtZfn-rs8_N4KGyFwwP1XYIUEf_h2U",
+   "name": "理財達人秀 2026-11-13 動能專家艾綸親授沒子彈又融資斷頭慘賠",
+   "date": "2026-11-13"
+  },
+  {
+   "id": "1PKfUtIru1hdoqkaC5XpyS0HzmXlc-x8Cw6rCMRzT3Ro",
+   "name": "緯來財經 2026-11-13 12月升息1碼還2碼AI股盯這三個訊號",
+   "date": "2026-11-13"
+  },
+  {
+   "id": "1GvcXtrKKupK3rtNOu_qmCUQRYxLuHpvAHVbtd47YFpI",
+   "name": "理財達人秀 2026-11-13 國安基金進場就是最低點歷史9次回測",
+   "date": "2026-11-13"
+  },
+  {
+   "id": "1ea_-MxUFtzo9xCg4_zcfpRmaZBT7SpRhBxVZPVu7IjM",
+   "name": "郭哲榮分析師 2026-11-13 沒黃仁勳台股更飆(字幕版)",
+   "date": "2026-11-13"
+  },
+  {
+   "id": "1MxrxzxpIw8bMBe_uwwOTho-SZzbw1Vm-XY11LGdJShc",
+   "name": "郭哲榮分析師 2026-11-13 沒黃仁勳台股更飆(直播)",
+   "date": "2026-11-13"
+  },
+  {
+   "id": "1ba0qpDRxjg2f3ZDjsvZ5ok0uY6EfQ35K-iC03Mt8Sqg",
+   "name": "緯來財經 2026-11-13 黃仁勳卸任AI變天台積電最大危機來了",
+   "date": "2026-11-13"
+  },
+  {
+   "id": "1Qm9j3etyIxjMOXME11HAfw2jrdxqfeBUNdTrZda7vKc",
+   "name": "緯來財經 2026-11-13 聯準會12月恐升息台股該避險or逢低布局",
+   "date": "2026-11-13"
+  },
+  {
+   "id": "1RvpXJG0nsed6mRrSjvmdWTTG55_xnZMNBFJJsh30hZk",
+   "name": "老王愛說笑 2026-11-13 利空出盡浦男搜股EP420",
+   "date": "2026-11-13"
+  },
+  {
+   "id": "1y8H9O43CXkKJh9t2umziUNnXb2jKuUVIZ--YcuSysBM",
+   "name": "辣個分析師-黎志建 2026-11-13 一個女人扳倒了AI教父",
+   "date": "2026-11-13"
+  },
+  {
+   "id": "11ceSj6RXF8xVc3zpcRv1o9w3l3nnf6lzV2tvcM4jm3g",
+   "name": "郭哲榮分析師 2026-11-13 沒黃仁勳台股更飆(60秒shorts)",
+   "date": "2026-11-13"
+  },
+  {
+   "id": "1CZvbD7UFV6B74f6iLfzcfaDl8ycrKy-fCSESPr5tI8k",
+   "name": "老王愛說笑 2026-11-13 Nvidia利空出盡聯發科漲停",
+   "date": "2026-11-13"
+  },
+  {
+   "id": "1enTfjpQjV14HvibNA33Dlula4q-Y8HDGGc6rU0EfafM",
+   "name": "財經希引力 2026-11-13 800G、1.6T狂飆3.2T光模組PCB大單",
+   "date": "2026-11-13"
+  },
+  {
+   "id": "1e4XwBa7BSIl_3y0UsChdsHEgIaWIxkNZad-ctYFj0HI",
+   "name": "理財達人秀 2026-11-13 輝達換帥聯發科先噴",
+   "date": "2026-11-13"
+  },
+  {
+   "id": "1AgYeuoLELOHCmuD9UObVhBkMYLPbV3Yh_AMyYwYokmo",
+   "name": "緯來財經_2026-11-12_黃仁勳即刻卸任科技公司怎麼挑CEO",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1kPW-KPkX4V5nBAxHIYkCxUG6AolQtQtrdtXpOrhJafw",
+   "name": "投資伊森_2026-11-11_台股國安喝了上強彈一路上五萬",
+   "date": "2026-11-11"
+  },
+  {
+   "id": "1qldAzVWzOBbIdkfA8tWdYQ0j77GhRdvemWeyvhmT9oE",
+   "name": "緯來財經_2026-11-12_國安基金護盤也沒用台股暴跌千點原因",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1KrAt3w5QEHP3uh8yWfThv9h_EeUtk71Fx0Sc9EeXoRE",
+   "name": "投資伊森_2026-11-11_AI封裝大革命玻璃基板取代矽中介層",
+   "date": "2026-11-11"
+  },
+  {
+   "id": "1zo1Cf5MvpQeLRUozMGKYXMN1tuy6IA85xE96HRDgzjc",
+   "name": "一綺聊股_2026-11-12_快訊黃仁勳辭去輝達CEO台股明天",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1Ds4JLiiC1MrqRdIaVTWLXHDGFYlTBDVoDLqTCOchLUo",
+   "name": "一綺聊股_2026-11-11_大摩開槍降評記憶體旺宏剩90",
+   "date": "2026-11-11"
+  },
+  {
+   "id": "1c7lIrgsnP5Iu6mavFrfkVuXQOGC8TsaeJ79k_XhHk1k",
+   "name": "理財達人秀_2026-11-12_黃仁勳出軌台股AI大洗牌",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1hG1Q21trCJ13r0zU9JjVdhD7Z87DagfervflRUC1ZTs",
+   "name": "理財達人秀_2026-11-12_兆華艾綸說12檔國安必買股",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "111_zCtmjhfHFJi5eBU3Af_qOqUv9pRACS95rSrRDAy0",
+   "name": "一綺聊股_2026-11-12_黃仁勳爆出小四恐遭撤換",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1o6z6e0F_ygZzSCs_jED9jGcpB-H2gV6tZW8emqCLB4g",
+   "name": "財經影片完整整理彙編_2026-11-12",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1cMAlB0d0bNwdeb0N2h0uYZwyE1h-pLvHBkw3Cat44ZQ",
+   "name": "總編當莊 11/13 睿禾金碳",
+   "date": "2026-11-13"
+  },
+  {
+   "id": "1mLuMlVPkWTsbxiYOaXpj-f05LSy1YN97OS3cCacWS84",
+   "name": "理財達人秀 11/14 鍾國忠台塑聯鈞（同11/13完整版）",
+   "date": "2026-11-14"
+  },
+  {
+   "id": "1hDV1yxaJ8YGI_lHLrPREGDw_4S8B10QV0cOsj7JWs7o",
+   "name": "理財達人秀 11/13 part3",
+   "date": "2026-11-13"
+  },
+  {
+   "id": "1DlxMTETjhUT-RF3dcTZGX-T_1PTif6WeI-Fr965R7jw",
+   "name": "雪寶學院 11/14 直播",
+   "date": "2026-11-14"
+  },
+  {
+   "id": "1QdqbYPu5P5rA4tSLMcoJEHuWADwbe7u6PgUwdma6rto",
+   "name": "理財達人秀 11/13 電視完整版",
+   "date": "2026-11-13"
+  },
+  {
+   "id": "1BZS4Bs5Kceka7NozbvB64G2_BpErWa-F70k0e-GWPTQ",
+   "name": "理財達人秀 11/13 part1",
+   "date": "2026-11-13"
+  },
+  {
+   "id": "1bIfGu-0RrPZS8miCD9_4gpBNa2upJHXM2_MVHSfHFzs",
+   "name": "理財達人秀 11/13 part2",
+   "date": "2026-11-13"
+  },
+  {
+   "id": "12ureqFCV-SdlUyQgZCQuuQFcUDhNrVUGcqfmOrpe4FY",
+   "name": "理財達人秀 11/14 黃豐凱（同part2）",
+   "date": "2026-11-14"
+  },
+  {
+   "id": "1PJZWKOzwdnBTrVBui1zgCnyD10KmcaB_qktoRkxY32A",
+   "name": "緯來 11/14 兩大外在壓力",
+   "date": "2026-11-14"
+  },
+  {
+   "id": "1qLFp61aEfRXSXm_Yh8d2qU9ji_XM6zODoD-58PJ_y1U",
+   "name": "理財達人秀 11/14 權證小哥（同part3）",
+   "date": "2026-11-14"
+  },
+  {
+   "id": "1vwOjgEWD85LwJVh7hR1T4Nd6hHway5X9UaI2gQ6_CkI",
+   "name": "郭哲榮 11/13 字幕版（重傳）",
+   "date": "2026-11-13"
+  },
+  {
+   "id": "1c_LE8eGvrQrUReYdgvH4qVegTC6LE2nE89mexJ8HMy0",
+   "name": "理財達人秀 11/13 輝達換帥（重傳）",
+   "date": "2026-11-13"
+  },
+  {
+   "id": "1YfXPehCcGWnxbKb1kp7cDUoowEHptjvrVjyp680Jy0g",
+   "name": "通勤族 11/12（重傳）",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1xEYFNl1zYHpCGjLkYdZ7_eiX1e5w6oeWE8jx3f3EB7c",
+   "name": "一綺聊股 11/12（重傳）",
+   "date": "2026-11-12"
+  },
+  {
+   "id": "1z4jlXaudvcwneY3nkfZ5zWs-wQT4DEPnbLMeLCH2Kts",
+   "name": "投資伊森 11/13 玻璃載板",
+   "date": "2026-11-13"
+  },
+  {
+   "id": "1jRsw6BpEfYKuMqYu7X3iI5OGgzkmJkLrzv6rU8lOZWU",
+   "name": "投資伊森 11/13 玻璃基板短片（同支）",
+   "date": "2026-11-13"
+  },
+  {
+   "id": "1oPSlm4teAb3swloyg3QGTEQWSEAoglW1FfUhDORoClc",
+   "name": "緯來 11/11 SST（無個股）",
+   "date": "2026-11-11"
+  },
+  {
+   "id": "1pOHL5BOD70P1S48PDvxjV_gERXf4BX3ik-3mKiv4RGc",
+   "name": "緯來 11/11 記憶體",
+   "date": "2026-11-11"
+  }
+ ]
+}
