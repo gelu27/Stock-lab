@@ -250,6 +250,43 @@ a.cardlink:hover .card, a.cardlink:active .card {{ border-color: {青}; backgrou
 .menu-s a svg {{ width: 26px; height: 26px; color: #7FE9FF; }}
 .menu-s a span {{ font-family: 'Noto Sans TC', sans-serif; font-size: 13px; white-space: nowrap; }}
 .menu-s a.on {{ border-color: {青}; color: #FFF !important; background: #0B1A20; }}
+/* 個股價位尺 */
+.ruler {{ margin: 14px 0 2px; padding: 40px 18px 10px; border: 1px solid #1A262B; background: #05090B; border-radius: 10px; }}
+.rtrack {{ position: relative; height: 8px; border-radius: 4px; background: linear-gradient(90deg, #0D3A2C, #2A2A2A 50%, #4A1420); }}
+.rzone {{ position: absolute; top: -3px; height: 14px; border-radius: 7px; background: rgba(127,233,255,.16); border: 1px solid rgba(127,233,255,.35); }}
+.rnow {{ position: absolute; top: -9px; width: 4px; height: 26px; margin-left: -2px; background: #FFF; box-shadow: 0 0 10px #FFF; border-radius: 2px; z-index: 3; }}
+.rnow em {{ position: absolute; left: 50%; transform: translateX(-50%); top: -28px; font-style: normal; font-family: 'JetBrains Mono';
+    font-weight: 700; font-size: 14px; color: #000; background: #FFF; padding: 1px 6px; border-radius: 4px; white-space: nowrap; }}
+.rm {{ position: absolute; top: -4px; z-index: 2; }}
+.rm i {{ position: absolute; left: -5px; width: 10px; height: 10px; border-radius: 50%; background: var(--c); top: 3px; box-shadow: 0 0 0 2px #05090B; }}
+.rends {{ display: flex; justify-content: space-between; margin: 0 -6px; padding-top: 12px; font-family: 'JetBrains Mono', 'Noto Sans TC'; font-size: 11px; color: #777; }}
+.ladder {{ margin-top: 10px; border-top: 1px solid #141E22; }}
+.ladder div {{ display: flex; align-items: center; gap: 10px; padding: 7px 2px; border-bottom: 1px solid #0F171A;
+    font-family: 'Noto Sans TC', sans-serif; font-size: 14px; color: #BDBDBD; }}
+.ladder div:last-child {{ border-bottom: 0; }}
+.ladder i {{ width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }}
+.ladder b {{ font-weight: 400; min-width: 3.5em; }}
+.ladder span {{ font-family: 'JetBrains Mono'; color: #EDEDED; margin-left: auto; }}
+.ladder em {{ font-style: normal; font-family: 'JetBrains Mono'; font-size: 13px; color: #8A8A8A; min-width: 4.2em; text-align: right; }}
+.ladder div.now {{ background: rgba(255,255,255,.06); border-radius: 6px; }}
+.ladder div.now b, .ladder div.now span {{ color: #FFF; font-weight: 700; }}
+/* 滑卡 */
+.sw-tip {{ font-family: 'Noto Sans TC', sans-serif; font-size: 13px; color: #8A9AA0; margin: 4px 0 6px; }}
+.swipe {{ display: flex; gap: 12px; overflow-x: auto; scroll-snap-type: x mandatory; padding: 2px 2px 10px; scrollbar-width: none; }}
+.swipe::-webkit-scrollbar {{ display: none; }}
+.sw-card {{ flex: 0 0 82%; max-width: 340px; scroll-snap-align: center; border: 1px solid #16323A; border-radius: 16px; padding: 16px 16px 12px;
+    background: radial-gradient(120% 80% at 0% 0%, #0E2A31 0%, #061014 55%, #04080A 100%); text-decoration: none !important; color: #EDEDED !important; }}
+.sw-h {{ font-family: 'Noto Sans TC', sans-serif; font-size: 18px; }} .sw-h b {{ font-family: 'JetBrains Mono'; color: {青}; }}
+.sw-p {{ font-family: 'JetBrains Mono'; font-size: 30px; font-weight: 700; margin-top: 2px; }}
+.sw-p small {{ font-size: 16px; margin-left: 10px; }}
+.sw-s {{ position: relative; margin: 6px 0 4px; }} .sw-s svg {{ width: 100%; height: 56px; }}
+.sw-s span {{ position: absolute; right: 0; top: -2px; font-size: 11px; color: #667; font-family: 'Noto Sans TC'; }}
+.sw-v {{ font-family: 'Noto Sans TC', sans-serif; font-size: 16px; font-weight: 700; margin-top: 4px; }}
+.sw-card ul {{ list-style: none; padding: 0; margin: 6px 0 0; font-family: 'Noto Sans TC', sans-serif; font-size: 14px; line-height: 1.5; }}
+.sw-card li.g {{ color: #FF8FA3; }} .sw-card li.b {{ color: #6FE8BE; }}
+/* 區塊標題：英文 // 中文 */
+.sec .en {{ color: {青}; }} .sec b {{ font-family: 'Noto Sans TC', sans-serif; font-weight: 700; color: #EDEDED; font-size: 15px; letter-spacing: .08em; }}
+svg.spark {{ flex: 0 0 auto; align-self: center; margin-left: auto; }}
 /* 今天必須知道 */
 .must {{ border: 1px solid #1E1E1E; border-left: 3px solid {青}; background: #050505; margin: 6px 0 4px; }}
 .must div {{ display: flex; gap: 10px; padding: 12px 14px; border-bottom: 1px solid #141414;
@@ -301,11 +338,24 @@ html {{ font-size: 18px; }}
 .grid3 .card .k, .grid2 .card .k {{ font-size: 13px; letter-spacing: .05em; color: #A0A0A0; }}
 .grid3 .card .v, .grid2 .card .v {{ font-size: clamp(20px, 6.4vw, 26px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
 .grid3 .card .d, .grid2 .card .d {{ font-size: 14px; line-height: 1.4; }}
-.sec {{ font-size: 14px; letter-spacing: .08em; margin-top: 24px; }}
+.sec {{ font-size: 12px; letter-spacing: .08em; margin-top: 28px; padding-bottom: 8px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }}
+.sec .en {{ font-size: 11px; opacity: .8; }}
+.sec b {{ font-family: 'Noto Sans TC', sans-serif; font-size: 21px; font-weight: 900; color: #FFF; letter-spacing: .02em; }}
+.hero {{ background: linear-gradient(120deg, #06161B 0%, #000 70%); border-color: #12313A; }}
+.must {{ border-left-width: 0; background: transparent; border: 0; display: grid; gap: 8px; }}
+.must div {{ border: 1px solid #1A262B !important; background: linear-gradient(180deg, #0A1013, #050708); border-radius: 10px; align-items: center; }}
+.must div i {{ width: 38px; height: 38px; border-radius: 50%; background: #0F1D22; display: flex; align-items: center; justify-content: center; font-size: 19px; }}
+.must div.warn {{ border-color: #4A3A12 !important; background: linear-gradient(180deg, #17130A, #0A0805); }}
+.grid3 .card, .grid2 .card {{ border-radius: 10px; }}
+.flist a {{ border: 1px solid #1A262B; border-radius: 10px; margin-bottom: 8px; padding: 12px 14px; background: #070B0D; }}
+.menu {{ border: 0; gap: 8px; background: transparent; }}
+.menu a {{ border: 1px solid #16323A !important; border-radius: 14px; background: radial-gradient(120% 90% at 50% 0%, #0E2A31 0%, #061014 60%, #04080A 100%); aspect-ratio: 1 / .95; }}
+.menu-s a {{ border-radius: 10px; }}
 [data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] li {{ font-size: 18px; line-height: 1.7; }}
 [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {{ font-size: 15px !important; color: #A8A8A8; line-height: 1.6; }}
 .verdict {{ font-size: 18px !important; line-height: 1.75; padding: 12px 14px; }}
 .verdict.sub {{ font-size: 16px !important; }}
+.ladder div {{ font-size: 17px; padding: 9px 2px; }} .ladder em {{ font-size: 15px; }}
 .rank td, .rank td.n {{ font-size: 17px !important; padding: 10px 6px !important; }}
 .rank td.n small {{ font-size: 13px; }}
 .rank th {{ font-size: 14px; }}
@@ -350,7 +400,78 @@ def 漲跌色(值):
 
 
 def 段落(文字):
-    st.markdown(f'<div class="sec">{文字}</div>', unsafe_allow_html=True)
+    英, 分, 中 = str(文字).partition(" // ")
+    內 = f'<span class="en">{英} //</span> <b>{中}</b>' if 分 else 文字  # 手機模式：英文小字、中文大字
+    st.markdown(f'<div class="sec">{內}</div>', unsafe_allow_html=True)
+
+
+def 迷你線(值們, 顏色=None, 寬=64, 高=26):
+    """一行字旁邊的小走勢線（SVG），最後一點加圓點；顏色預設依頭尾漲跌（紅漲綠跌）。"""
+    v = [float(x) for x in 值們 if pd.notna(x)]
+    if len(v) < 2:
+        return ""
+    lo, hi = min(v), max(v)
+    hi = hi if hi > lo else lo + 1
+    xs = [2 + i * (寬 - 6) / (len(v) - 1) for i in range(len(v))]
+    ys = [高 - 3 - (x - lo) / (hi - lo) * (高 - 6) for x in v]
+    色 = 顏色 or (紅 if v[-1] >= v[0] else 綠)
+    點 = " ".join(f"{x:.1f},{y:.1f}" for x, y in zip(xs, ys))
+    return (f'<svg class="spark" width="{寬}" height="{高}" viewBox="0 0 {寬} {高}"><polyline points="{點}" fill="none" '
+            f'stroke="{色}" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>'
+            f'<circle cx="{xs[-1]:.1f}" cy="{ys[-1]:.1f}" r="2.6" fill="{色}"/></svg>')
+
+
+
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=20)
+def 近期收盤(代號們, 版本鍵, 天數=20):
+    """{代號: 近 N 個交易日收盤 list}，滑卡的迷你走勢用。"""
+    日們 = sorted(指標["date"].unique())[-天數:]
+    t = 指標[指標["date"].isin(日們) & 指標["代號"].isin(代號們)]
+    return {c: g.sort_values("date")["收盤"].tolist() for c, g in t.groupby("代號")}
+
+
+def 滑卡(代號們, 標題="左右滑看下一檔"):
+    """手機像看限時動態一樣左右滑：一張卡一檔股票（漲跌、迷你走勢、規則判讀、利多利空第一條），點卡片到個股頁。"""
+    表 = 今日.set_index("代號")
+    代號們 = [c for c in dict.fromkeys(代號們) if c in 表.index][:30]
+    if not 代號們:
+        return
+    線 = 近期收盤(tuple(代號們), _版本)
+    卡們 = []
+    for c in 代號們:
+        r = 表.loc[c]
+        try:
+            判 = engine.規則判讀(r.rename({"代號": c}) if "代號" not in r else r)
+        except Exception:
+            判 = None
+        幅 = r.get("漲跌幅")
+        色 = 漲跌色(幅)
+        看 = "" if not 判 else f'<div class="sw-v" style="color:{紅 if 判["分數"] >= 30 else (綠 if 判["分數"] <= -30 else "#BDBDBD")}">{判["看法"]}（{判["分數"]:+d}）</div>'
+        點 = ""
+        if 判:
+            if 判["利多"]:
+                點 += f'<li class="g">▲ {html.escape(str(判["利多"][0]))}</li>'
+            if 判["利空"]:
+                點 += f'<li class="b">▼ {html.escape(str(判["利空"][0]))}</li>'
+        卡們.append(
+            f'<a class="sw-card" href="?s={c}" target="_self"><div class="sw-h"><b>{c}</b> {html.escape(str(r["名稱"]))}</div>'
+            f'<div class="sw-p" style="color:{色}">{r["收盤"]:,.2f}<small>{"" if pd.isna(幅) else f"{幅:+.2f}%"}</small></div>'
+            f'<div class="sw-s">{迷你線(線.get(c, []), 寬=260, 高=56)}<span>近 20 日</span></div>{看}<ul>{點}</ul></a>')
+    st.markdown(f'<div class="sw-tip">👉 {標題}（共 {len(卡們)} 檔）</div><div class="swipe">{"".join(卡們)}</div>',
+                unsafe_allow_html=True)
+
+def 迷你柱(值們, 寬=64, 高=26):
+    """正負小柱狀（紅正綠負），例如外資每日買賣超。"""
+    v = [0.0 if pd.isna(x) else float(x) for x in 值們]
+    if not v:
+        return ""
+    m = max(abs(x) for x in v) or 1
+    w = (寬 - 2) / len(v)
+    中 = 高 / 2
+    柱 = "".join(f'<rect x="{1 + i * w + 1:.1f}" y="{(中 - x / m * (中 - 2)) if x > 0 else 中:.1f}" width="{max(w - 2, 1):.1f}" '
+                f'height="{max(abs(x) / m * (中 - 2), 1):.1f}" rx="1" fill="{紅 if x > 0 else 綠}"/>' for i, x in enumerate(v))
+    return (f'<svg class="spark" width="{寬}" height="{高}" viewBox="0 0 {寬} {高}">'
+            f'<line x1="0" y1="{中}" x2="{寬}" y2="{中}" stroke="#333" stroke-width="1"/>{柱}</svg>')
 
 
 def 圖表外觀(圖, 高=380):
