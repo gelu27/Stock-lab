@@ -10103,3 +10103,34 @@ def 價位量級提示(影片們, 現價, 天數=14, 今天=None):
                     列們.append({"影片日": 日, "頻道": v.get("頻道", ""), "股票": f"{x.get('代號')} {x.get('名稱', '')}".strip(),
                                "影片說": f"{m} 元", "現價": 價, "倍數": round(價 / n, 1)})
     return pd.DataFrame(列們).drop_duplicates() if 列們 else pd.DataFrame()
+
+
+def 代號名稱核對(影片們, 名稱表, 天數=14, 今天=None):
+    """說法裡的「代號」和「名稱」對不上時提示（Gemini 常把同音股名配到別檔的代號，例如光罩 2338 寫成旺玖 6233）。
+    名稱表＝{代號: 名稱}。名稱互相包含、或念起來像（同音分數 ≥ 0.5）算對得上。
+    「可能是」：先找名稱完全一樣的另一個代號，再找念起來最像的。回傳 DataFrame。"""
+    今天 = pd.Timestamp(今天 or pd.Timestamp.now().normalize())
+    反查 = {}
+    for c, n in 名稱表.items():
+        反查.setdefault(re.sub(r"[*＊\s]|-?KY", "", str(n)), c)
+    列們 = []
+    for v in 影片們:
+        日 = pd.to_datetime(v.get("日期"), errors="coerce")
+        if pd.isna(日) or (今天 - 日).days > 天數:
+            continue
+        for x in v.get("股票", []):
+            代 = str(x.get("代號") or "")
+            說 = re.sub(r"[（(].*", "", str(x.get("名稱") or "")).strip()
+            實 = 名稱表.get(代)
+            if not 說 or not 實 or not 代.isdigit():
+                continue
+            a, b = re.sub(r"[*＊\s]|-?KY", "", 說), re.sub(r"[*＊\s]|-?KY", "", str(實))
+            if not a or not b or a in b or b in a or 同音分數(a, b) >= 0.5:
+                continue
+            可能 = 反查.get(a, "")
+            if not 可能:
+                最佳 = max(((同音分數(a, re.sub(r"[*＊\s]|-?KY", "", str(n))), c) for c, n in 名稱表.items()), default=(0, ""))
+                可能 = 最佳[1] if 最佳[0] >= 0.7 else ""
+            列們.append({"影片日": 日, "頻道": v.get("頻道", ""), "說法裡的": f"{代} {說}", "代號實際是": f"{代} {實}",
+                       "名稱可能是": f"{可能} {名稱表.get(可能, '')}".strip() if 可能 else ""})
+    return pd.DataFrame(列們).drop_duplicates() if 列們 else pd.DataFrame()
