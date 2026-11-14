@@ -1092,6 +1092,69 @@ def 白話結論區(代號, r):
         st.caption("燈號依規則自動判斷（🔥 過熱、🟢 偏多、🟡 中性、🔴 偏弱、🧊 跌深），不是買賣建議；顏色是「行動建議」，跟紅漲綠跌無關。")
 
 
+def 價位尺區(代號, 收盤):
+    """個股頁最上面一條尺：一年高低為兩端，標出現價、最近支撐／壓力、月線／季線、你的成本、券商目標價中位數。"""
+    K = 個股K線(代號)
+    if K is None or len(K) < 30:
+        return
+    年 = K.tail(250)
+    低, 高 = float(年["low"].min()), float(年["high"].max())
+    點們 = []  # (價位, 標籤, 顏色, 上方?)
+    try:
+        sr = engine.支撐壓力(K)
+        解 = engine.位置解讀(sr, engine.共振區(sr["價位"]))
+        if 解.get("最近支撐") is not None:
+            點們.append((float(解["最近支撐"]["價位"]), "支撐", 綠))
+        if 解.get("最近壓力") is not None:
+            點們.append((float(解["最近壓力"]["價位"]), "壓力", 紅))
+    except Exception:
+        解 = {}
+    c = K["close"]
+    for n, 名 in ((20, "月線"), (60, "季線")):
+        if len(c) >= n:
+            點們.append((float(c.tail(n).mean()), 名, "#8F7CFF"))
+    持, _ = 目前持股() if 可編輯() else (None, "")
+    if 持 is not None and 代號 in set(持["代號"].astype(str)):
+        x = 持[持["代號"].astype(str) == 代號].iloc[0]
+        if float(x["股數"]) > 0:
+            點們.append((float(x["總成本"]) / float(x["股數"]), "成本", "#FFB020"))
+    try:
+        報告們 = [x for x in 券商報告清單(st.session_state.get("_券商版本", 0)) if str(x.get("代號")) == str(代號)]
+        共 = engine.券商共識(報告們, 收盤) if 報告們 else None
+        if 共 and 共.get("目標價數"):
+            點們.append((float(共["中位數"]), "目標價", 青))
+    except Exception:
+        pass
+    點們 = [x for x in 點們 if x[0] > 0]
+    低 = min([低, 收盤] + [x[0] for x in 點們]) * .995
+    高 = max([高, 收盤] + [x[0] for x in 點們]) * 1.005
+    位 = lambda v: (v - 低) / (高 - 低) * 100
+    點們.sort(key=lambda x: x[0])
+    標 = "".join(f'<div class="rm" style="left:{位(v):.1f}%;--c:{色}"><i></i></div>' for v, 名, 色 in 點們)
+    支, 壓 = 解.get("最近支撐"), 解.get("最近壓力")
+    區段 = ""
+    if 支 is not None and 壓 is not None:
+        a, b = 位(float(支["價位"])), 位(float(壓["價位"]))
+        區段 = f'<div class="rzone" style="left:{a:.1f}%;width:{max(b - a, 0):.1f}%"></div>'
+    現 = 位(收盤)
+    # 價位梯：由高到低一行一個，現價插在中間，右邊是離現價幾 %
+    梯們 = sorted(點們 + [(收盤, "現價", "#FFFFFF")], key=lambda x: -x[0])
+    梯 = "".join(
+        f'<div class="{"now" if 名 == "現價" else ""}"><i style="background:{色}"></i><b>{名}</b><span>{v:,.2f}</span>'
+        f'<em>{"" if 名 == "現價" else f"{(v / 收盤 - 1) * 100:+.1f}%"}</em></div>' for v, 名, 色 in 梯們)
+    st.markdown(
+        f'<div class="ruler"><div class="rtrack">{區段}{標}<div class="rnow" style="left:{現:.1f}%"><em>{收盤:,.2f}</em></div></div>'
+        f'<div class="rends"><span>一年低 {float(年["low"].min()):,.1f}</span><span>一年高 {float(年["high"].max()):,.1f}</span></div>'
+        f'<div class="ladder">{梯}</div></div>',
+        unsafe_allow_html=True)
+    句 = [f"現價在一年區間的 {(收盤 - float(年['low'].min())) / max(float(年['high'].max()) - float(年['low'].min()), 1e-9) * 100:.0f}% 位置"]
+    if 支 is not None:
+        句.append(f"離支撐 {(float(支['價位']) / 收盤 - 1) * 100:+.1f}%")
+    if 壓 is not None:
+        句.append(f"離壓力 {(float(壓['價位']) / 收盤 - 1) * 100:+.1f}%")
+    st.caption("📏 價位尺：" + "，".join(句) + "。淺色區段是最近支撐到壓力之間；詳細價位在「📈 技術」分頁。")
+
+
 def AI數據包(代號, r):
     """AI 只能用的 JSON 數字包（網站即時資料＋回測），辯論庭、數字查核共用。"""
     百分位, 支撐, 壓力, 列 = 個股位階(代號)
@@ -1223,6 +1286,10 @@ _卡 = {
     "成交量": 卡片("成交量", 數(r["成交張數"], "{:,.0f}", " 張"), f"週轉率 {數(r['volume'] / 股數 * 100 if pd.notna(股數) else np.nan, '{:.2f}', '%')}"),
 }
 卡片格([_卡[k] for k in (("收盤", "成交量", "市值", "產業") if 手機 else _卡)])  # 手機只留 4 張重點卡
+try:
+    價位尺區(代號, float(r["收盤"]))
+except Exception:
+    pass
 # 只計算打開的那個分頁（以前 6 個分頁每次全部算，換一檔股票要 5～9 秒）；換股票時停在同一個分頁
 均線 = {n: r[f"MA{n}"] * 比 for n in (5, 10, 20, 60)}  # 技術分頁與 AI 分頁都會用
 營收 = r.get("營收年增率")

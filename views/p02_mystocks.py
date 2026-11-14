@@ -372,6 +372,33 @@ def 庫存歷史區(持股):
 
 
 @st.fragment(run_every=刷新秒(30))
+def 損益瀑布圖(明細, 最多=10):
+    """今天的損益由哪幾檔貢獻：由賺最多排到賠最多，最後一根是合計。超過 最多 檔的小額部位併成「其他」。"""
+    t = 明細.dropna(subset=["今日損益"])
+    t = t[t["今日損益"] != 0].sort_values("今日損益", ascending=False)
+    if t.empty:
+        return None
+    名 = (t["代號"].astype(str) + " " + t["名稱"].astype(str).str.replace(r"^\d+\s*", "", regex=True)).tolist()
+    值 = t["今日損益"].astype(float).tolist()
+    if len(值) > 最多:
+        留 = sorted(range(len(值)), key=lambda i: -abs(值[i]))[:最多 - 1]
+        留 = sorted(留, key=lambda i: -值[i])
+        其他 = sum(v for i, v in enumerate(值) if i not in 留)
+        名 = [名[i] for i in 留] + [f"其他 {len(值) - len(留)} 檔"]
+        值 = [值[i] for i in 留] + [其他]
+    圖 = go.Figure(go.Waterfall(
+        orientation="h", y=名 + ["今日合計"], x=值 + [0], measure=["relative"] * len(值) + ["total"],
+        increasing=dict(marker=dict(color=紅)), decreasing=dict(marker=dict(color=綠)),
+        totals=dict(marker=dict(color=青 if sum(值) >= 0 else "#00A870")),
+        connector=dict(line=dict(color="#333", width=1)),
+        text=[f"{v:+,.0f}" for v in 值] + [f"{sum(值):+,.0f}"], textposition="outside", cliponaxis=False,
+        textfont=dict(color="#DADADA", size=13 if 手機 else 12), hovertemplate="%{y}：%{x:+,.0f} 元<extra></extra>"))
+    圖表外觀(圖, 70 + 34 * (len(值) + 1)).update_layout(
+        hovermode="closest", showlegend=False, yaxis=dict(autorange="reversed", gridcolor="rgba(0,0,0,0)"),
+        xaxis=dict(visible=False), margin=dict(l=4, r=60, t=8, b=8))
+    return 圖
+
+
 def 庫存區(持股):
     """盤中每 30 秒自動抓一次即時報價；收盤後用資料庫的收盤價。"""
     輪詢檢查()  # 開盤／收盤時切換自動更新頻率
@@ -392,6 +419,11 @@ def 庫存區(持股):
         卡片("累積損益", f"{合計['累積損益']:+,.0f}", f"{合計['累積損益(%)']:+.2f}%", 漲跌色(合計["累積損益"])),
         卡片("股票市值", f"{合計['股票市值']:,.0f}", f"成本 {合計['總成本']:,.0f}"),
     ])
+    瀑 = 損益瀑布圖(明細)
+    if 瀑 is not None:
+        with st.expander("🌊 今天賺賠是哪幾檔貢獻的？（損益瀑布圖）", expanded=bool(手機)):
+            st.plotly_chart(瀑, width="stretch", config={"displayModeBar": False})
+            st.caption("由賺最多排到賠最多，紅色是賺、綠色是賠，最後一根是今天的合計。")
     a, b = st.columns([4, 1])
     依據 = a.segmented_control("排序", ["今日損益", "漲跌幅", "總損益", "報酬率(%)", "股價", "總成本"],
                               default="今日損益", key="庫存排序")

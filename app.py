@@ -250,6 +250,26 @@ a.cardlink:hover .card, a.cardlink:active .card {{ border-color: {青}; backgrou
 .menu-s a svg {{ width: 26px; height: 26px; color: #7FE9FF; }}
 .menu-s a span {{ font-family: 'Noto Sans TC', sans-serif; font-size: 13px; white-space: nowrap; }}
 .menu-s a.on {{ border-color: {青}; color: #FFF !important; background: #0B1A20; }}
+/* 個股價位尺 */
+.ruler {{ margin: 14px 0 2px; padding: 40px 18px 10px; border: 1px solid #1A262B; background: #05090B; border-radius: 10px; }}
+.rtrack {{ position: relative; height: 8px; border-radius: 4px; background: linear-gradient(90deg, #0D3A2C, #2A2A2A 50%, #4A1420); }}
+.rzone {{ position: absolute; top: -3px; height: 14px; border-radius: 7px; background: rgba(127,233,255,.16); border: 1px solid rgba(127,233,255,.35); }}
+.rnow {{ position: absolute; top: -9px; width: 4px; height: 26px; margin-left: -2px; background: #FFF; box-shadow: 0 0 10px #FFF; border-radius: 2px; z-index: 3; }}
+.rnow em {{ position: absolute; left: 50%; transform: translateX(-50%); top: -28px; font-style: normal; font-family: 'JetBrains Mono';
+    font-weight: 700; font-size: 14px; color: #000; background: #FFF; padding: 1px 6px; border-radius: 4px; white-space: nowrap; }}
+.rm {{ position: absolute; top: -4px; z-index: 2; }}
+.rm i {{ position: absolute; left: -5px; width: 10px; height: 10px; border-radius: 50%; background: var(--c); top: 3px; box-shadow: 0 0 0 2px #05090B; }}
+.rends {{ display: flex; justify-content: space-between; margin: 0 -6px; padding-top: 12px; font-family: 'JetBrains Mono', 'Noto Sans TC'; font-size: 11px; color: #777; }}
+.ladder {{ margin-top: 10px; border-top: 1px solid #141E22; }}
+.ladder div {{ display: flex; align-items: center; gap: 10px; padding: 7px 2px; border-bottom: 1px solid #0F171A;
+    font-family: 'Noto Sans TC', sans-serif; font-size: 14px; color: #BDBDBD; }}
+.ladder div:last-child {{ border-bottom: 0; }}
+.ladder i {{ width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }}
+.ladder b {{ font-weight: 400; min-width: 3.5em; }}
+.ladder span {{ font-family: 'JetBrains Mono'; color: #EDEDED; margin-left: auto; }}
+.ladder em {{ font-style: normal; font-family: 'JetBrains Mono'; font-size: 13px; color: #8A8A8A; min-width: 4.2em; text-align: right; }}
+.ladder div.now {{ background: rgba(255,255,255,.06); border-radius: 6px; }}
+.ladder div.now b, .ladder div.now span {{ color: #FFF; font-weight: 700; }}
 /* 區塊標題：英文 // 中文 */
 .sec .en {{ color: {青}; }} .sec b {{ font-family: 'Noto Sans TC', sans-serif; font-weight: 700; color: #EDEDED; font-size: 15px; letter-spacing: .08em; }}
 svg.spark {{ flex: 0 0 auto; align-self: center; margin-left: auto; }}
@@ -321,6 +341,7 @@ html {{ font-size: 18px; }}
 [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {{ font-size: 15px !important; color: #A8A8A8; line-height: 1.6; }}
 .verdict {{ font-size: 18px !important; line-height: 1.75; padding: 12px 14px; }}
 .verdict.sub {{ font-size: 16px !important; }}
+.ladder div {{ font-size: 17px; padding: 9px 2px; }} .ladder em {{ font-size: 15px; }}
 .rank td, .rank td.n {{ font-size: 17px !important; padding: 10px 6px !important; }}
 .rank td.n small {{ font-size: 13px; }}
 .rank th {{ font-size: 14px; }}
