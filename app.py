@@ -50,7 +50,7 @@ importlib.reload(macro)  # 01 首頁總經／資金用；沒重新載入時，�
 importlib.reload(feedback)  # 回饋循環：錯誤本、券商與網紅記分板、規則體檢
 
 _圖示 = Path(__file__).parent / "static" / "icon-192.png"
-st.set_page_config(page_title="TW//STOCK LAB", page_icon=str(_圖示) if _圖示.exists() else "◢", layout="wide")
+st.set_page_config(page_title="台股觀測站", page_icon=str(_圖示) if _圖示.exists() else "◢", layout="wide")
 if not st.session_state.get("_主畫面圖示"):
     st.session_state["_主畫面圖示"] = True
     # 手機「加入主畫面」用的圖示與名稱（Streamlit 沒辦法直接改 <head>，用小段程式加到上層頁面）
@@ -59,19 +59,45 @@ if not st.session_state.get("_主畫面圖示"):
       const app = window.parent, top = (() => { try { return window.top.document ? window.top : app; } catch (e) { return app; } })();
       const d = top.document, h = d.head;
       const b = new URL("app/static/", app.location.href.split("?")[0].replace(/[^/]*$/, "")).href;
-      const link = (rel, href) => { const e = d.createElement("link"); e.rel = rel; e.href = href; h.appendChild(e); };
+      // 先拿掉平台原本的圖示與 manifest，避免手機抓到舊圖示
+      d.querySelectorAll('link[rel~="icon"], link[rel="apple-touch-icon"], link[rel="manifest"], link[rel="shortcut icon"]').forEach((e) => e.remove());
+      const link = (rel, href, sizes) => { const e = d.createElement("link"); e.rel = rel; e.href = href + "?v=2"; if (sizes) e.sizes = sizes; h.appendChild(e); };
       const meta = (name, content) => { const e = d.createElement("meta"); e.name = name; e.content = content; h.appendChild(e); };
-      link("apple-touch-icon", b + "icon-180.png");
+      link("apple-touch-icon", b + "icon-180.png", "180x180");
+      link("icon", b + "icon-192.png", "192x192");
+      link("icon", b + "icon-32.png", "32x32");
+      d.title = "台股觀測站";
       meta("apple-mobile-web-app-title", "台股觀測");
       meta("apple-mobile-web-app-capable", "yes");
       meta("theme-color", "#000000");
       const m = {name: "台股觀測站", short_name: "台股觀測", start_url: top.location.href, display: "standalone",
                  background_color: "#000000", theme_color: "#000000",
-                 icons: [{src: b + "icon-192.png", sizes: "192x192", type: "image/png"},
-                         {src: b + "icon-512.png", sizes: "512x512", type: "image/png"}]};
-      link("manifest", URL.createObjectURL(new Blob([JSON.stringify(m)], {type: "application/manifest+json"})));
+                 icons: [{src: b + "icon-192.png", sizes: "192x192", type: "image/png", purpose: "any maskable"},
+                         {src: b + "icon-512.png", sizes: "512x512", type: "image/png", purpose: "any maskable"}]};
+      const e2 = d.createElement("link"); e2.rel = "manifest"; e2.href = URL.createObjectURL(new Blob([JSON.stringify(m)], {type: "application/manifest+json"})); h.appendChild(e2);
     } catch (e) {}
     </script>""", height=1)
+
+# ---------- 手機模式的圖表：關掉拖曳／縮放，手指滑過圖表是捲動頁面，圖不會跑掉 ----------
+if not getattr(st.plotly_chart, "_手機包裝", False):
+    _原圖表 = st.plotly_chart
+
+    def _圖表(圖=None, *a, **k):
+        if st.session_state.get("手機模式") and 圖 is not None and hasattr(圖, "update_layout"):
+            try:
+                圖.update_layout(dragmode=False)
+                圖.update_xaxes(fixedrange=True)
+                圖.update_yaxes(fixedrange=True)
+                圖.update_traces(arrangement="fixed", selector=dict(type="sankey"))  # 桑基圖節點不能被拖走
+            except Exception:
+                pass
+            設定 = dict(k.get("config") or {})
+            設定.update(scrollZoom=False, displayModeBar=False, doubleClick=False)
+            k["config"] = 設定
+        return _原圖表(圖, *a, **k)
+
+    _圖表._手機包裝 = True
+    st.plotly_chart = _圖表
 
 # ---------- 外觀：黑底前衛風格 ----------
 青 = "#00E5FF"
@@ -184,10 +210,12 @@ a.cardlink:hover .card, a.cardlink:active .card {{ border-color: {青}; backgrou
 .jump a:hover {{ border-color: {青}; color: {青}; }}
 .anchor {{ position: relative; top: -70px; height: 0; }}
 [data-testid="stElementContainer"]:has(.anchor) {{ margin-bottom: -1rem; }}
-.totop {{ position: fixed; right: 16px; bottom: 18px; z-index: 999; width: 40px; height: 40px; line-height: 38px;
-    text-align: center; border: 1px solid {青}; background: rgba(0,0,0,.85); color: {青} !important;
-    text-decoration: none !important; font-family: 'JetBrains Mono'; font-size: 18px; }}
-.totop:hover {{ background: {青}; color: #000 !important; }}
+.fab {{ position: fixed; right: 14px; bottom: 18px; z-index: 999; display: flex; flex-direction: column; gap: 10px; }}
+.fab a {{ width: 46px; height: 46px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    background: rgba(4,16,20,.82); border: 1px solid rgba(0,229,255,.55); color: {青} !important; text-decoration: none !important;
+    box-shadow: 0 0 14px rgba(0,229,255,.28), inset 0 0 10px rgba(0,229,255,.12); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }}
+.fab a svg {{ width: 22px; height: 22px; }}
+.fab a:hover, .fab a:active {{ background: {青}; color: #000 !important; }}
 /* 關鍵價位：燈號卡、價位條 */
 .lamps {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 6px 0; }}
 .lamp {{ border: 1px solid #1E1E1E; background: #070707; padding: 10px 12px; }}
@@ -242,7 +270,7 @@ a.cardlink:hover .card, a.cardlink:active .card {{ border-color: {青}; backgrou
 .menu a svg {{ width: 46%; max-width: 64px; color: #7FE9FF; filter: drop-shadow(0 0 6px rgba(0,229,255,.45)); }}
 .menu a span {{ font-family: 'Noto Sans TC', sans-serif; font-size: 19px; font-weight: 700; letter-spacing: .04em; }}
 .menu a:active, .menu a:hover {{ background: #0C1C22; }}
-.menu a.on {{ background: #0B1A20; box-shadow: inset 0 -3px 0 {青}; }}
+.menu a.on {{ background: #0B1A20; box-shadow: inset 0 -3px 0 {青}, 0 0 16px rgba(0,229,255,.3); }}
 .menu-s {{ display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; margin: 2px 0 8px; }}
 .menu-s::-webkit-scrollbar {{ display: none; }}
 .menu-s a {{ flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 4px; width: 68px; padding: 8px 2px 6px;
@@ -322,6 +350,44 @@ svg.spark {{ flex: 0 0 auto; align-self: center; margin-left: auto; }}
     .st-key-toolbar [data-testid="stColumn"] {{ width: auto !important; flex: 0 0 auto !important; min-width: 0 !important; }}
     .st-key-toolbar [data-testid="stColumn"]:first-child {{ flex: 1 0 100% !important; }}
 }}
+/* ===== 科技感：HUD 格線背景、掃描光、發光標題、卡片角框 ===== */
+.stApp {{ background:
+    radial-gradient(1200px 520px at 50% -180px, rgba(0,229,255,.13), transparent 70%),
+    linear-gradient(rgba(0,229,255,.045) 1px, transparent 1px) 0 0 / 100% 44px,
+    linear-gradient(90deg, rgba(0,229,255,.035) 1px, transparent 1px) 0 0 / 44px 100%,
+    #010407 !important; }}
+.stApp::after {{ content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+    background: repeating-linear-gradient(180deg, rgba(255,255,255,.018) 0 1px, transparent 1px 3px); }}
+.hero {{ border: 1px solid rgba(0,229,255,.28); background: linear-gradient(120deg, rgba(0,40,52,.55), rgba(0,0,0,.2) 60%);
+    box-shadow: 0 0 24px rgba(0,229,255,.08), inset 0 0 40px rgba(0,229,255,.05); }}
+.hero::before {{ content: ""; position: absolute; top: 0; left: -40%; width: 40%; height: 100%; pointer-events: none;
+    background: linear-gradient(90deg, transparent, rgba(0,229,255,.16), transparent); animation: sweep 6s ease-in-out infinite; }}
+@keyframes sweep {{ 0% {{ left: -40%; }} 55%, 100% {{ left: 110%; }} }}
+.hero .title {{ text-shadow: 0 0 18px rgba(0,229,255,.25); }}
+.hero .title span {{ text-shadow: 0 0 14px rgba(0,229,255,.8), 0 0 32px rgba(0,229,255,.35); }}
+.hero .kicker::before {{ content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #00FF9C;
+    box-shadow: 0 0 8px #00FF9C; margin-right: 8px; vertical-align: 1px; animation: blink 2.4s ease-in-out infinite; }}
+@keyframes blink {{ 0%, 100% {{ opacity: 1; }} 50% {{ opacity: .25; }} }}
+.sec {{ border-bottom: 0 !important; position: relative; }}
+.sec::after {{ content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1px;
+    background: linear-gradient(90deg, {青}, rgba(0,229,255,.25) 35%, transparent 85%); box-shadow: 0 0 8px rgba(0,229,255,.5); }}
+.sec::before {{ animation: blink 3s ease-in-out infinite; }}
+.card {{ border-color: rgba(0,229,255,.16) !important; background: linear-gradient(180deg, rgba(6,22,28,.92), rgba(2,8,11,.92)) !important; }}
+.card::after {{ content: ""; position: absolute; inset: -1px; pointer-events: none; opacity: .85;
+    background: linear-gradient({青}, {青}) top left / 12px 1px no-repeat, linear-gradient({青}, {青}) top left / 1px 12px no-repeat,
+                linear-gradient({青}, {青}) bottom right / 12px 1px no-repeat, linear-gradient({青}, {青}) bottom right / 1px 12px no-repeat; }}
+.card .v {{ text-shadow: 0 0 12px currentColor; }}
+a.cardlink:hover .card, a.cardlink:active .card {{ box-shadow: 0 0 18px rgba(0,229,255,.25); }}
+[data-testid="stExpander"] details {{ border-color: rgba(0,229,255,.16) !important; background: rgba(3,12,15,.85) !important; }}
+[data-testid="stVerticalBlockBorderWrapper"] {{ border-color: rgba(0,229,255,.16) !important; }}
+.verdict {{ border-color: rgba(0,229,255,.18); border-left-color: {青}; background: linear-gradient(90deg, rgba(0,229,255,.07), rgba(0,0,0,.3) 60%);
+    box-shadow: inset 3px 0 12px -6px {青}; }}
+[data-testid="stButtonGroup"] button[aria-checked="true"], [data-testid="stButtonGroup"] button[kind$="Active"] {{
+    box-shadow: 0 0 10px rgba(0,229,255,.35), inset 0 0 8px rgba(0,229,255,.15); }}
+.stButton > button {{ box-shadow: 0 0 10px rgba(0,229,255,.18); }}
+.ticker {{ border-color: rgba(0,229,255,.18); background: linear-gradient(90deg, transparent, rgba(0,229,255,.05), transparent); }}
+.must div {{ border-color: rgba(0,229,255,.16) !important; }}
+.must div i {{ box-shadow: 0 0 10px rgba(0,229,255,.25), inset 0 0 8px rgba(0,229,255,.18); }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -363,6 +429,7 @@ html {{ font-size: 18px; }}
 .jump a {{ font-size: 15px; padding: 6px 12px; }}
 .ticker span {{ font-size: 15px; }}
 .st-key-nav {{ display: none; }}
+.js-plotly-plot, .js-plotly-plot .nsewdrag, .js-plotly-plot .draglayer, .js-plotly-plot svg {{ touch-action: pan-y !important; }}
 .stButton > button {{ min-height: 46px; }}
 .stTabs [data-baseweb="tab"] {{ padding: 12px 14px; }}
 .tip {{ font-size: 13px; }}
@@ -535,7 +602,7 @@ if _目前版本()["版本"] not in (None, _版本):
 _目前版本()["版本"] = _版本
 指標, 加權 = 載入(_版本)
 
-st.markdown("""<div id="top"></div><a class="totop" href="#top" target="_self" title="回到頂端">↑</a><div class="hero"><div class="kicker">TAIWAN STOCK EXCHANGE // PERSONAL LAB</div>
+st.markdown("""<div id="top"></div><div class="fab"><a class="fab-home" href="?p=01" target="_self" title="回首頁"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h5v-6h4v6h5V10"/></svg></a><a class="totop" href="#top" target="_self" title="回到頂端"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg></a></div><div class="hero"><div class="kicker">TAIWAN STOCK EXCHANGE // PERSONAL LAB</div>
 <div class="title">台股<span>觀測</span>實驗室</div>
 <div class="sub">SCREEN · BACKTEST · OBSERVE — 資料來源：臺灣證券交易所、證券櫃檯買賣中心</div></div>""",
             unsafe_allow_html=True)
@@ -590,9 +657,9 @@ with st.container(key="toolbar"):
             c.toggle("📱 精簡表格", key="精簡表格", help="表格只留名稱、股價、漲跌等重點欄位，手機不用左右滑")
             e.toggle("⬇️ 下載表格", key="顯示下載", help="打開後，每個表格下面會多一個「下載 Excel」按鈕")
     else:
-        a, m, n, c, e, d, b = st.columns([3, 1, 1, 1, 1, 1, 1], vertical_alignment="center")
-        a.caption(f"📅 資料日期 {最新日:%Y/%m/%d}　·　資料庫最後更新 {最後更新()}"
+        st.caption(f"📅 資料日期 {最新日:%Y/%m/%d}　·　資料庫最後更新 {最後更新()}"
                   '<span class="hide-m">（每個交易日約 18:00 自動更新）</span>', unsafe_allow_html=True)
+        m, n, c, e, d, b = st.columns([1.15, 1.15, 1.15, 1.15, .7, .7], vertical_alignment="center")
         m.toggle("📱 手機模式", key="手機模式", on_change=_切換手機, help=手機說明)
         n.toggle("🔰 新手模式", key="新手模式", help="打開後：首頁顯示三步驟看盤教學、個股頁先給白話一句話結論並收起進階指標；專有名詞旁的 ❓ 可看白話說明")
         c.toggle("📱 精簡表格", key="精簡表格", help="表格只留名稱、股價、漲跌等重點欄位，手機不用左右滑")
@@ -1000,6 +1067,7 @@ export default function(component) {
     if (!s && !p) return;
     e.preventDefault(); e.stopPropagation();
     送('go', s ? 's=' + s : 'p=' + p);
+    if (p) { const m = document.querySelector('[data-testid="stMain"]'); (m || window).scrollTo({top: 0, behavior: 'smooth'}); }  // 換頁回到最上面
   }, true);
   // 2. 快捷鍵：/ 搜尋、↑ ↓ 切換股票、[ ] 切換分頁、1 2 3 日週月 K（打字中不作用）
   document.addEventListener('keydown', (e) => {
