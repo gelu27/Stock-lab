@@ -55,6 +55,23 @@ def main():
     print(f"新手模式個股頁：{'❌ ' + 訊息[0][:200] if 訊息 else ('✅ 正常' if 有白話 else '❌ 沒看到白話結論')}")
     if 訊息 or not 有白話:
         錯誤.append(("新手模式個股頁", 訊息 or ["沒看到白話結論"]))
+    # 手機模式：首頁改成「今天必須知道」等 3 個重點區塊，個股頁白話結論直接攤開
+    at.session_state["新手模式"] = False
+    at.session_state["手機模式"] = True
+    at.query_params.pop("layout", None)
+    at.session_state["首頁版面"] = "手機"
+    頁面切換器(at).set_value("01 / 市場總覽").run()
+    訊息 = [e.value for e in at.exception] + [c.value for c in at.caption if "暫時無法顯示" in c.value]
+    有必知 = any("今天必須知道" in m.value for m in at.markdown)
+    print(f"手機模式首頁：{'❌ ' + 訊息[0][:200] if 訊息 else ('✅ 正常' if 有必知 else '❌ 沒看到今天必須知道')}")
+    if 訊息 or not 有必知:
+        錯誤.append(("手機模式首頁", 訊息 or ["沒看到今天必須知道"]))
+    for 頁 in ("02 / 我的股票", "03 / 個股查詢"):
+        頁面切換器(at).set_value(頁).run()
+        訊息 = [e.value for e in at.exception]
+        print(f"手機模式 {頁}：{'❌ ' + 訊息[0][:200] if 訊息 else '✅ 正常'}")
+        if 訊息:
+            錯誤.append((f"手機模式 {頁}", 訊息))
     if 錯誤:
         print(f"\n共 {len(錯誤)} 個頁面有錯誤")
         sys.exit(1)

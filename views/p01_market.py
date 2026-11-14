@@ -426,7 +426,7 @@ def 市場卡片():
               "融資": ("融資餘額（張）", "{:,.0f}"), "維持率": ("上市融資維持率（%）", "{:.1f}"),
               "外資期貨": ("外資台指期淨未平倉（口）", "{:+,.0f}"), "匯率": ("美元/台幣", "{:.3f}")}
         欄位 = {k: v for k, v in 欄位.items() if k in 每日.columns and 每日[k].tail(5).notna().any()}
-        with st.expander("📊 前後期比較（昨日、5 日前、20 日前、60 日前）", expanded=True):
+        with st.expander("📊 前後期比較（昨日、5 日前、20 日前、60 日前）", expanded=not 手機):
             即時欄 = None
             if 即時加權 is not None and "加權" in 欄位:
                 即時欄 = (f"⚡盤中 {即時加權['time'][:5]}", {"加權": float(即時加權["close"])})
@@ -1399,6 +1399,25 @@ def 焦點區():
     if 集:
         st.markdown("📣 **券商集體調整目標價（近 3 天 3 家以上）**：" + "、".join(
             f"{代} {名} {'⬆' if 方 == '上修' else '⬇'}{家} 家" for 代, 名, 方, 家, _ in 集[:10]))
+    if 手機:  # 手機：大字清單，每檔一行＋理由，點了到個股
+        for 名, 表 in (("🛡️ 需要防守", 風險), ("🔍 值得研究", 機會)):
+            st.markdown(f"**{名}**（{len(表)} 檔）")
+            if 表.empty:
+                st.caption("今天沒有符合的股票。")
+                continue
+            列 = []
+            for _, x in 表.head(8).iterrows():
+                幅 = x.get("漲跌幅")
+                幅字 = "" if pd.isna(幅) else f' <span style="color:{漲跌色(幅)}">{幅:+.1f}%</span>'
+                列.append(f'<a href="?s={x["代號"]}" target="_self">{html.escape(str(x["股票"]))}{幅字}'
+                          f'<small>{html.escape(str(x["理由"]))}</small></a>')
+            st.markdown('<div class="flist">' + "".join(列) + "</div>", unsafe_allow_html=True)
+            if len(表) > 8:
+                with st.expander(f"其餘 {len(表) - 8} 檔"):
+                    點選表(表.iloc[8:], 上色(表.iloc[8:]).format({"收盤": "{:,.2f}", "漲跌幅": "{:+.2f}", "總分": "{:.1f}"}, na_rep="—"),
+                           f"焦點更多{名}", column_config={"代號": None})
+        st.caption("依規則挑出來的名單，不是買賣建議。⭐＝你的庫存或自選股。點一下到個股查詢。")
+        return
     左, 右 = st.columns(2)
     for 欄, 名, 表, 鍵 in ((左, "🔍 值得研究", 機會, "焦點機會"), (右, "🛡️ 需要防守", 風險, "焦點風險")):
         with 欄:
@@ -2628,24 +2647,115 @@ def 反彈延續區():
                        "代表這組條件比較像「現在是不是在反彈中」的描述，不是進場訊號；跌破時是提醒降低追高，不代表一定回檔。")
 
 
-首頁區塊 = ["30秒", "市場", "狀態", "價位", "AI解讀", "焦點", "國際", "總經", "連動", "加權指數", "權值", "資金", "跌深", "止跌", "護盤", "選擇權", "情緒", "水位", "族群", "行事曆", "事件", "輝達", "延續", "排行"]
+def 必知項目():
+    """手機模式首頁最上面：今天必須知道的 5～8 件事（規則整理，不用 AI）。回傳 [(圖示, HTML 文字, 是否警示)]。"""
+    項 = []
+    每日 = 市場每日(_版本)
+    上漲, 下跌 = int((今日["漲跌"] > 0).sum()), int((今日["漲跌"] < 0).sum())
+    即 = 大盤即時() if engine.盤中時間() else None
+    if 即 is not None and "t00" in 即.index:
+        r = 即.loc["t00"]
+        幅 = r["change"] / (r["close"] - r["change"]) * 100
+        項.append(("📈" if r["change"] >= 0 else "📉",
+                  f'<b>加權盤中 {r["close"]:,.0f}</b>（{r["change"]:+,.0f}，<span style="color:{漲跌色(幅)}">{幅:+.2f}%</span>）{r["time"][:5]}', False))
+    elif 加權 is not None and not 加權.empty:
+        r = 加權.iloc[-1]
+        幅 = r["change"] / (r["close"] - r["change"]) * 100
+        量 = 今日["成交值億"].sum()
+        均 = 每日["成交金額"].tail(6).iloc[:-1].mean() if len(每日) >= 6 else np.nan
+        量字 = f"，成交 {量:,.0f} 億" + (f"（比 5 日均量{'多' if 量 >= 均 else '少'} {abs(量 / 均 - 1) * 100:.0f}%）" if pd.notna(均) and 均 else "")
+        項.append(("📈" if r["change"] >= 0 else "📉",
+                  f'<b>加權 {r["close"]:,.0f}</b>（{r["change"]:+,.0f}，<span style="color:{漲跌色(幅)}">{幅:+.2f}%</span>）{量字}', False))
+    項.append(("⚖️", f'漲 <span style="color:{紅}">{上漲}</span> 家・跌 <span style="color:{綠}">{下跌}</span> 家'
+               + ("，<b>多數股票在漲</b>" if 上漲 > 下跌 * 1.5 else ("，<b>多數股票在跌</b>" if 下跌 > 上漲 * 1.5 else "，漲跌互見")), False))
+    try:
+        情緒 = 情緒資料(_版本)
+    except Exception:
+        情緒 = None
+    判 = engine.市場狀態(加權, 今日, 每日, 情緒, 經濟日程資料(_版本, 7))
+    try:
+        日, _ = 資金水位資料(_版本)
+        水位 = None if 日 is None or 日.empty else float(日.iloc[-1]["建議持股%"])
+    except Exception:
+        水位 = None
+    色 = 紅 if "多" in 判["狀態"] else (綠 if "空" in 判["狀態"] else "#EDEDED")
+    項.append(("🧭", f'市場判讀 <b style="color:{色}">{判["狀態"]}</b>（支持 {len(判["支持"])} 項・反向 {len(判["反向"])} 項）'
+               + (f"，建議持股約 <b>{水位:.0f}%</b>" if 水位 is not None else ""), "空" in 判["狀態"]))
+    if "外資" in 每日 and 每日["外資"].notna().any():
+        今外, 五外 = float(每日["外資"].iloc[-1]), float(每日["外資"].tail(5).sum())
+        項.append(("🏦", f'外資今天{"買" if 今外 >= 0 else "賣"}超約 <b>{abs(今外):,.0f} 億</b>，近 5 日{"買" if 五外 >= 0 else "賣"}超 {abs(五外):,.0f} 億', 五外 < -500))
+    if "維持率" in 每日 and 每日["維持率"].notna().any():
+        維 = float(每日["維持率"].dropna().iloc[-1])
+        級, _ = 維持率等級(維)
+        項.append(("💳", f"融資維持率 <b>{維:.0f}%</b>：{級}", 維 < 150))
+    try:
+        _, 行, _, _ = 總經資料(_版本)
+        事 = macro.下一個大事(行)
+    except Exception:
+        事 = None
+    大事 = list(判["待觀察"][:2])
+    if 事:
+        名 = "、".join(f"{engine.國別.get(e['country'], e['country'])} {engine.經濟中文.get(e['title'], e['title'])}" for e in 事["事件們"][:2])
+        大事.insert(0, f"{事['時間']:%m/%d %H:%M} {名}")
+    if 大事:
+        項.append(("⏰", "接下來的大事：" + "；".join(html.escape(x) for x in 大事[:3]), False))
+    if 判["下一步"]:
+        項.append(("👀", "下一步看：" + html.escape(判["下一步"][0]), False))
+    # 你的股票：到價、注意／處置、大漲大跌（解鎖後才看得到）
+    if 可編輯():
+        try:
+            我的 = list(dict.fromkeys(list(庫存代號() or []) + [c for v in 自選股清單().values() for c in v]))
+        except Exception:
+            我的 = []
+        價 = 今日.set_index("代號")
+        警 = 警示表(_版本)
+        for 代, 設 in (提醒清單() or {}).items():
+            if 代 not in 價.index:
+                continue
+            收 = float(價.at[代, "收盤"])
+            if (設.get("上") and 收 >= 設["上"]) or (設.get("下") and 收 <= 設["下"]):
+                項.append(("🔔", f'<a href="?s={代}" target="_self">{代} {價.at[代, "名稱"]}</a> 收 {收:,.2f}，已到提醒價（{提醒文字(設)}）', True))
+        for 代 in 我的:
+            if 代 in 警:
+                項.append(("⚠️", f'<a href="?s={代}" target="_self">{代} {價.at[代, "名稱"] if 代 in 價.index else ""}</a>：{html.escape(警[代])}', True))
+        動 = 價.loc[[c for c in 我的 if c in 價.index]]
+        動 = 動[動["漲跌幅"].abs() >= 5].sort_values("漲跌幅")
+        if len(動):
+            項.append(("⭐", "你的股票大動：" + "、".join(
+                f'<a href="?s={代}" target="_self">{代} {x["名稱"]}</a> <span style="color:{漲跌色(x["漲跌幅"])}">{x["漲跌幅"]:+.1f}%</span>'
+                for 代, x in 動.head(6).iterrows()), True))
+    return 項
+
+
+def 必知區():
+    段落("MUST KNOW // 今天必須知道")
+    項 = 必知項目()
+    st.markdown('<div class="must">' + "".join(
+        f'<div class="{"warn" if 警 else ""}"><i>{圖}</i><span>{字}</span></div>' for 圖, 字, 警 in 項) + "</div>",
+        unsafe_allow_html=True)
+    st.caption("依收盤資料用規則整理，不是買賣建議。" + ("" if 可編輯() else "解鎖後（02 / 我的股票）也會列出你的股票到價、警示、大漲大跌。"))
+
+
+首頁區塊 = ["必知", "30秒", "市場", "狀態", "價位", "AI解讀", "焦點", "國際", "總經", "連動", "加權指數", "權值", "資金", "跌深", "止跌", "護盤", "選擇權", "情緒", "水位", "族群", "行事曆", "事件", "輝達", "延續", "排行"]
 
 
 新手區塊 = ["30秒", "市場", "狀態", "水位", "AI解讀", "焦點", "排行"]
-版面們 = {"新手": "只看 7 個重點區塊", "完整": "全部區塊", "自訂": "自己挑、自己排順序"}
+手機區塊 = ["必知", "30秒", "焦點"]
+版面們 = {"手機": "今天必須知道＋三十秒看盤＋焦點股，字大好讀", "新手": "只看 7 個重點區塊", "完整": "全部區塊", "自訂": "自己挑、自己排順序"}
+預設版面 = "手機" if 手機 else "新手"
 
 
 def 讀版面():
     """網址 layout=新手／完整／自訂:區塊1,區塊2…；舊的 hide= 書籤當成自訂。"""
     值 = st.query_params.get("layout", "")
-    if 值 in ("新手", "完整"):
+    if 值 in ("手機", "新手", "完整"):
         return 值, None
     if 值.startswith("自訂:"):
         return "自訂", [x for x in 值[3:].split(",") if x in 首頁區塊]
     隱 = [x for x in st.query_params.get("hide", "").split(",") if x in 首頁區塊]
     if 隱:
         return "自訂", [x for x in 首頁區塊 if x not in 隱]
-    return "新手", None  # 預設新手版面（6 個區塊），手機打開比較快；完整版一鍵切換
+    return 預設版面, None  # 預設新手版面；手機模式預設手機版面（只看重點）
 
 
 舊模式, 舊順序 = 讀版面()
@@ -2657,12 +2767,12 @@ with st.expander(f"⚙️ 首頁版面：{舊模式}"):
                              default=舊順序 if 舊順序 is not None else 首頁區塊)
         st.caption("想把某個區塊移到前面：先按 × 移除其他區塊，再照想要的順序點回來。")
     else:
-        顯示 = 新手區塊 if 模式 == "新手" else 首頁區塊
+        顯示 = {"手機": 手機區塊, "新手": 新手區塊}.get(模式, 首頁區塊)
     st.caption("設定記在網址裡，把這個網址加入書籤或手機主畫面就會保留。")
 新值 = "自訂:" + ",".join(顯示) if 模式 == "自訂" else 模式
 舊值 = "自訂:" + ",".join(舊順序) if 舊模式 == "自訂" else 舊模式
 if 新值 != 舊值 or "hide" in st.query_params:
-    if 新值 == "新手":
+    if 新值 == 預設版面:
         st.query_params.pop("layout", None)
     else:
         st.query_params["layout"] = 新值
@@ -2672,11 +2782,11 @@ def _國際():
         國際行情()
     except Exception:
         st.caption("國際行情暫時無法顯示。")
-區塊函式 = {"30秒": 三十秒卡, "市場": 市場卡片, "狀態": 狀態區, "價位": 關鍵價位區, "AI解讀": AI解讀區, "焦點": 焦點區, "國際": _國際, "總經": 總經區, "連動": 連動區,
+區塊函式 = {"必知": 必知區, "30秒": 三十秒卡, "市場": 市場卡片, "狀態": 狀態區, "價位": 關鍵價位區, "AI解讀": AI解讀區, "焦點": 焦點區, "國際": _國際, "總經": 總經區, "連動": 連動區,
          "加權指數": 加權圖 if 加權 is not None and len(加權) > 1 else None, "權值": 權值區, "資金": 資金面區, "跌深": 跌深區, "止跌": 止跌訊號區, "護盤": 護盤區, "選擇權": 選擇權區, "事件": 事件區, "輝達": 輝達週區, "延續": 反彈延續區,
          "情緒": 情緒區, "水位": 資金水位區, "族群": 族群熱力圖, "行事曆": 行事曆區, "排行": 排行區}
 要畫 = [x for x in 顯示 if 區塊函式.get(x)]
-if len(要畫) > 3:  # 首頁很長，上方放一排快速跳轉
+if len(要畫) > 3 and not (手機 and 模式 == "手機"):  # 首頁很長，上方放一排快速跳轉
     st.markdown('<div class="jump">' + "".join(f'<a href="#h-{x}" target="_self">{x}</a>' for x in 要畫)
                 + "</div>", unsafe_allow_html=True)
 
@@ -2704,3 +2814,13 @@ def 區塊片段(名):
 for x in 要畫:
     st.markdown(f'<div class="anchor" id="h-{x}"></div>', unsafe_allow_html=True)
     區塊片段(x)
+
+
+if 模式 == "手機":
+    def _換版面(值):
+        st.session_state["首頁版面"] = 值
+    段落("MORE // 想看更多")
+    a, b = st.columns(2)
+    a.button("🔰 新手版首頁（7 區塊）", on_click=_換版面, args=("新手",), key="換新手版面", width="stretch")
+    b.button("📚 完整首頁（全部區塊）", on_click=_換版面, args=("完整",), key="換完整版面", width="stretch")
+    st.caption("手機版首頁只放最重要的三塊；其他頁面（個股查詢、我的股票…）從上方選單進入，字體一樣會放大。")

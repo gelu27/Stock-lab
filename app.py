@@ -4,6 +4,7 @@
 import datetime as dt
 import hashlib
 import hmac
+import html
 import io
 import json
 import os
@@ -233,6 +234,18 @@ a.cardlink:hover .card, a.cardlink:active .card {{ border-color: {青}; backgrou
 .steps b {{ color: {青}; display: block; margin-bottom: 4px; }}
 .steps span {{ font-size: 13px; color: #BDBDBD; }}
 @media (max-width: 640px) {{ .steps {{ grid-template-columns: 1fr; }} }}
+/* 今天必須知道 */
+.must {{ border: 1px solid #1E1E1E; border-left: 3px solid {青}; background: #050505; margin: 6px 0 4px; }}
+.must div {{ display: flex; gap: 10px; padding: 12px 14px; border-bottom: 1px solid #141414;
+    font-family: 'Noto Sans TC', sans-serif; font-size: 16px; line-height: 1.6; color: #E4E4E4; }}
+.must div:last-child {{ border-bottom: 0; }}
+.must div i {{ font-style: normal; flex: 0 0 auto; }}
+.must div b {{ color: #FFF; }}
+.must div.warn {{ background: rgba(255,176,32,.07); }}
+.must a {{ color: {青}; text-decoration: none; }}
+.flist a {{ display: block; padding: 10px 4px; border-bottom: 1px solid #141414; text-decoration: none; color: #E4E4E4;
+    font-family: 'Noto Sans TC', sans-serif; font-size: 16px; }}
+.flist a small {{ display: block; color: #9A9A9A; font-size: 13px; margin-top: 2px; line-height: 1.5; }}
 /* 站內導航（攔截連結、快捷鍵）不佔版面；足跡列小一點 */
 .st-key-navjs {{ position: absolute; width: 0; height: 0; overflow: hidden; }}
 .st-key-trail {{ margin-top: -8px; }}
@@ -258,6 +271,46 @@ a.cardlink:hover .card, a.cardlink:active .card {{ border-color: {青}; backgrou
 }}
 </style>
 """, unsafe_allow_html=True)
+
+
+# 手機模式：只在打開時加上，字體整體放大、卡片改兩欄、說明文字變亮
+手機CSS = f"""<style>
+html {{ font-size: 18px; }}
+.hero {{ padding: 10px 14px 8px; margin-bottom: 8px; }}
+.hero::after, .hero .kicker, .hero .sub {{ display: none; }}
+.hero .title {{ font-size: 28px; margin: 0; }}
+.grid3, .grid2 {{ grid-template-columns: repeat(2, 1fr); gap: 8px; }}
+.grid3 .card, .grid2 .card {{ padding: 12px 12px; }}
+.grid3 > :last-child:nth-child(odd), .grid2 > :last-child:nth-child(odd) {{ grid-column: span 2; }}
+.grid3 .card .k, .grid2 .card .k {{ font-size: 13px; letter-spacing: .05em; color: #A0A0A0; }}
+.grid3 .card .v, .grid2 .card .v {{ font-size: clamp(20px, 6.4vw, 26px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.grid3 .card .d, .grid2 .card .d {{ font-size: 14px; line-height: 1.4; }}
+.sec {{ font-size: 14px; letter-spacing: .08em; margin-top: 24px; }}
+[data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] li {{ font-size: 18px; line-height: 1.7; }}
+[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {{ font-size: 15px !important; color: #A8A8A8; line-height: 1.6; }}
+.verdict {{ font-size: 18px !important; line-height: 1.75; padding: 12px 14px; }}
+.verdict.sub {{ font-size: 16px !important; }}
+.rank td, .rank td.n {{ font-size: 17px !important; padding: 10px 6px !important; }}
+.rank td.n small {{ font-size: 13px; }}
+.rank th {{ font-size: 14px; }}
+.lamp .t {{ font-size: 17px; }} .lamp .s {{ font-size: 14px; }}
+.jump a {{ font-size: 15px; padding: 6px 12px; }}
+.ticker span {{ font-size: 15px; }}
+.st-key-nav button p {{ font-size: 14px !important; }}
+.st-key-nav button {{ min-height: 42px !important; }}
+.stButton > button {{ min-height: 46px; }}
+.stTabs [data-baseweb="tab"] {{ padding: 12px 14px; }}
+.tip {{ font-size: 13px; }}
+.tip .tipbox {{ font-size: 15px; width: 240px; }}
+.st-key-toolbar [data-testid="stHorizontalBlock"] {{ flex-wrap: nowrap !important; gap: 6px !important; }}
+.st-key-toolbar [data-testid="stColumn"] {{ flex: 1 1 0 !important; width: auto !important; min-width: 0 !important; }}
+.st-key-toolbar [data-testid="stColumn"]:first-child {{ flex: 1.8 1 0 !important; }}
+.st-key-toolbar p {{ font-size: 15px !important; white-space: nowrap; }}
+.st-key-toolbar button {{ padding: 4px 6px !important; min-height: 40px; width: 100%; justify-content: center; }}
+.st-key-toolbar button [aria-hidden="true"] {{ display: none; }}
+.must div, .flist a {{ font-size: 18px; }}
+.flist a small {{ font-size: 15px; }}
+</style>"""
 
 
 def 卡片(標題, 數值, 小字="", 顏色="#EDEDED", 連結=None):
@@ -288,7 +341,7 @@ def 段落(文字):
 def 圖表外觀(圖, 高=380):
     圖.update_layout(
         template="plotly_dark", height=高, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=10, r=10, t=10, b=10), font=dict(family="JetBrains Mono, Noto Sans TC, sans-serif", size=11),
+        margin=dict(l=10, r=10, t=10, b=10), font=dict(family="JetBrains Mono, Noto Sans TC, sans-serif", size=14 if st.session_state.get("手機模式") else 11),
         hoverlabel=dict(bgcolor="#0A0A0A", bordercolor="#333", font=dict(family="JetBrains Mono, Noto Sans TC")),
         legend=dict(orientation="h", y=1.08, x=0), hovermode="x unified",
         xaxis=dict(gridcolor="#151515"), yaxis=dict(gridcolor="#151515"),
@@ -363,25 +416,65 @@ if 指標 is None:
     st.stop()
 
 最新日 = 指標["date"].max()
-if "精簡表格" not in st.session_state:  # 手機預設精簡
+def 是手機():
     try:
-        st.session_state["精簡表格"] = "Mobile" in st.context.headers.get("User-Agent", "")
+        return "Mobile" in st.context.headers.get("User-Agent", "")
     except Exception:
-        st.session_state["精簡表格"] = False
+        return False
+
+
+if "精簡表格" not in st.session_state:  # 手機預設精簡
+    st.session_state["精簡表格"] = 是手機()
 if "新手模式" not in st.session_state:  # 網址 ?n=1 記住新手模式
     st.session_state["新手模式"] = st.query_params.get("n") == "1"
-a, n, c, e, d, b = st.container(key="toolbar").columns([3, 1, 1, 1, 1, 1], vertical_alignment="center")
-a.caption(f"📅 資料日期 {最新日:%Y/%m/%d}　·　資料庫最後更新 {最後更新()}"
-          '<span class="hide-m">（每個交易日約 18:00 自動更新）</span>', unsafe_allow_html=True)
-n.toggle("🔰 新手模式", key="新手模式", help="打開後：首頁顯示三步驟看盤教學、個股頁先給白話一句話結論並收起進階指標；專有名詞旁的 ❓ 可看白話說明")
+if "手機模式" not in st.session_state:  # 網址 ?m=1／m=0 記住；沒指定時，用手機打開自動開啟
+    _m = st.query_params.get("m")
+    st.session_state["手機模式"] = _m == "1" if _m in ("0", "1") else 是手機()
+    if st.session_state["手機模式"]:
+        st.session_state["精簡表格"] = True
+
+
+def _切換手機():
+    if st.session_state.get("手機模式"):  # 開手機模式時表格一併精簡，不用左右滑
+        st.session_state["精簡表格"] = True
+    st.session_state.pop("首頁版面", None)  # 首頁版面回到該模式的預設（手機版面／新手版面）
+    st.query_params.pop("layout", None)
+
+
+手機說明 = "字體放大、卡片改兩欄；首頁先給「今天必須知道」重點摘要，個股頁直接攤開白話結論。關掉就回到完整版面。"
+_手 = bool(st.session_state.get("手機模式"))
+with st.container(key="toolbar"):
+    if _手:  # 手機模式：日期一行，按鈕一排，較少用的開關收進「⚙️ 設定」
+        st.caption(f"📅 資料 {最新日:%m/%d}　·　更新 {最後更新()}")
+        m, s, d, b = st.columns([1.8, 1, 1, 1], vertical_alignment="center")
+        m.toggle("📱 手機", key="手機模式", on_change=_切換手機)
+        with s.popover("⚙️ 設定"):
+            n, c, e = st, st, st
+            n.toggle("🔰 新手模式", key="新手模式", help="打開後：首頁顯示三步驟看盤教學、個股頁先給白話一句話結論並收起進階指標；專有名詞旁的 ❓ 可看白話說明")
+            c.toggle("📱 精簡表格", key="精簡表格", help="表格只留名稱、股價、漲跌等重點欄位，手機不用左右滑")
+            e.toggle("⬇️ 下載表格", key="顯示下載", help="打開後，每個表格下面會多一個「下載 Excel」按鈕")
+    else:
+        a, m, n, c, e, d, b = st.columns([3, 1, 1, 1, 1, 1, 1], vertical_alignment="center")
+        a.caption(f"📅 資料日期 {最新日:%Y/%m/%d}　·　資料庫最後更新 {最後更新()}"
+                  '<span class="hide-m">（每個交易日約 18:00 自動更新）</span>', unsafe_allow_html=True)
+        m.toggle("📱 手機模式", key="手機模式", on_change=_切換手機, help=手機說明)
+        n.toggle("🔰 新手模式", key="新手模式", help="打開後：首頁顯示三步驟看盤教學、個股頁先給白話一句話結論並收起進階指標；專有名詞旁的 ❓ 可看白話說明")
+        c.toggle("📱 精簡表格", key="精簡表格", help="表格只留名稱、股價、漲跌等重點欄位，手機不用左右滑")
+        e.toggle("⬇️ 下載表格", key="顯示下載", help="打開後，每個表格下面會多一個「下載 Excel」按鈕")
 新手 = bool(st.session_state.get("新手模式"))
 if (st.query_params.get("n") == "1") != 新手:
     if 新手:
         st.query_params["n"] = "1"
     else:
         del st.query_params["n"]
-c.toggle("📱 精簡表格", key="精簡表格", help="表格只留名稱、股價、漲跌等重點欄位，手機不用左右滑")
-e.toggle("⬇️ 下載表格", key="顯示下載", help="打開後，每個表格下面會多一個「下載 Excel」按鈕")
+手機 = bool(st.session_state.get("手機模式"))
+_預設m = 是手機()
+if 手機 == _預設m:  # 跟自動判斷一樣就不寫進網址
+    st.query_params.pop("m", None)
+else:
+    st.query_params["m"] = "1" if 手機 else "0"
+if 手機:
+    st.markdown(手機CSS, unsafe_allow_html=True)
 with d.popover("📖 名詞"):
     找 = st.text_input("查名詞", placeholder="例如：共振區、Beta、融資維持率", key="查名詞", label_visibility="collapsed")
     for 詞, (白, 用, 坑) in beginner.名詞卡.items():
