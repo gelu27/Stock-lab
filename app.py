@@ -270,6 +270,20 @@ a.cardlink:hover .card, a.cardlink:active .card {{ border-color: {青}; backgrou
 .ladder em {{ font-style: normal; font-family: 'JetBrains Mono'; font-size: 13px; color: #8A8A8A; min-width: 4.2em; text-align: right; }}
 .ladder div.now {{ background: rgba(255,255,255,.06); border-radius: 6px; }}
 .ladder div.now b, .ladder div.now span {{ color: #FFF; font-weight: 700; }}
+/* 滑卡 */
+.sw-tip {{ font-family: 'Noto Sans TC', sans-serif; font-size: 13px; color: #8A9AA0; margin: 4px 0 6px; }}
+.swipe {{ display: flex; gap: 12px; overflow-x: auto; scroll-snap-type: x mandatory; padding: 2px 2px 10px; scrollbar-width: none; }}
+.swipe::-webkit-scrollbar {{ display: none; }}
+.sw-card {{ flex: 0 0 82%; max-width: 340px; scroll-snap-align: center; border: 1px solid #16323A; border-radius: 16px; padding: 16px 16px 12px;
+    background: radial-gradient(120% 80% at 0% 0%, #0E2A31 0%, #061014 55%, #04080A 100%); text-decoration: none !important; color: #EDEDED !important; }}
+.sw-h {{ font-family: 'Noto Sans TC', sans-serif; font-size: 18px; }} .sw-h b {{ font-family: 'JetBrains Mono'; color: {青}; }}
+.sw-p {{ font-family: 'JetBrains Mono'; font-size: 30px; font-weight: 700; margin-top: 2px; }}
+.sw-p small {{ font-size: 16px; margin-left: 10px; }}
+.sw-s {{ position: relative; margin: 6px 0 4px; }} .sw-s svg {{ width: 100%; height: 56px; }}
+.sw-s span {{ position: absolute; right: 0; top: -2px; font-size: 11px; color: #667; font-family: 'Noto Sans TC'; }}
+.sw-v {{ font-family: 'Noto Sans TC', sans-serif; font-size: 16px; font-weight: 700; margin-top: 4px; }}
+.sw-card ul {{ list-style: none; padding: 0; margin: 6px 0 0; font-family: 'Noto Sans TC', sans-serif; font-size: 14px; line-height: 1.5; }}
+.sw-card li.g {{ color: #FF8FA3; }} .sw-card li.b {{ color: #6FE8BE; }}
 /* 區塊標題：英文 // 中文 */
 .sec .en {{ color: {青}; }} .sec b {{ font-family: 'Noto Sans TC', sans-serif; font-weight: 700; color: #EDEDED; font-size: 15px; letter-spacing: .08em; }}
 svg.spark {{ flex: 0 0 auto; align-self: center; margin-left: auto; }}
@@ -406,6 +420,45 @@ def 迷你線(值們, 顏色=None, 寬=64, 高=26):
             f'stroke="{色}" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>'
             f'<circle cx="{xs[-1]:.1f}" cy="{ys[-1]:.1f}" r="2.6" fill="{色}"/></svg>')
 
+
+
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=20)
+def 近期收盤(代號們, 版本鍵, 天數=20):
+    """{代號: 近 N 個交易日收盤 list}，滑卡的迷你走勢用。"""
+    日們 = sorted(指標["date"].unique())[-天數:]
+    t = 指標[指標["date"].isin(日們) & 指標["代號"].isin(代號們)]
+    return {c: g.sort_values("date")["收盤"].tolist() for c, g in t.groupby("代號")}
+
+
+def 滑卡(代號們, 標題="左右滑看下一檔"):
+    """手機像看限時動態一樣左右滑：一張卡一檔股票（漲跌、迷你走勢、規則判讀、利多利空第一條），點卡片到個股頁。"""
+    表 = 今日.set_index("代號")
+    代號們 = [c for c in dict.fromkeys(代號們) if c in 表.index][:30]
+    if not 代號們:
+        return
+    線 = 近期收盤(tuple(代號們), _版本)
+    卡們 = []
+    for c in 代號們:
+        r = 表.loc[c]
+        try:
+            判 = engine.規則判讀(r.rename({"代號": c}) if "代號" not in r else r)
+        except Exception:
+            判 = None
+        幅 = r.get("漲跌幅")
+        色 = 漲跌色(幅)
+        看 = "" if not 判 else f'<div class="sw-v" style="color:{紅 if 判["分數"] >= 30 else (綠 if 判["分數"] <= -30 else "#BDBDBD")}">{判["看法"]}（{判["分數"]:+d}）</div>'
+        點 = ""
+        if 判:
+            if 判["利多"]:
+                點 += f'<li class="g">▲ {html.escape(str(判["利多"][0]))}</li>'
+            if 判["利空"]:
+                點 += f'<li class="b">▼ {html.escape(str(判["利空"][0]))}</li>'
+        卡們.append(
+            f'<a class="sw-card" href="?s={c}" target="_self"><div class="sw-h"><b>{c}</b> {html.escape(str(r["名稱"]))}</div>'
+            f'<div class="sw-p" style="color:{色}">{r["收盤"]:,.2f}<small>{"" if pd.isna(幅) else f"{幅:+.2f}%"}</small></div>'
+            f'<div class="sw-s">{迷你線(線.get(c, []), 寬=260, 高=56)}<span>近 20 日</span></div>{看}<ul>{點}</ul></a>')
+    st.markdown(f'<div class="sw-tip">👉 {標題}（共 {len(卡們)} 檔）</div><div class="swipe">{"".join(卡們)}</div>',
+                unsafe_allow_html=True)
 
 def 迷你柱(值們, 寬=64, 高=26):
     """正負小柱狀（紅正綠負），例如外資每日買賣超。"""
