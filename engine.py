@@ -1219,6 +1219,29 @@ def 讀取匯率():
     return pd.read_csv(檔案, parse_dates=["date"]).sort_values("date")
 
 
+def 讀取匯率K線():
+    """data/fx.csv 的美元兌台幣日 K（date, open, high, low, close）；還沒有開高低的日子用收盤代替。"""
+    t = 讀取匯率()
+    if t is None or t.empty:
+        return None
+    t = t.rename(columns={"usdtwd": "close"})
+    for k in ("open", "high", "low"):
+        t[k] = t[k].fillna(t["close"]) if k in t.columns else t["close"]
+    return t[["date", "open", "high", "low", "close"]].reset_index(drop=True)
+
+
+def 讀取台指期K線():
+    """data/futures_basis.csv 的台指期近月日 K（date, open, high, low, close, month）；換月那天價格會跳一下。"""
+    f = 資料夾 / "futures_basis.csv"
+    if not f.exists():
+        return None
+    t = pd.read_csv(f, parse_dates=["date"], dtype={"month": str}).sort_values("date")
+    t = t.rename(columns={"fut_close": "close", "fut_open": "open", "fut_high": "high", "fut_low": "low"})
+    for k in ("open", "high", "low"):
+        t[k] = t[k].fillna(t["close"]) if k in t.columns else t["close"]
+    return t[["date", "open", "high", "low", "close", "month"]].reset_index(drop=True)
+
+
 def _升降單位(價):
     return 0.01 if 價 < 10 else 0.05 if 價 < 50 else 0.1 if 價 < 100 else 0.5 if 價 < 500 else 1 if 價 < 1000 else 5
 
@@ -1517,7 +1540,7 @@ def 盤中K線(代號, 市場="上市", 間隔="1m", 範圍="5d"):
     回傳 DataFrame：datetime（台北時間）、open、high、low、close、volume（股）。"""
     import requests
 
-    符號 = "%5ETWII" if 代號 == "t00" else f"{代號}.{'TWO' if 市場 == '上櫃' else 'TW'}"
+    符號 = {"t00": "%5ETWII", "o00": "%5ETWOII"}.get(代號) or f"{代號}.{'TWO' if 市場 == '上櫃' else 'TW'}"
     r = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{符號}?interval={間隔}&range={範圍}",
                      headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
     結果 = r.json()["chart"]["result"][0]
