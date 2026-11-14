@@ -3,9 +3,6 @@ name: 補台指期與匯率 K 線
 # 台指期近月、美元/台幣的開高低收（網站大盤走勢 K 線用）。每日更新也會抓，這裡是想立刻補齊時手動跑。
 on:
   workflow_dispatch:
-  push:
-    branches: [claude/project-thread-6jjncf]
-    paths: [.github/workflows/kbar-backfill.yml]
 
 permissions:
   contents: write
