@@ -861,10 +861,14 @@ def 抓匯率():
         r = requests.get("https://query1.finance.yahoo.com/v8/finance/chart/TWD=X?range=2y&interval=1d",
                          headers=標頭, timeout=30)
         結果 = r.json()["chart"]["result"][0]
-        for 時間, 收盤 in zip(結果["timestamp"], 結果["indicators"]["quote"][0]["close"]):
+        q = 結果["indicators"]["quote"][0]
+        for i, (時間, 收盤) in enumerate(zip(結果["timestamp"], q["close"])):
             if 收盤:
                 日 = dt.datetime.fromtimestamp(時間, 台北時區).strftime("%Y-%m-%d")
-                新資料.append({"date": 日, "usdtwd": round(收盤, 4)})
+                列 = {"date": 日, "usdtwd": round(收盤, 4)}
+                if all(q.get(k) and q[k][i] for k in ("open", "high", "low")):   # 開高低給網站畫匯率 K 線
+                    列.update(open=round(q["open"][i], 4), high=round(q["high"][i], 4), low=round(q["low"][i], 4))
+                新資料.append(列)
     except Exception as 錯誤:
         print(f"Yahoo 匯率失敗（{錯誤}），改用臺灣銀行")
     if not 新資料:
@@ -949,7 +953,7 @@ def 抓小台散戶(天數=400):
 
 
 def 抓台指期價差(天數=400):
-    """台指期（大台 TX）近月收盤、全市場未平倉 → data/futures_basis.csv（date, month, fut_close, total_oi）。
+    """台指期（大台 TX）近月收盤、全市場未平倉 → data/futures_basis.csv（date, month, fut_close, total_oi, fut_open/high/low）。
     價差＝期貨收盤 − 加權收盤，網站讀取時再跟 index_ohlc.csv 對；未平倉＝所有月份（不含週契約、價差單）一般盤加總。"""
     檔 = 資料夾 / "futures_basis.csv"
     舊 = pd.read_csv(檔, dtype={"month": str}) if 檔.exists() else pd.DataFrame()
@@ -957,7 +961,8 @@ def 抓台指期價差(天數=400):
     if not 有資料:
         return
     今天 = pd.Timestamp(max(有資料)).date()
-    起 = (pd.Timestamp(舊["date"].max()).date() + dt.timedelta(days=1)) if len(舊) else 今天 - dt.timedelta(days=天數)
+    有K = len(舊) and "fut_open" in 舊.columns   # 舊檔沒有開高低：整段重抓一次，網站才畫得出台指期 K 線
+    起 = (pd.Timestamp(舊["date"].max()).date() + dt.timedelta(days=1)) if 有K else 今天 - dt.timedelta(days=天數)
     列們 = []
     while 起 <= 今天:
         迄 = min(起 + dt.timedelta(days=27), 今天)
@@ -971,6 +976,9 @@ def 抓台指期價差(天數=400):
         量 = 量[量["month"].str.fullmatch(r"\d{6}")]   # 去掉週契約、價差單
         量 = 量.assign(date=pd.to_datetime(量["交易日期"]).dt.strftime("%Y-%m-%d"),
                        close=pd.to_numeric(量["收盤價"], errors="coerce"),
+                       open=pd.to_numeric(量["開盤價"], errors="coerce"),
+                       high=pd.to_numeric(量["最高價"], errors="coerce"),
+                       low=pd.to_numeric(量["最低價"], errors="coerce"),
                        oi=pd.to_numeric(量["未沖銷契約數"], errors="coerce"))
         for 日, g in 量.groupby("date"):
             有價 = g.dropna(subset=["close"]).sort_values("month")
@@ -978,7 +986,7 @@ def 抓台指期價差(天數=400):
                 continue
             近 = 有價.iloc[0]
             列們.append({"date": 日, "month": 近["month"], "fut_close": float(近["close"]),
-                        "total_oi": int(g["oi"].sum())})
+                        "total_oi": int(g["oi"].sum()), "fut_open": 近["open"], "fut_high": 近["high"], "fut_low": 近["low"]})
         起 = 迄 + dt.timedelta(days=1)
     if not 列們:
         print("台指期價差沒有新資料")

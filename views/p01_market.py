@@ -99,7 +99,7 @@ def 盤中即時條():
         高低 = f" 高 {r['high']:{格式}} 低 {r['low']:{格式}}" if pd.notna(r.get("high")) and pd.notna(r.get("low")) else ""
         卡 = 卡片(f"⚡ {名稱} · {r['time']}", f"{r['close']:,.2f}",
                 f"{r['change']:+,.2f}（{漲幅:+.2f}%）{高低}", 漲跌色(r["change"]),
-                錨("加權指數") if 代號 == "t00" else 錨("價位"))
+                錨("大盤走勢") if 代號 == "t00" else 錨("價位"))
         前 = st.session_state.get(f"_即時前值{代號}")  # 跟上次更新比：漲了閃紅、跌了閃綠
         st.session_state[f"_即時前值{代號}"] = float(r["close"])
         if 前 is not None and float(r["close"]) != 前:
@@ -114,46 +114,67 @@ def 盤中即時條():
 @st.fragment(run_every=刷新秒(30))
 def 加權圖():
     輪詢檢查()  # 開盤／收盤時切換自動更新頻率
-    段落("TAIEX // 加權指數走勢")
+    段落("INDEX // 大盤走勢 K 線")
+    指數 = st.segmented_control("指數", ["加權指數", "櫃買指數", "台指期", "美元/台幣"], default="加權指數", key="大盤指數",
+                              label_visibility="collapsed") or "加權指數"
+    if 指數 in ("台指期", "美元/台幣"):   # 這兩個只有日資料，直接畫日 K
+        區間 = st.segmented_control("區間", ["1月", "1季", "半年", "1年"], default="1季", key="其他區間",
+                                  label_visibility="collapsed") or "1季"
+        K = engine.讀取台指期K線() if 指數 == "台指期" else engine.讀取匯率K線()
+        if K is None or len(K) < 2:
+            st.info(f"{指數}資料暫時抓不到。")
+            return
+        大盤日K(K, 區間, {"1月": 31, "1季": 92, "半年": 183, "1年": 365}[區間], 指數)
+        st.caption("台指期是大台近月合約（期交所一般盤），換月那天價格會跳一下。" if 指數 == "台指期" else
+                   "美元/台幣：數字變大＝台幣貶值（外資常同時賣超台股），變小＝台幣升值。")
+        return
+    櫃 = 指數 == "櫃買指數"
+    即時代號, K代號 = ("o00", "TPEX") if 櫃 else ("t00", "TAIEX")
+    日線 = 指數K線("TPEX", _版本) if 櫃 else 加權
+    預設區間 = "當日" if engine.盤中時間() else "1季"   # 盤中先看當日走勢，收盤後先看日 K
     區間 = st.segmented_control("區間", ["當日", "5日", "1月", "1季", "半年", "1年", "3年", "5年"],
-                              default="當日", key="加權區間", label_visibility="collapsed") or "當日"
+                              default=預設區間, key="加權區間", label_visibility="collapsed") or 預設區間
     分時 = 讀檔("讀取分時", _版本)
     即時點 = None
     if engine.盤中時間():
         即時點 = 大盤即時()
-        if 即時點 is not None and "t00" in 即時點.index:
-            r = 即時點.loc["t00"]
-            st.markdown(卡片(f"TAIEX 盤中即時 · {r['time']}", f"{r['close']:,.2f}",
+        if 即時點 is not None and 即時代號 in 即時點.index:
+            r = 即時點.loc[即時代號]
+            st.markdown(卡片(f"{'TPEx 櫃買' if 櫃 else 'TAIEX 加權'} 盤中即時 · {r['time']}", f"{r['close']:,.2f}",
                            f"{r['change']:+,.2f}（{r['change'] / (r['close'] - r['change']) * 100:+.2f}%）",
                            漲跌色(r["change"])), unsafe_allow_html=True)
     if 區間 in ("當日", "5日"):
         # 先用 Yahoo 的分鐘線（盤中也會更新），抓不到再用每天收盤後存下來的分時資料
-        線 = 分鐘線("t00", "", "1m" if 區間 == "當日" else "5m", "5d")
+        線 = 分鐘線(即時代號, "", "1m" if 區間 == "當日" else "5m", "5d")
         過期提示(線)
         if 線 is not None and len(線):
             線 = 線.assign(day=線["datetime"].dt.normalize())
             天們 = sorted(線["day"].unique())[-1:] if 區間 == "當日" else sorted(線["day"].unique())[-5:]
             資料 = 線[線["day"].isin(天們)]
             x, y = 資料["datetime"], 資料["close"]
-        elif 分時:
+        elif 分時 and not 櫃:
             天們 = list(分時)[-1:] if 區間 == "當日" else list(分時)[-5:]
             資料 = pd.concat([分時[d] for d in 天們])
             x, y = 資料["datetime"], 資料["taiex"]
         else:
             st.info("分時資料暫時抓不到。")
             return
-        基準 = 加權[加權["date"] < pd.Timestamp(天們[0])]["close"]
+        基準 = 日線[日線["date"] < pd.Timestamp(天們[0])]["close"]
         昨收 = 基準.iloc[-1] if len(基準) else y.iloc[0]
         st.caption(f"{pd.Timestamp(天們[-1]):%Y/%m/%d} 走勢" + ("（盤中約每 30 秒更新）" if engine.盤中時間() else ""))
     else:
         天數 = {"1月": 31, "1季": 92, "半年": 183, "1年": 365, "3年": 365 * 3, "5年": 365 * 5}[區間]
-        資料 = 加權[加權["date"] >= 加權["date"].max() - pd.Timedelta(days=天數)]
+        K = 指數K線(K代號, _版本)
+        if engine.有開高低(K):
+            大盤日K(K, 區間, 天數, "櫃買" if 櫃 else "加權")
+            return
+        資料 = 日線[日線["date"] >= 日線["date"].max() - pd.Timedelta(days=天數)]
         x, y = 資料["date"], 資料["close"]
         昨收 = y.iloc[0]
     色 = 紅 if y.iloc[-1] >= 昨收 else 綠
     填色 = "rgba(255,59,92,0.08)" if 色 == 紅 else "rgba(0,214,143,0.08)"
     圖 = go.Figure(go.Scatter(x=x, y=y, line=dict(color=色, width=1.6), fill="tozeroy",
-                              fillcolor=填色, name="加權指數"))
+                              fillcolor=填色, name=指數))
     圖.add_hline(y=昨收, line=dict(color=灰, width=1, dash="dot"))
     圖.update_yaxes(range=[min(y.min(), 昨收) * 0.995, max(y.max(), 昨收) * 1.005])
     if 區間 in ("當日", "5日"):
@@ -162,6 +183,51 @@ def 加權圖():
     漲跌 = y.iloc[-1] - 昨收
     st.caption(f"{區間}漲跌：{漲跌:+,.2f}（{漲跌 / 昨收 * 100:+.2f}%）")
     st.plotly_chart(圖表外觀(圖, 300), width="stretch")
+
+
+def 大盤日K(K, 區間, 天數, 名稱="加權"):
+    """加權／櫃買指數日 K 線＋5 日／月線／季線；3 年、5 年改看週 K，K 棒才不會擠成一條線。"""
+    k = K.copy()
+    週K = 區間 in ("3年", "5年")
+    if 週K:
+        k = (k.set_index("date").resample("W-FRI").agg({"open": "first", "high": "max", "low": "min", "close": "last"})
+             .dropna().reset_index())
+    均線們 = ((5, "#FFC24B", "5週線"), (13, 青, "季線"), (52, "#FF00E5", "年線")) if 週K else \
+        ((5, "#FFC24B", "5日線"), (20, 青, "月線"), (60, "#FF00E5", "季線"))
+    for n, _, _ in 均線們:
+        k[f"MA{n}"] = k["close"].rolling(n).mean()
+    k = k[k["date"] >= k["date"].max() - pd.Timedelta(days=天數)].reset_index(drop=True)
+    if len(k) < 2:
+        st.info("日 K 資料暫時抓不到。")
+        return
+    尾 = k.iloc[-1]
+    前收 = k["close"].iloc[-2]
+    if engine.有開高低(k):
+        圖 = go.Figure(go.Candlestick(x=k["date"], open=k["open"], high=k["high"], low=k["low"], close=k["close"],
+                                      name="K 線", increasing=dict(line=dict(color=紅, width=1), fillcolor=紅),
+                                      decreasing=dict(line=dict(color=綠, width=1), fillcolor=綠)))
+    else:   # 還沒有開高低資料（剛開始收集）先畫收盤線
+        圖 = go.Figure(go.Scatter(x=k["date"], y=k["close"], name="收盤", line=dict(color="#EDEDED", width=1.6)))
+    for n, 色, 名 in 均線們:
+        圖.add_trace(go.Scatter(x=k["date"], y=k[f"MA{n}"], name=名, line=dict(color=色, width=1.2), hoverinfo="skip"))
+    全日 = pd.date_range(k["date"].min(), k["date"].max(), freq="W-FRI" if 週K else "D")
+    缺 = sorted(set(全日) - set(k["date"]))
+    if not 週K:   # 跳過週末與休市日，K 棒才會連在一起
+        圖.update_xaxes(rangebreaks=[dict(values=[d.strftime("%Y-%m-%d") for d in 缺])])
+    圖.update_layout(xaxis_rangeslider_visible=False, showlegend=True,
+                    legend=dict(orientation="h", y=1.02, yanchor="bottom", x=0, font=dict(size=11)))
+    格 = ",.0f" if 尾["close"] >= 1000 else ",.3f" if 尾["close"] < 100 else ",.2f"   # 匯率看到小數第三位
+    位置 = []
+    for n, _, 名 in 均線們[1:]:
+        v = 尾[f"MA{n}"]
+        if pd.notna(v):
+            位置.append(f"{'站上' if 尾['close'] >= v else '跌破'}{名} {v:{格}}")
+    漲跌 = 尾["close"] - k["close"].iloc[0]
+    st.caption(f"{名稱} {尾['date']:%Y/%m/%d} 收 {尾['close']:{格.replace(',.0f', ',.2f')}}（{'本週' if 週K else '當日'} {尾['close'] - 前收:+{格}}）｜"
+               f"{區間}漲跌 {漲跌:+{格}}（{漲跌 / k['close'].iloc[0] * 100:+.2f}%）｜" + "、".join(位置))
+    st.plotly_chart(圖表外觀(圖, 300 if 手機 else 380), width="stretch")
+    if engine.有開高低(k):
+        st.caption(("週 K" if 週K else "日 K") + "：紅棒收漲、綠棒收跌；細線是均線，價格在均線上方代表短中期趨勢偏多。")
 
 
 def 國際行情():
@@ -396,12 +462,12 @@ def 市場卡片():
         r = 即時加權
         卡們.append(卡片(f"⚡ TAIEX 加權 · 盤中 {r['time']}", f"{r['close']:,.0f}",
                        f"{r['change']:+,.2f}（{r['change'] / (r['close'] - r['change']) * 100:+.2f}%）",
-                       漲跌色(r["change"]), 錨("加權指數")))
+                       漲跌色(r["change"]), 錨("大盤走勢")))
     elif 加權 is not None and not 加權.empty:
         最後 = 加權.iloc[-1]
         漲幅 = 最後["change"] / (最後["close"] - 最後["change"]) * 100
         卡們.append(卡片(f"TAIEX 加權指數 · {最後['date']:%m/%d}", f"{最後['close']:,.0f}",
-                       f"{最後['change']:+,.2f}  ({漲幅:+.2f}%)", 漲跌色(最後["change"]), 錨("加權指數")))
+                       f"{最後['change']:+,.2f}  ({漲幅:+.2f}%)", 漲跌色(最後["change"]), 錨("大盤走勢")))
     卡們 += [
         卡片("資料日期", 最新日.strftime("%m/%d"), 最新日.strftime("%Y") + ("・收盤資料" if 即時加權 is not None else "")),
         卡片("成交金額", f"{今日['成交值億'].sum():,.0f}", "億元", 連結=錨("資金")),
@@ -1761,7 +1827,7 @@ def 三十秒卡():
     段落("30 SEC // 三十秒看盤")
     卡片格([卡片("觀察燈號", f"{燈} {''.join(燈們)}", 總結 or "資料不足", {"🟢": 紅, "🔴": 綠}.get(燈, "#FFC24B"), 錨("價位")),
            卡片("加權格局", 格["格局"], f"收盤 {sr['收盤']:,.0f}", {"上升": 紅, "下降": 綠}.get(格["格局"], "#EDEDED"),
-                錨("加權指數")),
+                錨("大盤走勢")),
            卡片("今天看的價位", f"{f(支)} / {f(壓)}",
                 f"支撐{'' if 支 is None else 支['名稱']} · 壓力{'' if 壓 is None else 壓['名稱']}", 連結=錨("價位"))])
     紀錄 = 大盤解讀紀錄(st.session_state.get("_解讀版本", 0))
@@ -3011,12 +3077,12 @@ def 漲跌分布區():
     st.caption(f"{判}；大漲（7% 以上）比大跌多 {尾:+d} 家。每根柱子＝漲跌幅落在那個區間（%）的股票家數，越往兩邊顏色越亮代表漲跌越大；只算上市櫃普通股，不含 ETF。")
 
 
-首頁區塊 = ["晨報", "必知", "30秒", "市場", "分布", "狀態", "價位", "AI解讀", "焦點", "國際", "總經", "連動", "加權指數", "月曆", "流向", "滑卡", "週報", "權值", "資金", "跌深", "止跌", "護盤", "選擇權", "情緒", "水位", "族群", "行事曆", "事件", "輝達", "延續", "排行"]
+首頁區塊 = ["晨報", "必知", "大盤走勢", "30秒", "市場", "分布", "狀態", "價位", "AI解讀", "焦點", "國際", "總經", "連動", "月曆", "流向", "滑卡", "週報", "權值", "資金", "跌深", "止跌", "護盤", "選擇權", "情緒", "水位", "族群", "行事曆", "事件", "輝達", "延續", "排行"]
 
 
-新手區塊 = ["30秒", "市場", "分布", "流向", "狀態", "水位", "AI解讀", "焦點", "排行"]
-手機區塊 = ["必知", "滑卡", "分布", "30秒", "流向", "月曆", "焦點"]
-版面們 = {"手機": "今天必須知道＋滑卡＋漲跌溫度帶＋三十秒看盤＋法人資金流向＋漲跌月曆＋焦點股，字大好讀", "新手": "只看 9 個重點區塊", "完整": "全部區塊", "自訂": "自己挑、自己排順序"}
+新手區塊 = ["大盤走勢", "30秒", "市場", "分布", "流向", "狀態", "水位", "AI解讀", "焦點", "排行"]
+手機區塊 = ["必知", "大盤走勢", "滑卡", "分布", "30秒", "流向", "月曆", "焦點"]
+版面們 = {"手機": "今天必須知道＋大盤 K 線＋滑卡＋漲跌溫度帶＋三十秒看盤＋法人資金流向＋漲跌月曆＋焦點股，字大好讀", "新手": "只看 10 個重點區塊", "完整": "全部區塊", "自訂": "自己挑、自己排順序"}
 預設版面 = "手機" if 手機 else "新手"
 _時 = pd.Timestamp.now(tz="Asia/Taipei")
 if (_時.hour, _時.minute) < (9, 30) and _時.weekday() < 5:  # 開盤前：晨報放最上面
@@ -3024,17 +3090,17 @@ if (_時.hour, _時.minute) < (9, 30) and _時.weekday() < 5:  # 開盤前：晨
 else:
     手機區塊 = 手機區塊[:-1] + ["晨報"] + 手機區塊[-1:]
 if _時.weekday() >= 5 or (_時.weekday() == 4 and _時.hour >= 14):  # 週五收盤後到週日：一週成績單放必知後面
-    手機區塊.insert(手機區塊.index("必知") + 1, "週報")
+    手機區塊.insert(手機區塊.index("大盤走勢") + 1, "週報")
 
 
 def 讀版面():
     """網址 layout=新手／完整／自訂:區塊1,區塊2…；舊的 hide= 書籤當成自訂。"""
-    值 = st.query_params.get("layout", "")
+    值 = st.query_params.get("layout", "").replace("加權指數", "大盤走勢")  # 舊書籤的區塊名稱
     if 值 in ("手機", "新手", "完整"):
         return 值, None
     if 值.startswith("自訂:"):
         return "自訂", [x for x in 值[3:].split(",") if x in 首頁區塊]
-    隱 = [x for x in st.query_params.get("hide", "").split(",") if x in 首頁區塊]
+    隱 = [x for x in st.query_params.get("hide", "").replace("加權指數", "大盤走勢").split(",") if x in 首頁區塊]
     if 隱:
         return "自訂", [x for x in 首頁區塊 if x not in 隱]
     return 預設版面, None  # 預設新手版面；手機模式預設手機版面（只看重點）
@@ -3065,7 +3131,7 @@ def _國際():
     except Exception:
         st.caption("國際行情暫時無法顯示。")
 區塊函式 = {"必知": 必知區, "分布": 漲跌分布區, "月曆": 漲跌月曆區, "流向": 資金流向區, "滑卡": 滑卡區, "晨報": 晨報區, "週報": 週報區, "30秒": 三十秒卡, "市場": 市場卡片, "狀態": 狀態區, "價位": 關鍵價位區, "AI解讀": AI解讀區, "焦點": 焦點區, "國際": _國際, "總經": 總經區, "連動": 連動區,
-         "加權指數": 加權圖 if 加權 is not None and len(加權) > 1 else None, "權值": 權值區, "資金": 資金面區, "跌深": 跌深區, "止跌": 止跌訊號區, "護盤": 護盤區, "選擇權": 選擇權區, "事件": 事件區, "輝達": 輝達週區, "延續": 反彈延續區,
+         "大盤走勢": 加權圖 if 加權 is not None and len(加權) > 1 else None, "權值": 權值區, "資金": 資金面區, "跌深": 跌深區, "止跌": 止跌訊號區, "護盤": 護盤區, "選擇權": 選擇權區, "事件": 事件區, "輝達": 輝達週區, "延續": 反彈延續區,
          "情緒": 情緒區, "水位": 資金水位區, "族群": 族群熱力圖, "行事曆": 行事曆區, "排行": 排行區}
 要畫 = [x for x in 顯示 if 區塊函式.get(x)]
 if len(要畫) > 3 and not (手機 and 模式 == "手機"):  # 首頁很長，上方放一排快速跳轉
