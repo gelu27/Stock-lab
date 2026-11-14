@@ -1,0 +1,38 @@
+name: 補台指期與匯率 K 線
+
+# 台指期近月、美元/台幣的開高低收（網站大盤走勢 K 線用）。每日更新也會抓，這裡是想立刻補齊時手動跑。
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency: data-update
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            update_data.py
+            data/status
+            data/fx.csv
+            data/futures_basis.csv
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pandas requests
+      - name: 抓匯率與台指期開高低收
+        run: python -c "import update_data as u; u.抓匯率(); u.抓台指期價差()"
+      - name: 存回 GitHub
+        run: |
+          git config user.name "stock-bot"
+          git config user.email "stock-bot@users.noreply.github.com"
+          git add data/fx.csv data/futures_basis.csv
+          git diff --cached --quiet && exit 0
+          git commit -m "補台指期與匯率開高低收（K 線用）"
+          git push
