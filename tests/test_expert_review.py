@@ -75,6 +75,14 @@ return int((t["漲跌"] > 0).sum()), int((t["漲跌"] == 0).sum()), int((t["漲�
     檢查(ns["水位有驗證"](正), "回測正向 → 顯示持股建議")
     檢查(not ns["水位有驗證"](少), "樣本太少 → 不給持股建議")
 
+    # 4. 登入通行證改存 cookie：站內連結不再帶 k=，解鎖改用 記住登入()
+    app原始 = Path(程式).read_text("utf-8")
+    連結 = app原始[app原始.index("def 登入參數"):app原始.index("def 股連結")]
+    檢查("&k=" not in 連結, "站內連結不再帶登入通行證 k=")
+    檢查("twk=" in app原始 and 'st.context.cookies.get("twk"' in app原始, "通行證存在 cookie、開站時讀 cookie 解鎖")
+    分頁們 = "".join((Path(程式).parent / "views" / f).read_text("utf-8") for f in ("p02_mystocks.py", "p03_stock.py", "p09_stats.py"))
+    檢查('query_params["k"]' not in 分頁們 and 分頁們.count("記住登入()") == 3, "三個解鎖入口都改用 記住登入()")
+
     if 錯誤:
         print(f"\n共 {len(錯誤)} 項沒通過")
         sys.exit(1)

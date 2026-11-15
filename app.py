@@ -533,6 +533,18 @@ html {{ font-size: 20px; }}
 .fab .fab-home {{ display: none !important; }}
 .fab a {{ width: 42px; height: 42px; opacity: .85; }}
 .menu {{ gap: 6px; }}
+.menuwrap {{ margin: 2px 0 6px; }}
+.menuwrap summary {{ list-style: none; cursor: pointer; padding: 10px 14px; border: 1px solid #16323A; border-radius: 12px;
+    color: #7FE9FF; font-family: 'Noto Sans TC', sans-serif; font-size: 17px; background: #061014; }}
+.menuwrap summary::-webkit-details-marker {{ display: none; }}
+.menuwrap[open] summary {{ margin-bottom: 8px; }}
+/* 頁首瘦身：Streamlit 上方工具列透明變矮、日期併進行情列 */
+header[data-testid="stHeader"] {{ background: transparent !important; height: 2.4rem !important; }}
+[data-testid="stMainBlockContainer"], .block-container {{ padding-top: 2.6rem !important; }}
+.tkrow {{ display: flex; align-items: center; gap: 8px; }}
+.tkrow .tkd {{ flex: 0 0 auto; font-family: 'JetBrains Mono', monospace; font-size: 14px; color: #8A9BA3; }}
+.tkrow .ticker {{ flex: 1 1 auto; min-width: 0; margin-top: 0 !important; margin-bottom: 0 !important; }}
+.tkrow .tkd {{ line-height: 1; padding-top: 2px; }}
 .menu a {{ aspect-ratio: auto !important; padding: 12px 4px 10px; gap: 6px; }}
 .menu a svg {{ width: 30px; height: 30px; }}
 .menu a span {{ font-size: 17px; }}
@@ -759,7 +771,6 @@ def _切換手機():
 _手 = bool(st.session_state.get("手機模式"))
 with st.container(key="toolbar"):
     if _手:  # 手機模式：日期一行，按鈕一排，較少用的開關收進「⚙️ 設定」
-        st.caption(f"📅 資料 {最新日:%m/%d}　·　更新 {最後更新()}")
         m, s, d, b = st.columns([1.8, 1, 1, 1], vertical_alignment="center")
         m.toggle("📱 手機", key="手機模式", on_change=_切換手機)
         with s.popover("⚙️ 設定"):
@@ -767,6 +778,7 @@ with st.container(key="toolbar"):
             n.toggle("🔰 新手模式", key="新手模式", help="打開後：首頁顯示三步驟看盤教學、個股頁先給白話一句話結論並收起進階指標；專有名詞旁的 ❓ 可看白話說明")
             c.toggle("📱 精簡表格", key="精簡表格", help="表格只留名稱、股價、漲跌等重點欄位，手機不用左右滑")
             e.toggle("⬇️ 下載表格", key="顯示下載", help="打開後，每個表格下面會多一個「下載 Excel」按鈕")
+            st.caption(f"📅 資料日期 {最新日:%Y/%m/%d}　·　資料庫最後更新 {最後更新()}")
     else:
         st.caption(f"📅 資料日期 {最新日:%Y/%m/%d}　·　資料庫最後更新 {最後更新()}"
                   '<span class="hide-m">（每個交易日約 18:00 自動更新）</span>', unsafe_allow_html=True)
@@ -791,10 +803,13 @@ if 手機:
     st.markdown(手機CSS, unsafe_allow_html=True)
 with d.popover("📖 名詞"):
     找 = st.text_input("查名詞", placeholder="例如：共振區、Beta、融資維持率", key="查名詞", label_visibility="collapsed")
-    for 詞, (白, 用, 坑) in beginner.名詞卡.items():
+    全部 = st.checkbox(f"列出全部 {len(beginner.名詞卡) + len(engine.名詞表)} 個名詞", key="名詞全列")
+    if not 找 and not 全部:
+        st.caption("輸入關鍵字查詢，或勾選上面列出全部。")
+    for 詞, (白, 用, 坑) in (beginner.名詞卡.items() if 找 or 全部 else []):
         if not 找 or 找.lower() in 詞.lower() or 找 in 白 + 用 + 坑:
             st.markdown(f"**{詞}**\n- 白話是什麼：{白}\n- 這數字怎麼用：{用}\n- 新手常見陷阱：{坑}")
-    for 詞, 說明 in engine.名詞表.items():
+    for 詞, 說明 in (engine.名詞表.items() if 找 or 全部 else []):
         if 詞 in beginner.名詞卡:
             continue
         if not 找 or 找.lower() in 詞.lower() or 找 in 說明:
@@ -899,7 +914,11 @@ def 跑馬燈():
         if q:
             加(名, q["價"], q["漲跌"], q["幅度"], "{:,.3f}" if 名 == "美元/台幣" else "{:,.2f}")
     內容 = "".join(項們)
-    st.markdown(f'<div class="ticker"><div class="tr">{內容}{內容}</div></div>', unsafe_allow_html=True)
+    if 手機:  # 手機：資料日期放在行情列左邊，不再獨佔一行
+        st.markdown(f'<div class="tkrow"><span class="tkd">{最新日:%m/%d}</span><div class="ticker"><div class="tr">{內容}{內容}</div></div></div>',
+                    unsafe_allow_html=True)
+    else:
+        st.markdown(f'<div class="ticker"><div class="tr">{內容}{內容}</div></div>', unsafe_allow_html=True)
 
 
 跑馬燈()
@@ -1041,11 +1060,9 @@ def 前往(代號):
 
 def 登入參數():
     """站內連結要帶著的網址參數（登入通行證、首頁版面、最近看過），點了才不會被登出或重設。"""
-    k = st.query_params.get("k")
     版 = st.query_params.get("layout")
     近 = st.query_params.get("r")
-    return ((f"&k={k}" if k and st.session_state.get("已解鎖") else "") + (f"&layout={urllib.parse.quote(版)}" if 版 else "")
-            + (f"&r={urllib.parse.quote(近)}" if 近 else ""))
+    return (f"&layout={urllib.parse.quote(版)}" if 版 else "") + (f"&r={urllib.parse.quote(近)}" if 近 else "")
 
 
 def 股連結(代號):
@@ -1114,11 +1131,29 @@ def 核對密碼(輸入, 上限=5, 鎖秒=600):
     return False
 
 
-if "k" in st.query_params:
+def 記住登入():
+    """解鎖後把通行證存在這台瀏覽器的 cookie（30 天），網址不再帶 k=，分享網址也不會把登入一起分享出去。"""
+    st.session_state["已解鎖"] = True
+    st.session_state["_cookie指令"] = {"cookie": 登入憑證(), "n": time.time()}
+
+
+def 忘記登入():
+    st.session_state["已解鎖"] = False
+    st.session_state["_cookie指令"] = {"cookie": "", "n": time.time()}
+
+
+if "k" in st.query_params:  # 舊書籤、舊連結的 ?k=：有效就換成 cookie，並從網址拿掉
     if 憑證有效(st.query_params["k"]):
+        記住登入()
+    del st.query_params["k"]
+elif not st.session_state.get("已解鎖") and "_cookie登入" not in st.session_state:
+    st.session_state["_cookie登入"] = True  # 每個瀏覽階段只看一次 cookie（登出後不會又自動登入）
+    try:
+        _餅 = st.context.cookies.get("twk", "")
+    except Exception:
+        _餅 = ""
+    if _餅 and 憑證有效(_餅):
         st.session_state["已解鎖"] = True
-    else:
-        del st.query_params["k"]
 
 if "已計來訪" not in st.session_state:  # 每個瀏覽階段記一次來客數（背景存檔，不拖慢網頁）
     st.session_state["已計來訪"] = True
@@ -1207,10 +1242,39 @@ def _站內導航():
 
 _導航程式 = r"""
 export default function(component) {
-  const { setTriggerValue } = component;
+  const { setTriggerValue, data } = component;
   window.__twNav = setTriggerValue;          // 每次重畫都換成最新的回傳函式
+  // 登入通行證存在 cookie（網址不再帶 k=）；n 是這次指令的編號，同一個指令只執行一次
+  if (data && data.n && data.n !== window.__twCookieN) {
+    window.__twCookieN = data.n;
+    const 安 = location.protocol === "https:" ? "; Secure" : "";
+    document.cookie = data.cookie
+      ? `twk=${data.cookie}; Max-Age=${30 * 86400}; Path=/; SameSite=Lax${安}`
+      : `twk=; Max-Age=0; Path=/; SameSite=Lax${安}`;
+  }
   if (window.__twNavInit) return;
   window.__twNavInit = true;
+  // 斷線提示：手機訊號不好時，上方出現一條「連線中斷」，恢復後自動消失
+  const 橫幅 = () => {
+    let b = document.getElementById("tw-offline");
+    if (!b) {
+      b = document.createElement("div");
+      b.id = "tw-offline";
+      b.textContent = "⚠️ 連線中斷，正在重新連線…（畫面上的資料暫時不會更新）";
+      b.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:100000;padding:8px 12px;background:#3A2A00;color:#FFD27A;" +
+        "font:15px 'Noto Sans TC',sans-serif;text-align:center;border-bottom:1px solid #FFB020;display:none";
+      document.body.appendChild(b);
+    }
+    return b;
+  };
+  const 檢查連線 = () => {
+    const w = document.querySelector('[data-testid="stStatusWidget"]');
+    const 斷 = !navigator.onLine || !!(w && /Connecting|Reconnecting|Offline/i.test(w.innerText || ""));
+    橫幅().style.display = 斷 ? "block" : "none";
+  };
+  window.addEventListener("offline", 檢查連線);
+  window.addEventListener("online", 檢查連線);
+  setInterval(檢查連線, 2000);
   const 送 = (名, 值) => { try { window.__twNav(名, 值); } catch (e) {} };
   // 1. 站內連結（?s=2330、?p=07）改成站內切換，不重新載入整頁；按住 Ctrl／⌘ 點仍然另開分頁
   document.addEventListener('click', (e) => {
@@ -1258,7 +1322,7 @@ export default function(component) {
 """
 _導航元件 = st.components.v2.component("tw_nav", js=_導航程式)
 with st.container(key="navjs"):
-    _導航元件(key="站內導航", on_go_change=_站內導航, on_key_change=_站內導航)
+    _導航元件(key="站內導航", data=st.session_state.get("_cookie指令"), on_go_change=_站內導航, on_key_change=_站內導航)
 
 if st.session_state.get("頁面") != 頁面們[2]:  # 個股查詢頁本身就有搜尋框
     st.selectbox("搜尋股票", 股票選項, index=None, key="全站搜尋", on_change=_搜尋跳轉, label_visibility="collapsed",
@@ -1289,7 +1353,11 @@ def 圖示選單(小=False):
         f'<a href="?p={碼}" target="_self" class="{"on" if 頁面.startswith(碼) else ""}">'
         f'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">{路}</svg>'
         f'<span>{_圖示名[碼]}</span></a>' for 碼, 路 in _圖示路徑.items())
-    st.markdown(f'<div class="{"menu-s" if 小 else "menu"}">{格}</div>', unsafe_allow_html=True)
+    if 小:
+        st.markdown(f'<div class="menu-s">{格}</div>', unsafe_allow_html=True)
+    else:  # 手機首頁：預設收起成一列，點開才看 3×3 大圖示（底部選單已經能換頁，第一屏留給重點）
+        st.markdown(f'<details class="menuwrap"><summary>▦ 全部功能（9 頁）</summary><div class="menu">{格}</div></details>',
+                    unsafe_allow_html=True)
 
 
 if 手機 and 頁面 == 頁面們[0]:   # 其他頁面用底部選單換頁，不再重複一排小圖示

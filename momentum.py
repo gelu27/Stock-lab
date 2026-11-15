@@ -286,7 +286,7 @@ def 族群輪動階段(來源, 最少檔數=6):
 def 資金水位(指標, 加權, vix=None):
     """每天一個 0～100 的「市場健康分數」與建議持股水位（20%～90%）：
     市場寬度（站上 20 日線家數比例）、騰落（近 10 日上漲減下跌家數）、加權指數相對 60 日線、VIX（越低越好）
-    各自在這段期間的百分位，平均起來。回傳 (每日表, 回測表)。回測＝分數高／中／低時，加權之後 20 日的表現。"""
+    各自跟「當天以前」的資料比的百分位（前 60 天不算），平均起來。回傳 (每日表, 回測表)。回測＝分數高／中／低時，加權之後 20 日的表現。"""
     t = 指標[["date", "代號", "還原價", "MA20", "漲跌"]].dropna(subset=["還原價"])
     t = t[t["代號"].astype(str).str.fullmatch(r"\d{4}")]
     日 = t.groupby("date").agg(站上月線=("還原價", lambda s: np.nan), 家數=("代號", "size"))
@@ -300,7 +300,13 @@ def 資金水位(指標, 加權, vix=None):
         v = vix.set_index("date")["close"]
         日["VIX"] = v.reindex(日.index, method="ffill")
     成分 = [c for c in ("站上月線", "騰落10日", "加權對季線%", "VIX") if c in 日 and 日[c].notna().any()]
-    分 = pd.concat([(日[c].rank(pct=True) if c != "VIX" else 1 - 日[c].rank(pct=True)) for c in 成分], axis=1)
+    # 百分位只跟「當天以前」比（不偷看未來）：以前用整段期間排名，回測會比實際好看
+    def 當時百分位(序列):
+        def 排(x):
+            x = x[~np.isnan(x)]
+            return (x <= x[-1]).mean() if len(x) >= 60 and not np.isnan(x[-1]) else np.nan
+        return 序列.expanding(min_periods=60).apply(lambda x: 排(x) if not np.isnan(x[-1]) else np.nan, raw=True)
+    分 = pd.concat([(當時百分位(日[c]) if c != "VIX" else 1 - 當時百分位(日[c])) for c in 成分], axis=1)
     日["分數"] = (分.mean(axis=1) * 100).round(0)
     日["建議持股%"] = (20 + 日["分數"] * 0.7).clip(20, 90).round(-1)
     日["之後20日%"] = (w.shift(-20) / w - 1).reindex(日.index) * 100

@@ -20,8 +20,7 @@ def 我的庫存():
         段落("PORTFOLIO // 我的庫存")
         輸入 = st.text_input("輸入密碼查看庫存", type="password")
         if 輸入 and 核對密碼(輸入):
-            st.session_state["已解鎖"] = True
-            st.query_params["k"] = 登入憑證()
+            記住登入()
             st.rerun()
         return
 
@@ -54,10 +53,9 @@ def 我的庫存():
     交易日記區()
     if 密碼:
         a, b = st.columns([4, 1])
-        a.caption("已記住登入（網址裡的 k=… 就是通行證，請勿分享登入後的網址）。可把這個網址加入書籤或主畫面。")
+        a.caption("已在這台裝置記住登入 30 天（存在瀏覽器，不在網址裡，分享網址不會把登入分享出去）。公用電腦用完請按登出。")
         if b.button("🔒 登出", key="登出"):
-            st.session_state["已解鎖"] = False
-            st.query_params.pop("k", None)
+            忘記登入()
             st.rerun()
 
 
