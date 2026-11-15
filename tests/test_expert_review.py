@@ -83,6 +83,36 @@ return int((t["漲跌"] > 0).sum()), int((t["漲跌"] == 0).sum()), int((t["漲�
     分頁們 = "".join((Path(程式).parent / "views" / f).read_text("utf-8") for f in ("p02_mystocks.py", "p03_stock.py", "p09_stats.py"))
     檢查('query_params["k"]' not in 分頁們 and 分頁們.count("記住登入()") == 3, "三個解鎖入口都改用 記住登入()")
 
+    # 5. 停損全觸發試算（已搬到 portfolio.py，engine 仍可用）
+    sys.path.insert(0, str(Path(程式).parent))
+    import datetime as dt
+    import engine
+    import notify
+    import portfolio
+    持 = pd.DataFrame({"代號": ["2330", "0050", "9999"], "股數": [1000, 2000, 10]})
+    表, 總 = portfolio.停損全觸發(持, {"2330": 1000.0, "0050": 50.0}, {"2330": 900.0}, 現金=100000)
+    檢查(engine.停損全觸發 is portfolio.停損全觸發 and engine.庫存風險 is portfolio.庫存風險, "engine 仍 re-export 拆出的函式")
+    檢查(len(表) == 2 and round(總["總損失"]) == -108000, "日記停損 900 + 0050 預設 −8% → 全觸發少 10.8 萬")
+    檢查(表.set_index("代號").at["2330", "占比燈"] == "🔴 過重" and round(總["股票水位%"]) == 92, "單檔占比燈號、股票水位")
+
+    # 6. 排程看門狗：該跑的沒跑、被 GitHub 停用都要通知
+    台 = notify.台北
+    週一早 = dt.datetime(2026, 11, 16, 9, 5, tzinfo=台)
+    檢查(notify.上次應跑("18:17", range(0, 5), 週一早) == dt.datetime(2026, 11, 13, 18, 17, tzinfo=台), "週一早上檢查上週五晚上的更新")
+    檢查(notify.排程問題(lambda f: ("active", 週一早), 週一早) == [], "都有跑 → 不通知")
+    問 = notify.排程問題(lambda f: ("disabled_inactivity", None) if f == "margin.yml"
+                      else ("active", dt.datetime(2026, 11, 12, 10, 0, tzinfo=dt.timezone.utc) if f == "update.yml" else 週一早), 週一早)
+    檢查(len(問) == 2 and "更新資料庫" in 問[0] and "停用" in 問[1], "漏跑、被停用各通知一行")
+
+    # 7. 訊號可信度標記：依規則體檢判定
+    片 = app原始[app原始.index("def 可信度"):app原始.index("def 漲跌家數")]
+    ns = {"_版本": 0, "_規則體檢表": lambda v: ({"多頭排列": {"判定": "有效", "天數": 20, "超額%": 0.88},
+                                             "VCP突破": {"判定": "沒有優勢", "天數": 20, "超額%": 0.03}}, "2026-11-12")}
+    exec(片, ns)
+    檢查(ns["可信度"]("多頭排列").startswith("✅ 有效") and ns["可信度"]("VCP突破", True) == "➖"
+         and ns["可信度"]("沒這條", True) == "❔", "可信度：有效 ✅、沒有優勢 ➖、還沒驗證 ❔")
+    檢查(ns["已驗證"]("多頭排列") and not ns["已驗證"]("VCP突破"), "只有判定有效才算已驗證")
+
     if 錯誤:
         print(f"\n共 {len(錯誤)} 項沒通過")
         sys.exit(1)

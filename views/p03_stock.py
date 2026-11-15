@@ -404,7 +404,7 @@ def 個股價位區(代號):
     紀 = engine.停損紀律狀態(K)
     if 紀:
         類 = {"🟢": "g", "🟡": "y", "🔴": "r"}.get(紀["燈"], "y")
-        st.markdown(f'<div class="lamp {類}" style="margin:6px 0"><div class="t"><i>{紀["燈"]}</i>老王停損紀律：{紀["建議"]}</div>'
+        st.markdown(f'<div class="lamp {類}" style="margin:6px 0"><div class="t"><i>{紀["燈"]}</i>停損紀律：{紀["建議"]}</div>'
                     f'<div class="s">{紀["說明"]}</div></div>', unsafe_allow_html=True)
         with st.expander("🧪 這套紀律在這檔有用嗎？（5 年回測）"):
             停損紀律回測表(代號)
@@ -651,7 +651,7 @@ def 公司介紹區(代號, r):
         卡們.append(卡片("成立 / 上市", 簡.get("成立日期") or "—", f"上市櫃 {簡.get('上市日期') or '—'}"))
     卡片格(卡們)
     if 資["業務"]:
-        st.markdown(f'<div class="verdict sub"><b>主要經營業務</b>　{資["業務"]}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="verdict sub"><b>主要經營業務</b>　{html.escape(str(資["業務"]))}</div>', unsafe_allow_html=True)
     if 資["概念"]:
         st.caption("🏷️ " + 資["概念"])
     比 = 資["比重表"]
@@ -861,8 +861,10 @@ def 交易計畫卡(代號):
     名們 = ["強勢突破", "VCP突破", "領頭羊", "RS強勢", "多頭排列", "法人連買"]
     有 = [k for k in 名們 if bool(列.get(k))]
     st.markdown(f"**RS 等級 {列['RS']:.0f}**（贏過全市場 {列['RS']:.0f}% 的股票）　·　今天符合："
-                + ("、".join(f"🔴 {k}" for k in 有) if 有 else "沒有符合任何做多訊號")
+                + ("、".join(f"🔴 {k} {可信度(k, True)}" for k in 有) if 有 else "沒有符合任何做多訊號")
                 + (f"　·　量 {列['量倍數']:.1f} 倍於前 5 日均量" if pd.notna(列.get("量倍數")) else ""))
+    if 有:
+        st.caption("可信度（每月規則體檢，亮燈後比任何一天多賺幾 %）：" + "；".join(f"{k} {可信度(k)}" for k in 有))
     K = 個股K線(代號)
     壓力 = None
     try:
@@ -1399,11 +1401,11 @@ def 查核區(文字, 包):
 def 辯論顯示(結果, 包):
     長 = 結果.get("投資長") or {}
     色 = {"偏多": 紅, "偏空": 綠}.get(長.get("結論"), "#EDEDED")
-    卡片格([卡片("投資長裁決", 長.get("結論", "—"), f"信心：{長.get('信心', '—')}", 色),
-           卡片("引用的回測", "", str(長.get("引用回測", "—"))[:80]),
-           卡片("論點失效條件", "", str(長.get("論點失效條件", "—"))[:80])])
-    if 長.get("一句話"):
-        st.markdown(f'<div class="verdict">{長["一句話"]}</div>', unsafe_allow_html=True)
+    卡片格([卡片("投資長裁決", html.escape(str(長.get("結論", "—"))), f"信心：{html.escape(str(長.get('信心', '—')))}", 色),
+           卡片("引用的回測", "", html.escape(str(長.get("引用回測", "—"))[:80])),
+           卡片("論點失效條件", "", html.escape(str(長.get("論點失效條件", "—"))[:80]))])
+    if 長.get("一句話"):  # AI 寫的文字一律跳脫，避免夾帶 HTML
+        st.markdown(f'<div class="verdict">{html.escape(str(長["一句話"]))}</div>', unsafe_allow_html=True)
     a, b = st.columns(2)
     with a.container(border=True):
         st.markdown("**🐂 多方（激進做多操盤手）**\n\n" + 結果.get("多方", ""))
@@ -2319,20 +2321,20 @@ with 分頁[4], 區塊防護("AI 分析"):
                     def 價(k):
                         v = 建議.get(k)
                         return float(v) if isinstance(v, (int, float)) else np.nan
-                    看 = 建議.get("看法") or "—"
+                    看 = html.escape(str(建議.get("看法") or "—"))  # AI 產生的文字放進卡片前先跳脫
                     合理 = 價("目標價合理")
                     空間 = (合理 / r["收盤"] - 1) * 100 if pd.notna(合理) else np.nan
-                    色 = {"偏多": 紅, "偏空": 綠}.get(看, 灰)
+                    色 = {"偏多": 紅, "偏空": 綠}.get(建議.get("看法"), 灰)
                     段落(f"AI 建議 // {上次['時間'][:10]}")
                     卡片格([卡片("AI 看法", 看, "舊版報告，重新分析後會有目標價卡片", 色)] if "目標價合理" not in 建議 else [
-                        卡片("AI 看法", 看, f"短線 {建議.get('短線') or '—'} · 中期 {建議.get('中期') or '—'}", 色),
+                        卡片("AI 看法", 看, html.escape(f"短線 {建議.get('短線') or '—'} · 中期 {建議.get('中期') or '—'}"), 色),
                         卡片("合理目標價", 數(合理), f"距現價 {數(空間, '{:+.1f}', '%')}", 漲跌色(空間 if pd.notna(空間) else 0)),
                         卡片("目標價區間", f"{數(價('目標價保守'), '{:,.0f}')} ~ {數(價('目標價樂觀'), '{:,.0f}')}",
                              f"券商目標價 {數(價('券商目標價'), '{:,.0f}')}"),
                         卡片("預估本益比", 數(價("預估本益比"), "{:.1f}", " 倍"),
                              f"EPS 今年 {數(價('今年EPS'))} / 明年 {數(價('明年EPS'))}"),
                         卡片("支撐 / 壓力", f"{數(價('支撐'), '{:,.0f}')} / {數(價('壓力'), '{:,.0f}')}"),
-                        卡片("停損參考", 數(價("停損"), "{:,.0f}"), 建議.get("看錯條件") or "", 綠),
+                        卡片("停損參考", 數(價("停損"), "{:,.0f}"), html.escape(str(建議.get("看錯條件") or "")), 綠),
                     ])
                     if 建議.get("評價方法"):
                         st.caption(f"目標價怎麼算：{建議['評價方法']}")

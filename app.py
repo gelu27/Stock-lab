@@ -29,6 +29,7 @@ os.environ["TZ"] = "Asia/Taipei"
 if hasattr(time, "tzset"):
     time.tzset()
 
+import portfolio
 import engine
 import etf_data
 import etf_analysis
@@ -40,16 +41,47 @@ import ai_debate
 import feedback
 import glance
 
-importlib.reload(engine)
-importlib.reload(etf_data)  # 程式更新後確保用的是最新版的計算規則
-importlib.reload(etf_analysis)
-importlib.reload(etf_perf)
-importlib.reload(momentum)  # 順勢做多選股引擎
-importlib.reload(beginner)  # 新手白話：名詞小卡、白話燈號
-importlib.reload(ai_debate)  # AI 多空辯論、數字查核
-importlib.reload(macro)  # 01 首頁總經／資金用；沒重新載入時，部署新版後會沿用舊版 macro 而找不到新函式
-importlib.reload(feedback)  # 回饋循環：錯誤本、券商與網紅記分板、規則體檢
-importlib.reload(glance)  # 一眼判斷：清單表情徽章、估值位階、重點卡三格、風險框、檢查表
+@st.cache_resource
+def _模組時間():
+    return {}
+
+
+def _已改(模組):
+    """模組檔案有改過（部署新版）才重新載入；以前每次重跑都重載 10 個模組，背景執行緒可能拿到半新半舊的版本。"""
+    try:
+        t = Path(模組.__file__).stat().st_mtime
+    except Exception:
+        return True
+    紀 = _模組時間()
+    if 紀.get(模組.__name__) == t:
+        return False
+    紀[模組.__name__] = t
+    return True
+
+
+_拆出改了 = _已改(portfolio)
+if _拆出改了:
+    importlib.reload(portfolio)  # engine 拆出的模組先重載，engine 再重載才會拿到新版
+if _已改(engine) or _拆出改了:
+    importlib.reload(engine)
+if _已改(etf_data):
+    importlib.reload(etf_data)  # 程式更新後確保用的是最新版的計算規則
+if _已改(etf_analysis):
+    importlib.reload(etf_analysis)
+if _已改(etf_perf):
+    importlib.reload(etf_perf)
+if _已改(momentum):
+    importlib.reload(momentum)  # 順勢做多選股引擎
+if _已改(beginner):
+    importlib.reload(beginner)  # 新手白話：名詞小卡、白話燈號
+if _已改(ai_debate):
+    importlib.reload(ai_debate)  # AI 多空辯論、數字查核
+if _已改(macro):
+    importlib.reload(macro)  # 01 首頁總經／資金用；沒重新載入時，部署新版後會沿用舊版 macro 而找不到新函式
+if _已改(feedback):
+    importlib.reload(feedback)  # 回饋循環：錯誤本、券商與網紅記分板、規則體檢
+if _已改(glance):
+    importlib.reload(glance)  # 一眼判斷：清單表情徽章、估值位階、重點卡三格、風險框、檢查表
 
 _圖示 = Path(__file__).parent / "static" / "icon-192.png"
 st.set_page_config(page_title="台股觀測站", page_icon=str(_圖示) if _圖示.exists() else "◢", layout="wide")
@@ -80,26 +112,50 @@ if not st.session_state.get("_主畫面圖示"):
     } catch (e) {}
     </script>""", height=1)
 
-# ---------- 手機模式的圖表：關掉拖曳／縮放，手指滑過圖表是捲動頁面，圖不會跑掉 ----------
-if not getattr(st.plotly_chart, "_手機包裝", False):
-    _原圖表 = st.plotly_chart
+# ---------- 所有圖表統一包一層：手機關掉拖曳／縮放；日期軸、數字改成中文習慣 ----------
+if not hasattr(st, "_原始plotly"):  # 只記一次原本的 st.plotly_chart；之後每次重跑都換上最新版的包裝
+    st._原始plotly = getattr(st.plotly_chart, "_原圖表", st.plotly_chart)
+_原圖表 = st._原始plotly
+_日期格式 = [dict(dtickrange=[None, 86400000], value="%m/%d %H:%M"), dict(dtickrange=[86400000, 604800001], value="%m/%d"),
+           dict(dtickrange=[604800001, "M12"], value="%Y/%m"), dict(dtickrange=["M12", None], value="%Y")]
 
-    def _圖表(圖=None, *a, **k):
-        if st.session_state.get("手機模式") and 圖 is not None and hasattr(圖, "update_layout"):
-            try:
-                圖.update_layout(dragmode=False)
-                圖.update_xaxes(fixedrange=True)
-                圖.update_yaxes(fixedrange=True)
-                圖.update_traces(arrangement="fixed", selector=dict(type="sankey"))  # 桑基圖節點不能被拖走
-            except Exception:
-                pass
-            設定 = dict(k.get("config") or {})
-            設定.update(scrollZoom=False, displayModeBar=False, doubleClick=False)
-            k["config"] = 設定
-        return _原圖表(圖, *a, **k)
 
-    _圖表._手機包裝 = True
-    st.plotly_chart = _圖表
+def _是日期軸(圖):
+    for t in 圖.data[:3]:
+        x = getattr(t, "x", None)
+        if x is not None and len(x):
+            v = x[0]
+            if isinstance(v, (dt.date, pd.Timestamp, np.datetime64)):
+                return True
+            if isinstance(v, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}.*", v):
+                return True
+    return False
+
+
+def _圖表(圖=None, *a, **k):
+    if 圖 is not None and hasattr(圖, "update_layout"):
+        try:  # 日期軸用 11/13、2026/07；數字不用 50k 這種英文縮寫
+            if _是日期軸(圖):
+                圖.update_xaxes(tickformatstops=_日期格式, hoverformat="%Y/%m/%d", selector=lambda a: not a.tickformat)
+            圖.update_yaxes(exponentformat="none", selector=lambda a: not a.tickformat)
+        except Exception:
+            pass
+    if st.session_state.get("手機模式") and 圖 is not None and hasattr(圖, "update_layout"):
+        try:
+            圖.update_layout(dragmode=False)
+            圖.update_xaxes(fixedrange=True)
+            圖.update_yaxes(fixedrange=True)
+            圖.update_traces(arrangement="fixed", selector=dict(type="sankey"))  # 桑基圖節點不能被拖走
+        except Exception:
+            pass
+        設定 = dict(k.get("config") or {})
+        設定.update(scrollZoom=False, displayModeBar=False, doubleClick=False)
+        k["config"] = 設定
+    return _原圖表(圖, *a, **k)
+
+
+_圖表._原圖表 = _原圖表
+st.plotly_chart = _圖表
 
 # ---------- 外觀：黑底前衛風格 ----------
 青 = "#00E5FF"
@@ -123,6 +179,11 @@ h1, h2, h3 {{ font-family: 'Space Grotesk', 'Noto Sans TC', sans-serif !importan
 .hero .title {{ font-size: clamp(34px, 6vw, 72px); font-weight: 900; line-height: .95; margin: 8px 0 6px; }}
 .hero .title span {{ color: {青}; }}
 .hero .sub {{ font-family: 'JetBrains Mono'; color: {灰}; font-size: 12px; margin-top: 8px; }}
+@media (min-width: 769px) {{  /* 桌面首屏：標題壓成一行，下面的指數卡和走勢圖往上提 */
+  .hero {{ display: flex; align-items: baseline; flex-wrap: wrap; column-gap: 20px; row-gap: 2px; padding: 14px 22px 12px; margin-bottom: 12px; }}
+  .hero .title {{ font-size: clamp(30px, 3.2vw, 44px); margin: 0; order: -1; }}
+  .hero .sub {{ margin-top: 0; flex-basis: 100%; }}
+}}
 .card {{ border: 1px solid #1E1E1E; padding: 14px 16px; background: #070707; height: 100%; }}
 .card .k {{ font-family: 'JetBrains Mono'; font-size: 11px; color: {灰}; letter-spacing: .2em; text-transform: uppercase; }}
 .card .v {{ font-family: 'JetBrains Mono'; font-size: 28px; font-weight: 700; margin-top: 4px; }}
@@ -170,6 +231,11 @@ a.cardlink:hover .card, a.cardlink:active .card {{ border-color: {青}; backgrou
 .ticker .tr {{ display: inline-block; animation: tk 70s linear infinite; }}
 .ticker:hover .tr, .ticker:active .tr {{ animation-play-state: paused; }}
 .ticker span {{ font-family: 'JetBrains Mono', 'Noto Sans TC', monospace; font-size: 13px; margin-right: 30px; }}
+.skel {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; margin: 8px 0 16px; }}
+.skel .sk {{ height: 88px; border-radius: 12px; border: 1px solid #12232A;
+    background: linear-gradient(90deg, #070D10 0%, #0E1C22 40%, #070D10 80%) 0 0 / 300% 100%; animation: skel 1.4s ease-in-out infinite; }}
+.skel-note {{ color: #7FE9FF; font-family: 'Noto Sans TC', sans-serif; font-size: 15px; margin-top: 6px; }}
+@keyframes skel {{ 0% {{ background-position: 100% 0; }} 100% {{ background-position: 0 0; }} }}
 .ticker span b {{ color: #9A9A9A; font-weight: 400; margin-right: 6px; font-family: 'Noto Sans TC', sans-serif; }}
 @keyframes tk {{ from {{ transform: translateX(0); }} to {{ transform: translateX(-50%); }} }}
 /* 美化：段落標題加菱形記號、卡片上緣漸層、排行表滑過整列變亮、捲軸變細 */
@@ -565,6 +631,11 @@ header[data-testid="stHeader"] {{ background: transparent !important; height: 2.
 .stTabs [data-baseweb="tab"] p {{ font-size: 18px !important; }}
 [data-testid="stDataFrame"] {{ font-size: 16px; }}
 .must div i {{ font-size: 21px; }}
+.sec .en {{ display: none; }}  /* 手機上英文小標只是裝飾，拿掉讓標題更乾淨 */
+.tipbox i {{ font-size: 13px !important; }}
+/* 手機字級下限 13px：表格、小字說明不再小到要放大才看得到 */
+[data-testid="stMarkdownContainer"] :is(span, small, td, th, li, em, div, b, a) {{ font-size: max(13px, 1em); }}
+[data-testid="stMarkdownContainer"] table :is(td, th) {{ font-size: 14px !important; }}
 </style>"""
 
 
@@ -723,7 +794,15 @@ if _目前版本()["版本"] not in (None, _版本):
     載入.clear()
     engine.釋放記憶體()
 _目前版本()["版本"] = _版本
+_骨架 = None
+if not st.session_state.get("_已載入過"):  # 第一次開站（網站剛睡醒要讀 20 秒資料）：先畫灰色卡片骨架，不讓畫面空白
+    _骨架 = st.empty()
+    _骨架.markdown('<div class="skel-note">資料讀取中，第一次開站約需 20 秒…</div><div class="skel">'
+                 + '<div class="sk"></div>' * 6 + '</div>', unsafe_allow_html=True)
 指標, 加權 = 載入(_版本)
+if _骨架 is not None:
+    _骨架.empty()
+    st.session_state["_已載入過"] = True
 
 st.markdown("""<div id="top"></div><div class="fab"><a class="fab-home" href="?p=01" target="_self" title="回首頁"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h5v-6h4v6h5V10"/></svg></a><a class="totop" href="#top" target="_self" title="回到頂端"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg></a></div><div class="hero"><div class="kicker">TAIWAN STOCK EXCHANGE // PERSONAL LAB</div>
 <div class="title">台股<span>觀測</span>實驗室</div>
@@ -772,21 +851,21 @@ _手 = bool(st.session_state.get("手機模式"))
 with st.container(key="toolbar"):
     if _手:  # 手機模式：日期一行，按鈕一排，較少用的開關收進「⚙️ 設定」
         m, s, d, b = st.columns([1.8, 1, 1, 1], vertical_alignment="center")
-        m.toggle("📱 手機", key="手機模式", on_change=_切換手機)
-        with s.popover("⚙️ 設定"):
+        m.toggle(":material/smartphone: 手機", key="手機模式", on_change=_切換手機)
+        with s.popover(":material/tune: 設定"):
             n, c, e = st, st, st
-            n.toggle("🔰 新手模式", key="新手模式", help="打開後：首頁顯示三步驟看盤教學、個股頁先給白話一句話結論並收起進階指標；專有名詞旁的 ❓ 可看白話說明")
-            c.toggle("📱 精簡表格", key="精簡表格", help="表格只留名稱、股價、漲跌等重點欄位，手機不用左右滑")
-            e.toggle("⬇️ 下載表格", key="顯示下載", help="打開後，每個表格下面會多一個「下載 Excel」按鈕")
-            st.caption(f"📅 資料日期 {最新日:%Y/%m/%d}　·　資料庫最後更新 {最後更新()}")
+            n.toggle(":material/school: 新手模式", key="新手模式", help="打開後：首頁顯示三步驟看盤教學、個股頁先給白話一句話結論並收起進階指標；專有名詞旁的 ❓ 可看白話說明")
+            c.toggle(":material/view_agenda: 精簡表格", key="精簡表格", help="表格只留名稱、股價、漲跌等重點欄位，手機不用左右滑")
+            e.toggle(":material/download: 下載表格", key="顯示下載", help="打開後，每個表格下面會多一個「下載 Excel」按鈕")
+            st.caption(f":material/calendar_today: 資料日期 {最新日:%Y/%m/%d}　·　資料庫最後更新 {最後更新()}")
     else:
-        st.caption(f"📅 資料日期 {最新日:%Y/%m/%d}　·　資料庫最後更新 {最後更新()}"
+        st.caption(f":material/calendar_today: 資料日期 {最新日:%Y/%m/%d}　·　資料庫最後更新 {最後更新()}"
                   '<span class="hide-m">（每個交易日約 18:00 自動更新）</span>', unsafe_allow_html=True)
         m, n, c, e, d, b = st.columns([1.15, 1.15, 1.15, 1.15, .7, .7], vertical_alignment="center")
-        m.toggle("📱 手機模式", key="手機模式", on_change=_切換手機, help=手機說明)
-        n.toggle("🔰 新手模式", key="新手模式", help="打開後：首頁顯示三步驟看盤教學、個股頁先給白話一句話結論並收起進階指標；專有名詞旁的 ❓ 可看白話說明")
-        c.toggle("📱 精簡表格", key="精簡表格", help="表格只留名稱、股價、漲跌等重點欄位，手機不用左右滑")
-        e.toggle("⬇️ 下載表格", key="顯示下載", help="打開後，每個表格下面會多一個「下載 Excel」按鈕")
+        m.toggle(":material/smartphone: 手機模式", key="手機模式", on_change=_切換手機, help=手機說明)
+        n.toggle(":material/school: 新手模式", key="新手模式", help="打開後：首頁顯示三步驟看盤教學、個股頁先給白話一句話結論並收起進階指標；專有名詞旁的 ❓ 可看白話說明")
+        c.toggle(":material/view_agenda: 精簡表格", key="精簡表格", help="表格只留名稱、股價、漲跌等重點欄位，手機不用左右滑")
+        e.toggle(":material/download: 下載表格", key="顯示下載", help="打開後，每個表格下面會多一個「下載 Excel」按鈕")
 新手 = bool(st.session_state.get("新手模式"))
 if (st.query_params.get("n") == "1") != 新手:
     if 新手:
@@ -801,7 +880,7 @@ else:
     st.query_params["m"] = "1" if 手機 else "0"
 if 手機:
     st.markdown(手機CSS, unsafe_allow_html=True)
-with d.popover("📖 名詞"):
+with d.popover(":material/menu_book: 名詞"):
     找 = st.text_input("查名詞", placeholder="例如：共振區、Beta、融資維持率", key="查名詞", label_visibility="collapsed")
     全部 = st.checkbox(f"列出全部 {len(beginner.名詞卡) + len(engine.名詞表)} 個名詞", key="名詞全列")
     if not 找 and not 全部:
@@ -814,7 +893,7 @@ with d.popover("📖 名詞"):
             continue
         if not 找 or 找.lower() in 詞.lower() or 找 in 說明:
             st.markdown(f"**{詞}**　{說明}")
-with b.popover("🔄 更新"):
+with b.popover(":material/sync: 更新"):
     st.markdown("**重新載入**：資料庫已經更新、但網站顯示的還是舊資料時按。")
     if st.button("🔄 重新載入網站資料", key="重新載入"):
         try:
@@ -878,6 +957,31 @@ def 讀檔(函式名, 版本鍵, *參數):
 @st.cache_data(ttl=300, show_spinner=False)
 def 抓國際():
     return engine.國際行情(), engine.台指期()
+
+
+@st.cache_data(ttl=3600)
+def _規則體檢表(版本鍵):
+    try:
+        歷 = feedback.讀取規則體檢().get("歷史", [])
+        return {r["規則"]: r for r in (歷[-1]["規則"] if 歷 else [])}, (歷[-1]["計算日"] if 歷 else "")
+    except Exception:
+        return {}, ""
+
+
+def 可信度(規則, 只要圖示=False):
+    """訊號旁的可信度標記，依每月規則體檢（data/rule_health.json）：✅ 回測有效、➖ 沒有優勢、⚠️ 反向、❔ 還沒驗證。"""
+    表, 日 = _規則體檢表(_版本)
+    r = 表.get(規則)
+    判 = r["判定"] if r else "還沒驗證"
+    圖 = {"有效": "✅", "沒有優勢": "➖", "反向": "⚠️"}.get(判, "❔")
+    if 只要圖示:
+        return 圖
+    return f"{圖} {判}" + (f"（{r['天數']} 日超額 {r['超額%']:+.1f}%）" if r and r.get("超額%") is not None else "")
+
+
+def 已驗證(規則):
+    """規則體檢判定「有效」才算；首頁必知只放這種訊號。"""
+    return _規則體檢表(_版本)[0].get(規則, {}).get("判定") == "有效"
 
 
 def 漲跌家數(表=None):
@@ -1003,7 +1107,7 @@ def 選股條件區():
                 條件["融資維持率上限"] = st.number_input("融資維持率(%) ≤", value=150.0, step=5.0, key="條_融資維持率(%) ≤",
                                                     help="網站自己估算，可能偏高 2～15 個百分點；130% 以下券商會追繳")
             if st.checkbox("排除融資佔股本最高的股票（籌碼不安定）", key="條_融資佔股本排除",
-                           help="融資佔股本＝融資餘額 × 1,000 ÷ 發行股數。股癌 EP712：融資高的標的殺盤時是重災區；"
+                           help="融資佔股本＝融資餘額 × 1,000 ÷ 發行股數。網路評論：融資高的標的殺盤時是重災區；"
                                 "2026-11 回測 9 次急跌，融資佔股本最高 1/5 平均多跌約 5 個百分點（但大多是高波動股的另一面）"):
                 條件["融資佔股本排名上限"] = st.slider("保留融資佔股本排名百分位 ≤（80＝排除最高的 20%）", 50, 100, 80, 5,
                                                 key="條_融資佔股本排名上限")
