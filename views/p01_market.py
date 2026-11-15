@@ -1529,15 +1529,15 @@ def 焦點區():
                 st.caption("今天沒有符合的股票。")
                 continue
             列 = []
-            for _, x in 表.head(8).iterrows():
+            for _, x in 表.head(5).iterrows():   # 手機先列 5 檔，其餘收起來
                 幅 = x.get("漲跌幅")
                 幅字 = "" if pd.isna(幅) else f' <span style="color:{漲跌色(幅)}">{幅:+.1f}%</span>'
                 列.append(f'<a href="?s={x["代號"]}" target="_self">{html.escape(str(x["股票"]))}{幅字}'
                           f'<small>{html.escape(str(x["理由"]))}</small></a>')
             st.markdown('<div class="flist">' + "".join(列) + "</div>", unsafe_allow_html=True)
-            if len(表) > 8:
-                with st.expander(f"其餘 {len(表) - 8} 檔"):
-                    點選表(表.iloc[8:], 上色(表.iloc[8:]).format({"收盤": "{:,.2f}", "漲跌幅": "{:+.2f}", "總分": "{:.1f}"}, na_rep="—"),
+            if len(表) > 5:
+                with st.expander(f"其餘 {len(表) - 5} 檔"):
+                    點選表(表.iloc[5:], 上色(表.iloc[5:]).format({"收盤": "{:,.2f}", "漲跌幅": "{:+.2f}", "總分": "{:.1f}"}, na_rep="—"),
                            f"焦點更多{名}", column_config={"代號": None})
         st.caption("依規則挑出來的名單，不是買賣建議。⭐＝你的庫存或自選股。點一下到個股查詢。")
         return
