@@ -528,7 +528,8 @@ html {{ font-size: 20px; }}
 .bnav .sheet a {{ padding: 12px 4px; border: 1px solid #13262C; border-radius: 12px; background: #081216; }}
 .bnav .sheet a span {{ font-size: 16px; color: #DDE; }}
 .bnav .sheet a.on {{ border-color: {青}; }}
-.bnav {{ grid-template-columns: repeat(5, 1fr); z-index: 1000 !important; }}
+.bnav {{ grid-template-columns: repeat(5, 1fr); z-index: 1000 !important; padding-right: 118px !important; }}
+/* 右下角留給 Streamlit 雲端的「Manage app」按鈕（只有網站擁有者登入時才看得到），選單往左縮避免被擋 */
 .fab .fab-home {{ display: none !important; }}
 .fab a {{ width: 42px; height: 42px; opacity: .85; }}
 .menu {{ gap: 6px; }}
