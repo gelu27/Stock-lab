@@ -1632,6 +1632,11 @@ def 評分累計資料(版本鍵):
                              基本面資料(版本鍵), 加權)
 
 
+@st.cache_resource(max_entries=1, show_spinner="重播烏賊高分訊號、計算追蹤績效中（約 15 秒）…")
+def 烏賊高分績效資料(版本鍵):
+    return engine.烏賊高分績效(指標, 基本面資料(版本鍵), engine.讀取指數K線("TAIEX"))
+
+
 # ---------- 順勢做多（RS、均線多頭、VCP 突破、法人連買、交易計畫）：全市場最新一天，所有人共用 ----------
 @st.cache_resource(max_entries=1, show_spinner="計算順勢做多訊號中…")
 def 動能資料(版本鍵):
