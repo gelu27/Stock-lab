@@ -1563,6 +1563,68 @@ def 額度查詢():
 文字指令 = {"新片": 新片查詢, "影片": 新片查詢, "新影片": 新片查詢, "解讀": 解讀查詢, "大盤": 解讀查詢, "額度": 額度查詢}
 
 
+# ---------- 排程看門狗：該跑的排程沒跑（或被 GitHub 停用）就 LINE 通知 ----------
+排程表 = [  # (workflow 檔, 名稱, 台灣時間, 星期幾（0=週一）)
+    ("update.yml", "更新資料庫", "18:17", range(0, 5)),
+    ("margin.yml", "補融資融券", "22:23", range(0, 5)),
+    ("etf.yml", "主動式 ETF 持股", "18:40", range(0, 5)),
+    ("brief.yml", "AI 大盤解讀", "08:07", range(0, 5)),
+    ("warmup.yml", "網站預熱", "08:20", range(0, 5)),
+    ("alert.yml", "盤中到價提醒", "13:45", range(0, 5)),
+    ("weekly.yml", "LINE 週報", "10:00", (5,)),
+]
+
+
+def 上次應跑(時刻, 星期們, 現在, 寬限分=90):
+    """現在往前推：最近一次「應該已經跑完」的排程時間（台灣時間）。"""
+    時, 分 = map(int, 時刻.split(":"))
+    截 = 現在 - dt.timedelta(minutes=寬限分)
+    d = 截.replace(hour=時, minute=分, second=0, microsecond=0)
+    if d > 截:
+        d -= dt.timedelta(days=1)
+    for _ in range(8):
+        if d.weekday() in 星期們:
+            return d
+        d -= dt.timedelta(days=1)
+    return None
+
+
+def 排程問題(查詢, 現在=None):
+    """查詢(檔) → (狀態, 最後成功時間 datetime 或 None)。回傳問題文字清單。"""
+    現在 = 現在 or dt.datetime.now(台北)
+    問題 = []
+    for 檔, 名, 時刻, 星期們 in 排程表:
+        try:
+            狀態, 最後 = 查詢(檔)
+        except Exception as e:
+            問題.append(f"{名}：查不到執行紀錄（{type(e).__name__}）")
+            continue
+        if 狀態 and 狀態 != "active":
+            問題.append(f"{名}：排程被 GitHub 停用了（{狀態}），到 Actions 頁面按 Enable workflow")
+            continue
+        應 = 上次應跑(時刻, 星期們, 現在)
+        if 應 and (最後 is None or 最後 < 應 - dt.timedelta(minutes=30)):
+            問題.append(f"{名}：{應:%m/%d %H:%M} 那次沒有成功跑完（最後成功 {最後.astimezone(台北):%m/%d %H:%M}）" if 最後
+                        else f"{名}：找不到成功紀錄")
+    return 問題
+
+
+def _查排程(檔):
+    基 = f"https://api.github.com/repos/{倉庫}/actions/workflows/{檔}"
+    狀態 = requests.get(基, headers=_gh標頭(), timeout=15).json().get("state")
+    r = requests.get(基 + "/runs", params={"status": "success", "per_page": 1}, headers=_gh標頭(), timeout=15).json()
+    跑 = r.get("workflow_runs") or []
+    return 狀態, (dt.datetime.fromisoformat(跑[0]["updated_at"].replace("Z", "+00:00")) if 跑 else None)
+
+
+def 排程檢查():
+    問題 = 排程問題(_查排程)
+    print("排程檢查：", 問題 or "全部正常")
+    if 問題:
+        推播("⏰ 台股觀測實驗室：有排程沒有照時間跑\n" + "\n".join(f"・{x}" for x in 問題)
+             + "\n\n可以到 GitHub Actions 手動按 Run workflow 補跑。", "資料異常")
+
+
 if __name__ == "__main__":
     模式 = sys.argv[1] if len(sys.argv) > 1 else "daily"
     if 模式 == "check":
@@ -1584,6 +1646,8 @@ if __name__ == "__main__":
         盤中提醒()
     elif 模式 == "health":
         健康檢查()
+    elif 模式 == "watchdog":
+        排程檢查()
     elif 模式 == "weekly":
         週報()
     elif 模式 == "query":
