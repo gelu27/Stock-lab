@@ -750,6 +750,7 @@ def 上色(表):
     欄們 = [c for c in ["漲跌幅", "5日漲幅", "20日漲幅", "報酬率(%)", "含息報酬%", "加入至今%", "報告後漲跌%", "今日損益", "總損益", "法人(張)"] if c in 表.columns]
     整數 = {"成交張數", "報告次數", "今日損益", "總損益", "股數", "總成本", "法人(張)", "市值億", "注意"}
     格式 = {c: ("{:,.0f}" if c in 整數 else "{:,.2f}") for c in 表.select_dtypes("number").columns}
+    格式.update({c: f for c, f in (("總分", "{:.1f}"), ("較昨日", "{:+.1f}")) if c in 格式})
     return 表.style.map(lambda v: f"color:{漲跌色(v)}", subset=欄們).format(格式, na_rep="—")
 
 
@@ -1759,6 +1760,23 @@ def 加健檢欄(表, 動能=True):
     欄 = list(表.columns)
     i = 欄.index("名稱") + 1 if "名稱" in 欄 else 0
     return t[欄[:i] + ["健檢", "徽章", "估值", "位階"] + 欄[i:]]
+
+
+def 加總分欄(表):
+    """在「名稱」後面插入每日評分的「總分」「較昨日」（表要有 代號 欄；已有總分或算不出來就原樣回傳）。"""
+    if 表 is None or not len(表) or "代號" not in 表.columns or "總分" in 表.columns:
+        return 表
+    try:
+        分 = 評分資料(_版本)[0]
+    except Exception:
+        return 表
+    t = 表.copy()
+    c = t["代號"].astype(str)
+    t["總分"] = c.map(分["總分"]).astype(float)
+    t["較昨日"] = c.map(分["較昨日"]).astype(float)
+    欄 = list(表.columns)
+    i = 欄.index("名稱") + 1 if "名稱" in 欄 else 0
+    return t[欄[:i] + ["總分", "較昨日"] + 欄[i:]]
 
 
 def 健檢圖例():
