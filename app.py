@@ -462,24 +462,24 @@ a.cardlink:hover .card, a.cardlink:active .card {{ box-shadow: 0 0 18px rgba(0,2
     background: rgba(4,8,10,.96); border-top: 1px solid #1A262B; backdrop-filter: blur(8px); padding: 6px 0 calc(6px + env(safe-area-inset-bottom)); }}
 .bnav a {{ display: flex; flex-direction: column; align-items: center; gap: 2px; color: #8A9BA3 !important; text-decoration: none !important; }}
 .bnav a svg {{ width: 23px; height: 23px; }}
-.bnav a span {{ font-family: 'Noto Sans TC', sans-serif; font-size: 11px; }}
+.bnav a span {{ font-family: 'Noto Sans TC', sans-serif; font-size: 13px; }}
 .bnav a.on {{ color: {青} !important; }}
 .bnav a.on svg {{ filter: drop-shadow(0 0 6px rgba(0,229,255,.6)); }}
 .fab {{ bottom: 78px !important; }}
 [data-testid="stMainBlockContainer"], .block-container {{ padding-bottom: 96px !important; }}
-html {{ font-size: 18px; }}
+html {{ font-size: 20px; }}
 .hero {{ padding: 10px 14px 8px; margin-bottom: 8px; }}
 .hero::after, .hero .kicker, .hero .sub {{ display: none; }}
 .hero .title {{ font-size: 28px; margin: 0; }}
 .grid3, .grid2 {{ grid-template-columns: repeat(2, 1fr); gap: 8px; }}
 .grid3 .card, .grid2 .card {{ padding: 12px 12px; }}
 .grid3 > :last-child:nth-child(odd), .grid2 > :last-child:nth-child(odd) {{ grid-column: span 2; }}
-.grid3 .card .k, .grid2 .card .k {{ font-size: 13px; letter-spacing: .05em; color: #A0A0A0; }}
-.grid3 .card .v, .grid2 .card .v {{ font-size: clamp(20px, 6.4vw, 26px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
-.grid3 .card .d, .grid2 .card .d {{ font-size: 14px; line-height: 1.4; }}
+.grid3 .card .k, .grid2 .card .k {{ font-size: 15px; letter-spacing: .05em; color: #A0A0A0; }}
+.grid3 .card .v, .grid2 .card .v {{ font-size: clamp(22px, 7vw, 29px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.grid3 .card .d, .grid2 .card .d {{ font-size: 16px; line-height: 1.4; }}
 .sec {{ font-size: 12px; letter-spacing: .08em; margin-top: 28px; padding-bottom: 8px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }}
 .sec .en {{ font-size: 11px; opacity: .8; }}
-.sec b {{ font-family: 'Noto Sans TC', sans-serif; font-size: 21px; font-weight: 900; color: #FFF; letter-spacing: .02em; }}
+.sec b {{ font-family: 'Noto Sans TC', sans-serif; font-size: 24px; font-weight: 900; color: #FFF; letter-spacing: .02em; }}
 .hero {{ background: linear-gradient(120deg, #06161B 0%, #000 70%); border-color: #12313A; }}
 .must {{ border-left-width: 0; background: transparent; border: 0; display: grid; gap: 8px; }}
 .must div {{ border: 1px solid #1A262B !important; background: linear-gradient(180deg, #0A1013, #050708); border-radius: 10px; align-items: center; }}
@@ -490,43 +490,43 @@ html {{ font-size: 18px; }}
 .menu {{ border: 0; gap: 8px; background: transparent; }}
 .menu a {{ border: 1px solid #16323A !important; border-radius: 14px; background: radial-gradient(120% 90% at 50% 0%, #0E2A31 0%, #061014 60%, #04080A 100%); aspect-ratio: 1 / .95; }}
 .menu-s a {{ border-radius: 10px; }}
-[data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] li {{ font-size: 18px; line-height: 1.7; }}
+[data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] li {{ font-size: 20px; line-height: 1.7; }}
 [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {{ font-size: 15px !important; color: #A8A8A8; line-height: 1.6; }}
-.verdict {{ font-size: 18px !important; line-height: 1.75; padding: 12px 14px; }}
-.verdict.sub {{ font-size: 16px !important; }}
-.ladder div {{ font-size: 17px; padding: 9px 2px; }} .ladder em {{ font-size: 15px; }}
-.rank td, .rank td.n {{ font-size: 17px !important; padding: 10px 6px !important; }}
-.rank td.n small {{ font-size: 13px; }}
-.rank th {{ font-size: 14px; }}
-.lamp .t {{ font-size: 17px; }} .lamp .s {{ font-size: 14px; }}
-.jump a {{ font-size: 15px; padding: 6px 12px; }}
-.ticker span {{ font-size: 15px; }}
+.verdict {{ font-size: 20px !important; line-height: 1.75; padding: 12px 14px; }}
+.verdict.sub {{ font-size: 18px !important; }}
+.ladder div {{ font-size: 19px; padding: 9px 2px; }} .ladder em {{ font-size: 17px; }}
+.rank td, .rank td.n {{ font-size: 19px !important; padding: 10px 6px !important; }}
+.rank td.n small {{ font-size: 15px; }}
+.rank th {{ font-size: 16px; }}
+.lamp .t {{ font-size: 19px; }} .lamp .s {{ font-size: 16px; }}
+.jump a {{ font-size: 17px; padding: 6px 12px; }}
+.ticker span {{ font-size: 17px; }}
 .st-key-nav {{ display: none; }}
 .js-plotly-plot, .js-plotly-plot .nsewdrag, .js-plotly-plot .draglayer, .js-plotly-plot svg {{ touch-action: pan-y !important; }}
 .stButton > button {{ min-height: 46px; }}
 .stTabs [data-baseweb="tab"] {{ padding: 12px 14px; }}
-.tip {{ font-size: 13px; }}
-.tip .tipbox {{ font-size: 15px; width: 240px; }}
+.tip {{ font-size: 15px; }}
+.tip .tipbox {{ font-size: 17px; width: 240px; }}
 .st-key-toolbar [data-testid="stHorizontalBlock"] {{ flex-wrap: nowrap !important; gap: 6px !important; }}
 .st-key-toolbar [data-testid="stColumn"] {{ flex: 1 1 0 !important; width: auto !important; min-width: 0 !important; }}
 .st-key-toolbar [data-testid="stColumn"]:first-child {{ flex: 1.8 1 0 !important; }}
 .st-key-toolbar p {{ font-size: 15px !important; white-space: nowrap; }}
 .st-key-toolbar button {{ padding: 4px 6px !important; min-height: 40px; width: 100%; justify-content: center; }}
 .st-key-toolbar button [aria-hidden="true"] {{ display: none; }}
-.must div, .flist a {{ font-size: 18px; }}
-.flist a small {{ font-size: 15px; }}
+.must div, .flist a {{ font-size: 20px; }}
+.flist a small {{ font-size: 17px; }}
 /* ---- 手機排版整理 ---- */
 .bnav details.more {{ position: relative; display: flex; justify-content: center; }}
 .bnav details.more summary {{ list-style: none; display: flex; flex-direction: column; align-items: center; gap: 2px; color: #8A9BA3; cursor: pointer; }}
 .bnav details.more summary::-webkit-details-marker {{ display: none; }}
 .bnav details.more summary svg {{ width: 23px; height: 23px; }}
-.bnav details.more summary span {{ font-family: 'Noto Sans TC', sans-serif; font-size: 11px; }}
+.bnav details.more summary span {{ font-family: 'Noto Sans TC', sans-serif; font-size: 13px; }}
 .bnav details.more.on summary, .bnav details.more[open] summary {{ color: {青}; }}
 .bnav .sheet {{ position: fixed; left: 10px; right: 10px; bottom: calc(64px + env(safe-area-inset-bottom)); display: grid;
     grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 12px; border: 1px solid #16323A; border-radius: 16px;
     background: rgba(5,12,15,.98); box-shadow: 0 -8px 30px rgba(0,0,0,.6), 0 0 18px rgba(0,229,255,.12); }}
 .bnav .sheet a {{ padding: 12px 4px; border: 1px solid #13262C; border-radius: 12px; background: #081216; }}
-.bnav .sheet a span {{ font-size: 13px; color: #DDE; }}
+.bnav .sheet a span {{ font-size: 16px; color: #DDE; }}
 .bnav .sheet a.on {{ border-color: {青}; }}
 .bnav {{ grid-template-columns: repeat(5, 1fr); z-index: 1000 !important; }}
 .fab .fab-home {{ display: none !important; }}
@@ -534,20 +534,24 @@ html {{ font-size: 18px; }}
 .menu {{ gap: 6px; }}
 .menu a {{ aspect-ratio: auto !important; padding: 12px 4px 10px; gap: 6px; }}
 .menu a svg {{ width: 30px; height: 30px; }}
-.menu a span {{ font-size: 15px; }}
+.menu a span {{ font-size: 17px; }}
 [data-testid="stButtonGroup"] > div {{ flex-wrap: nowrap !important; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }}
 [data-testid="stButtonGroup"] > div::-webkit-scrollbar {{ display: none; }}
 [data-testid="stButtonGroup"] button {{ flex: 0 0 auto; white-space: nowrap; }}
-[data-testid="stButtonGroup"] button p {{ font-size: 15px !important; }}
+[data-testid="stButtonGroup"] button p {{ font-size: 17px !important; }}
 .idxrow {{ grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }} .idxrow.two {{ grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }}
 .idxrow > * {{ min-width: 0; }}
-.card.idx .k {{ font-size: 10.5px !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: 0 !important; }}
-.card.idx .d {{ font-size: 11px !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
-.card.idx .v {{ font-size: clamp(15px, 4.3vw, 21px) !important; white-space: nowrap; overflow: hidden; text-overflow: clip; }}
+.card.idx .k {{ font-size: 12px !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: 0 !important; }}
+.card.idx .d {{ font-size: 12.5px !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.card.idx .v {{ font-size: clamp(16px, 4.5vw, 22px) !important; white-space: nowrap; overflow: hidden; text-overflow: clip; }}
 .sec {{ margin-top: 22px; }}
-[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {{ font-size: 14px !important; line-height: 1.55; }}
-.stExpander summary p {{ font-size: 16px !important; }}
+[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {{ font-size: 16px !important; line-height: 1.6; }}
+.stExpander summary p {{ font-size: 19px !important; }}
 .st-key-toolbar {{ margin-bottom: -4px; }}
+[data-testid="stWidgetLabel"] p {{ font-size: 18px !important; }}
+.stTabs [data-baseweb="tab"] p {{ font-size: 18px !important; }}
+[data-testid="stDataFrame"] {{ font-size: 16px; }}
+.must div i {{ font-size: 21px; }}
 </style>"""
 
 
