@@ -515,6 +515,39 @@ html {{ font-size: 18px; }}
 .st-key-toolbar button [aria-hidden="true"] {{ display: none; }}
 .must div, .flist a {{ font-size: 18px; }}
 .flist a small {{ font-size: 15px; }}
+/* ---- 手機排版整理 ---- */
+.bnav details.more {{ position: relative; display: flex; justify-content: center; }}
+.bnav details.more summary {{ list-style: none; display: flex; flex-direction: column; align-items: center; gap: 2px; color: #8A9BA3; cursor: pointer; }}
+.bnav details.more summary::-webkit-details-marker {{ display: none; }}
+.bnav details.more summary svg {{ width: 23px; height: 23px; }}
+.bnav details.more summary span {{ font-family: 'Noto Sans TC', sans-serif; font-size: 11px; }}
+.bnav details.more.on summary, .bnav details.more[open] summary {{ color: {青}; }}
+.bnav .sheet {{ position: fixed; left: 10px; right: 10px; bottom: calc(64px + env(safe-area-inset-bottom)); display: grid;
+    grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 12px; border: 1px solid #16323A; border-radius: 16px;
+    background: rgba(5,12,15,.98); box-shadow: 0 -8px 30px rgba(0,0,0,.6), 0 0 18px rgba(0,229,255,.12); }}
+.bnav .sheet a {{ padding: 12px 4px; border: 1px solid #13262C; border-radius: 12px; background: #081216; }}
+.bnav .sheet a span {{ font-size: 13px; color: #DDE; }}
+.bnav .sheet a.on {{ border-color: {青}; }}
+.bnav {{ grid-template-columns: repeat(5, 1fr); z-index: 1000 !important; }}
+.fab .fab-home {{ display: none !important; }}
+.fab a {{ width: 42px; height: 42px; opacity: .85; }}
+.menu {{ gap: 6px; }}
+.menu a {{ aspect-ratio: auto !important; padding: 12px 4px 10px; gap: 6px; }}
+.menu a svg {{ width: 30px; height: 30px; }}
+.menu a span {{ font-size: 15px; }}
+[data-testid="stButtonGroup"] > div {{ flex-wrap: nowrap !important; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }}
+[data-testid="stButtonGroup"] > div::-webkit-scrollbar {{ display: none; }}
+[data-testid="stButtonGroup"] button {{ flex: 0 0 auto; white-space: nowrap; }}
+[data-testid="stButtonGroup"] button p {{ font-size: 15px !important; }}
+.idxrow {{ grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }} .idxrow.two {{ grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }}
+.idxrow > * {{ min-width: 0; }}
+.card.idx .k {{ font-size: 10.5px !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: 0 !important; }}
+.card.idx .d {{ font-size: 11px !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.card.idx .v {{ font-size: clamp(15px, 4.3vw, 21px) !important; white-space: nowrap; overflow: hidden; text-overflow: clip; }}
+.sec {{ margin-top: 22px; }}
+[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {{ font-size: 14px !important; line-height: 1.55; }}
+.stExpander summary p {{ font-size: 16px !important; }}
+.st-key-toolbar {{ margin-bottom: -4px; }}
 </style>"""
 
 
@@ -1208,18 +1241,26 @@ def 圖示選單(小=False):
     st.markdown(f'<div class="{"menu-s" if 小 else "menu"}">{格}</div>', unsafe_allow_html=True)
 
 
-if 手機:
-    圖示選單(小=頁面 != 頁面們[0])
+if 手機 and 頁面 == 頁面們[0]:   # 其他頁面用底部選單換頁，不再重複一排小圖示
+    圖示選單()
 
 
 def 底部選單():
     """手機模式：畫面最下面固定一排（大盤、我的股票、個股、選股、評分），滑到哪裡都能直接換頁。"""
-    名 = {"01": "大盤", "02": "我的", "03": "個股", "04": "選股", "07": "評分"}
-    格 = "".join(
-        f'<a href="?p={碼}" target="_self" class="{"on" if 頁面.startswith(碼) else ""}">'
-        f'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">{_圖示路徑[碼]}</svg>'
-        f'<span>{字}</span></a>' for 碼, 字 in 名.items() if 碼 in _圖示路徑)
-    st.markdown(f'<nav class="bnav">{格}</nav>', unsafe_allow_html=True)
+    名 = {"01": "大盤", "02": "我的", "03": "個股", "04": "選股"}
+
+    def 格子(碼, 字):
+        return (f'<a href="?p={碼}" target="_self" class="{"on" if 頁面.startswith(碼) else ""}">'
+                f'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">{_圖示路徑[碼]}</svg>'
+                f'<span>{字}</span></a>')
+    格 = "".join(格子(碼, 字) for 碼, 字 in 名.items() if 碼 in _圖示路徑)
+    其他 = [碼 for 碼 in _圖示路徑 if 碼 not in 名]
+    更多亮 = " on" if any(頁面.startswith(碼) for 碼 in 其他) else ""
+    # 「更多」：點一下往上展開其他頁面（月營收、主動 ETF、評分、回測、統計），不用 JavaScript
+    更多 = (f'<details class="more{更多亮}"><summary><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" '
+           f'stroke-linecap="round"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>'
+           f'<span>更多</span></summary><div class="sheet">{"".join(格子(碼, _圖示名[碼]) for 碼 in 其他)}</div></details>')
+    st.markdown(f'<nav class="bnav">{格}{更多}</nav>', unsafe_allow_html=True)
 
 
 if 手機:
