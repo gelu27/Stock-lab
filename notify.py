@@ -907,6 +907,23 @@ def ETF共識提醒(代號們, 狀態, 門檻=3):
         for c, r in 共識.iterrows()]
 
 
+def 烏賊高分提醒(指標, 分):
+    """⭐ 烏賊多方策略名單裡，總分 ≥ 80 或一天大增 ≥ 10 分的股票（併入評分摘要，不另外花推播額度）。"""
+    import engine
+    今 = 指標[指標["date"] == 指標["date"].max()]
+    今 = engine.加基本面(今, engine.讀取基本面())
+    補 = engine.籌碼補充表(指標)
+    for b in (engine.財報體質表(), engine.合約負債表(), engine.預估EPS表()):
+        if b is not None:
+            補 = 補.join(b, how="outer")
+    今 = engine.加預估本益比(engine.加融資佔股本(今.join(補, on="代號")))
+    表 = engine.烏賊多方高分重疊(今, 分)
+    if 表.empty:
+        return []
+    return ["", f"⭐ 烏賊多方策略 × 高分／分數大增（{len(表)} 檔）："] + [
+        f"{r['代號']} {r['名稱']} {r['總分']:.0f} 分（{r['原因']}）{r['符合策略']}" for _, r in 表.head(10).iterrows()]
+
+
 def 評分摘要(持股, 自選們=()):
     """大盤分數、庫存每檔分數、高分榜前 5（規則計分，跟網站「每日評分」頁同一套）。"""
     import engine
@@ -935,6 +952,10 @@ def 評分摘要(持股, 自選們=()):
         行們.append("🆕 新進 75 分以上：" + "、".join(f"{r['名稱']} {r['總分']:.1f}" for _, r in 新.head(15).iterrows()))
     高 = 可.sort_values("總分", ascending=False).head(10)
     行們.append("🔝 高分前 10：" + "、".join(f"{r['名稱']} {r['總分']:.1f}" for _, r in 高.iterrows()))
+    try:
+        行們 += 烏賊高分提醒(指標, 分)
+    except Exception as e:
+        print("烏賊高分提醒失敗：", repr(e))
     try:
         行們 += 八十分名單(可, 分, 庫存們, list(自選們), 大.get("日期"))
     except Exception as e:
