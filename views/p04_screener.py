@@ -314,6 +314,28 @@ def 策略排行資料(版本鍵):
     return engine.策略排行(指標)
 
 
+def 策略成績():
+    """策略排行 → 每個策略的 有用程度、20日超額%、20日贏過大盤次數%（N9 策略頁籤附成績單）。"""
+    try:
+        總, _ = 策略排行資料(_版本)
+    except Exception:
+        return None
+    if 總 is None or 總.empty:
+        return None
+    return 總[["策略", "多空", "有用程度", "20日超額%", "20日贏過大盤次數%"]]
+
+
+def 策略成績文字(名):
+    績 = 策略成績()
+    if 績 is None:
+        return ""
+    列 = 績[績["策略"] == 名]
+    if not len(列):
+        return ""
+    x = 列.iloc[0]
+    return f"過去一年有用程度 {x['有用程度']:+.2f}%（{'✅ 有用' if x['有用程度'] > 0.3 else ('❌ 沒用' if x['有用程度'] < -0.3 else '➖ 普通')}）"
+
+
 def 策略排行區():
     st.caption("把站上所有內建選股策略，用同一套方法比：過去一年每 5 個交易日，看那天選出來的股票，"
                "之後 5 日、20 日平均漲多少，再跟同期「全部股票平均」比。多方策略要贏大盤才算有用，空方策略要輸大盤才算有用。")
@@ -707,10 +729,17 @@ with 選股分頁[3], 區塊防護("烏賊策略總覽"):
                卡片("同時符合 2 個以上", f"{len(重複)}", "檔", 青)])
         st.caption("多＝適合找買點（講義：強勢股買拉回、盤整突破）；空＝轉弱、避開或減碼（講義：跌破十日線、弱勢股）。"
                    "資料日期 " + 最新日.strftime("%Y-%m-%d"))
-        段落("SUMMARY // 各策略符合檔數")
-        表格(總表.style.map(lambda v: f"color:{紅 if v == '多' else 綠}", subset=["多空"]),
+        段落("SUMMARY // 各策略符合檔數與過去成績")
+        績 = 策略成績()
+        if 績 is not None and "策略" in 總表.columns:
+            總表 = 總表.merge(績.drop(columns="多空"), on="策略", how="left")
+        表格(總表.style.map(lambda v: f"color:{紅 if v == '多' else 綠}", subset=["多空"])
+             .map(lambda v: f"color:{漲跌色(v)}" if isinstance(v, (int, float)) and pd.notna(v) else "", subset=[c for c in ("有用程度",) if c in 總表.columns])
+             .format({c: "{:+.2f}" for c in ("有用程度", "20日超額%")} | {"20日贏過大盤次數%": "{:.0f}"}, na_rep="—"),
                      hide_index=True, width="stretch",
                      column_config={"說明": st.column_config.TextColumn(width="large")})
+        st.caption("成績＝過去一年每 5 個交易日用這個策略選股，之後 20 日的平均超額（空方策略看相反數，越大越有用）；"
+                   "詳細在「策略排行榜」分頁。")
         段落("OVERLAP // 同時符合多個策略")
         if 重複.empty:
             st.write("今天沒有股票同時符合 2 個以上的策略。")
@@ -722,7 +751,8 @@ with 選股分頁[3], 區塊防護("烏賊策略總覽"):
                  "40日漲幅", "週轉率", "股本億", "法人5日買超", "法人10日買超", "營收年增率", "近三季EPS"]
         for 名, 結果 in 名單.items():
             方向 = engine.烏賊條件[名]["方向"]
-            with st.expander(f"{'🔴 多' if 方向 == '多' else '🟢 空'}｜{名.replace('烏賊', '')}｜{len(結果)} 檔"):
+            成 = 策略成績文字(名)
+            with st.expander(f"{'🔴 多' if 方向 == '多' else '🟢 空'}｜{名.replace('烏賊', '')}｜{len(結果)} 檔" + (f"｜{成}" if 成 else "")):
                 st.caption(engine.烏賊條件[名]["說明"])
                 if len(結果):
                     點選表(結果, 上色(結果[[c for c in 清單欄 if c in 結果.columns]]), f"策略表{名}")
@@ -754,11 +784,19 @@ with 選股分頁[1], 區塊防護("條件選股"):
         with st.expander("⚙️ 選股條件（組合回測也用這組）", expanded=True):
             條件, 範本 = 選股條件區()
         結果 = engine.選股(今日, 條件)
-        卡片格([
+        卡們 = [
             卡片("符合條件", f"{len(結果)}", "檔", 青),
             卡片("資料日期", 最新日.strftime("%Y-%m-%d")),
             卡片("排序", 條件["排序"]),
-        ])
+        ]
+        if 範本 != "自訂條件":
+            績 = 策略成績()
+            列 = 績[績["策略"] == 範本] if 績 is not None else None
+            if 列 is not None and len(列):
+                x = 列.iloc[0]
+                卡們.append(卡片("這個策略過去一年", f"{x['有用程度']:+.2f}%", f"20 日超額（{'多方看贏大盤' if x['多空'] == '多' else '空方看輸大盤'}），"
+                                 f"方向對 {x['20日贏過大盤次數%']:.0f}% 次", 漲跌色(x["有用程度"])))
+        卡片格(卡們)
         段落("RESULT // 選股結果")
         顯示欄 = [c for c in ["代號", "名稱", "市場", "收盤", "漲跌幅", "本益比", "殖利率", "淨值比",
                             "營收年增率", "營收月增率", "累計營收年增率", "EPS", "成交張數",
@@ -779,8 +817,10 @@ with 選股分頁[1], 區塊防護("條件選股"):
         if 範本 != "自訂條件":  # 烏賊條件多看幾個相關欄位
             顯示欄[3:3] = [c for c in ["週轉率", "股本億", "量對5日均", "5日均量", "10日漲幅", "30日漲幅", "40日漲幅",
                                      "法人10日買超", "近三季EPS"] if c in 結果.columns]
-        點選表(結果, 上色(結果[顯示欄]), "選股表", height=420)
+        點選表(結果, 上色(加健檢欄(結果[顯示欄])), "選股表", height=420, column_config=健檢欄設定)
         st.caption("點一下任何一列，就會跳到那檔股票的個股查詢。")
+        with st.expander("🩺 健檢、徽章、估值怎麼看"):
+            健檢圖例()
         st.download_button("下載 CSV", 結果[顯示欄].to_csv(index=False).encode("utf-8-sig"),
                            file_name=f"選股_{最新日:%Y%m%d}.csv")
         條件訂閱區(條件, 範本, 結果)

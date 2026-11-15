@@ -399,6 +399,42 @@ def 損益瀑布圖(明細, 最多=10):
     return 圖
 
 
+def 庫存注意欄(明細, 已息):
+    """持股每檔加：佔比%、含息報酬%（含今年已除息股利）、注意（分數）、注意理由（停損紀律、評分、虧損、處置、估值）。"""
+    if 明細 is None or not len(明細):
+        return 明細
+    t = 明細.copy()
+    c = t["代號"].astype(str)
+    市值 = t["股價"] * t["股數"]
+    t["佔比%"] = (市值 / 市值.sum() * 100).round(1)
+    t["含息報酬%"] = ((t["總損益"] + c.map(已息).fillna(0)) / t["總成本"] * 100).round(2)
+    try:
+        分 = 評分資料(_版本)[0]
+    except Exception:
+        分 = None
+    線們 = 近期收盤(tuple(c), _版本, 天數=30)
+    健 = 健檢欄(tuple(c), 動能=False)
+    警 = 警示表(_版本)
+    今 = 今日.set_index("代號")
+    分數們, 理由們 = [], []
+    for _, x in t.iterrows():
+        代 = str(x["代號"])
+        r = 今.loc[代].to_dict() if 代 in 今.index else {}
+        r.update({"報酬率(%)": x["報酬率(%)"], "漲跌幅": x["漲跌幅"]})
+        線 = 線們.get(代, [])
+        停 = engine.停損紀律狀態(pd.DataFrame({"close": 線})) if len(線) >= 25 else None
+        分列 = 分.loc[代] if 分 is not None and 代 in 分.index else None
+        位 = 健.at[代, "位階"] if 代 in 健.index else np.nan
+        n, 理 = glance.注意分數(r, 分列, 停, 警.get(代, ""), 位)
+        分數們.append(n)
+        理由們.append(理)
+    t["注意"] = 分數們
+    t["注意理由"] = 理由們
+    欄 = list(明細.columns)
+    i = 欄.index("報酬率(%)") + 1 if "報酬率(%)" in 欄 else len(欄)
+    return t[欄[:i] + ["含息報酬%", "佔比%", "注意理由"] + 欄[i:] + ["注意"]]
+
+
 def 庫存區(持股):
     """盤中每 30 秒自動抓一次即時報價；收盤後用資料庫的收盤價。"""
     輪詢檢查()  # 開盤／收盤時切換自動更新頻率
@@ -413,24 +449,40 @@ def 庫存區(持股):
     if 即時 is not None and not 即時.empty:
         日期 += f" {即時['time'].dropna().max()} 即時"
     段落(f"PORTFOLIO // 我的庫存　{日期}")
+    try:
+        息 = engine.股利預估(持股)
+        已息 = 息[息["狀態"] == "已除息"].groupby("代號")["金額"].sum() if len(息) else pd.Series(dtype=float)
+        待息 = 息[息["狀態"] != "已除息"]["金額"].sum() if len(息) else 0.0
+    except Exception:
+        已息, 待息 = pd.Series(dtype=float), 0.0
+    含息 = 合計["累積損益"] + float(已息.sum())
     卡片格([
         卡片(f"今日損益 · {日期}", f"{合計['今日損益']:+,.0f}", f"{合計['今日損益(%)']:+.2f}%",
            漲跌色(合計["今日損益"])),
         卡片("累積損益", f"{合計['累積損益']:+,.0f}", f"{合計['累積損益(%)']:+.2f}%", 漲跌色(合計["累積損益"])),
         卡片("股票市值", f"{合計['股票市值']:,.0f}", f"成本 {合計['總成本']:,.0f}"),
+        卡片("含今年股利", f"{含息:+,.0f}", f"已入帳 {已息.sum():,.0f}｜還會領 {待息:,.0f}"
+             + (f"｜{含息 / 合計['總成本'] * 100:+.2f}%" if 合計["總成本"] else ""), 漲跌色(含息)),
     ])
+    明細 = 庫存注意欄(明細, 已息)
+    if len(明細) and 明細["注意"].max() > 0:
+        先 = 明細.sort_values("注意", ascending=False)
+        先 = 先[先["注意"] > 0].head(3)
+        st.markdown('<div class="riskbox"><div class="h"><span>⚠ 最該先看的持股</span><span>依停損紀律、評分、虧損、處置、估值</span></div><ul>'
+                    + "".join(f'<li class="{"hi" if x["注意"] >= 3 else ""}">{x["代號"]} {html.escape(str(x["名稱"]).replace("⚠️ ", ""))}：'
+                              f'{html.escape(x["注意理由"])}</li>' for _, x in 先.iterrows()) + "</ul></div>", unsafe_allow_html=True)
     瀑 = 損益瀑布圖(明細)
     if 瀑 is not None:
         with st.expander("🌊 今天賺賠是哪幾檔貢獻的？（損益瀑布圖）", expanded=bool(手機)):
             st.plotly_chart(瀑, width="stretch", config={"displayModeBar": False})
             st.caption("由賺最多排到賠最多，紅色是賺、綠色是賠，最後一根是今天的合計。")
     a, b = st.columns([4, 1])
-    依據 = a.segmented_control("排序", ["今日損益", "漲跌幅", "總損益", "報酬率(%)", "股價", "總成本"],
+    依據 = a.segmented_control("排序", ["最該注意", "今日損益", "漲跌幅", "總損益", "報酬率(%)", "佔比%", "股價", "總成本"],
                               default="今日損益", key="庫存排序")
     方向 = b.segmented_control("順序", ["大→小", "小→大"], default="大→小", key="庫存順序")
-    明細 = 明細.sort_values(依據 or "今日損益", ascending=(方向 == "小→大"), na_position="last")
-    明細 = 標警示(明細)
-    點選表(明細, 上色(明細), "庫存表", height=35 * (len(明細) + 1) + 3)
+    明細 = 明細.sort_values({"最該注意": "注意"}.get(依據, 依據 or "今日損益"), ascending=(方向 == "小→大"), na_position="last")
+    明細 = 標警示(加健檢欄(明細))
+    點選表(明細, 上色(明細), "庫存表", height=35 * (len(明細) + 1) + 3, column_config=健檢欄設定)
     if st.session_state.get("要跳轉"):
         st.rerun(scope="app")  # 這裡在自動更新區塊裡，要整頁重跑才會切到個股查詢
     st.caption("點一下股票可看個股查詢，也可以直接點表格標題排序。")
@@ -614,12 +666,14 @@ def 自選表(代號們):
     顯示 = 表[["名稱", "收盤", "漲跌幅", "加入日期", "加入價", "加入至今%", "提醒", "成交張數", "5日漲幅", "20日漲幅",
               "法人買超", "本益比", "殖利率", "代號"]]
     顯示 = 顯示.rename(columns={"收盤": "股價", "法人買超": "法人(張)"})
-    顯示 = 標警示(顯示)
-    點選表(顯示, 上色(顯示), "自選表", height=35 * (len(顯示) + 1) + 3)
+    顯示 = 標警示(加健檢欄(顯示))
+    點選表(顯示, 上色(顯示), "自選表", height=35 * (len(顯示) + 1) + 3, column_config=健檢欄設定)
     if st.session_state.get("要跳轉"):
         st.rerun(scope="app")
     st.caption("點一下股票可看個股查詢。加入價 = 加入當時最新的收盤價，加入至今% = 現在股價比加入價漲跌多少。"
                "法人(張) = 三大法人今日買賣超。🔔 = 已到達提醒價格（到價提醒在個股頁設定）。")
+    with st.expander("🩺 健檢、徽章、估值怎麼看"):
+        健檢圖例()
 
 
 def 加碼扣打區():

@@ -60,6 +60,9 @@ jobs:
         run: |
           python -c "import engine; engine.整併月檔()"
           TZ=Asia/Taipei date '+%Y/%m/%d %H:%M' > data/updated.txt
+      - name: 本益比 5 年位階（清單「估值」、個股估值刻度用，約 5 秒）
+        continue-on-error: true
+        run: python -c "import glance; glance.更新本益比位階()"
       - name: 評分歷史驗證（約每月重算一次）
         continue-on-error: true
         run: python -c "import engine; engine.更新評分回測()"
