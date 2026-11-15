@@ -1162,6 +1162,49 @@ def 讀回饋():
         return {}
 
 
+@st.fragment(run_every=刷新秒(30))
+def 即時五檔區(代號, 市場):
+    """盤中每 30 秒抓一次五檔（證交所，延遲約 5～20 秒）；收盤後不顯示。"""
+    輪詢檢查()
+    with st.expander("⚡ 盤中即時五檔（每 30 秒自動更新）", expanded=not 手機):
+        try:
+            五 = engine.即時五檔(代號, 市場)
+        except Exception as e:
+            st.caption(f"即時五檔暫時抓不到（{type(e).__name__}），等一下會再試。")
+            return
+        if not 五:
+            st.caption("證交所這一檔目前沒有即時資料。")
+            return
+        色 = 漲跌色(五["漲跌"] if pd.notna(五["漲跌"]) else 0)
+        卡片格([
+            卡片(f"即時價 · {五['時間'] or ''}", 數(五["現價"]),
+                 f"{五['漲跌']:+.2f}（{五['漲跌幅']:+.2f}%）" if pd.notna(五["漲跌"]) else "", 色),
+            卡片("開 / 高 / 低", f"{數(五['開'])} / {數(五['高'])} / {數(五['低'])}",
+                 f"漲停 {數(五['漲停'])}｜跌停 {數(五['跌停'])}"),
+            卡片("累計成交", 數(五["量"], "{:,.0f}", " 張"), f"最新一筆 {數(五['單量'], '{:,.0f}', ' 張')}"),
+            卡片("五檔買盤比", 數(五["買盤比"], "{:.0f}", "%"), f"委買 {五['委買']:,.0f}｜委賣 {五['委賣']:,.0f} 張",
+                 紅 if pd.notna(五["買盤比"]) and 五["買盤比"] >= 60 else (綠 if pd.notna(五["買盤比"]) and 五["買盤比"] <= 40 else "#EDEDED")),
+        ])
+        最大 = max([v for _, v in 五["買"] + 五["賣"] if pd.notna(v)] or [1])
+        def 列(價, 量, 邊):
+            寬 = 0 if pd.isna(量) else 量 / 最大 * 100
+            c = 紅 if 邊 == "買" else 綠
+            return (f'<tr><td style="color:{c};text-align:right">{價:g}</td><td style="text-align:right">{0 if pd.isna(量) else 量:,.0f}</td>'
+                    f'<td style="width:55%"><div style="height:10px;width:{寬:.0f}%;background:{c};opacity:.55;border-radius:2px"></div></td></tr>')
+        a, b = st.columns(2)
+        a.markdown("**委賣（上方壓力）**")
+        a.markdown('<table style="width:100%;font-size:.9em">' + "".join(列(p, v, "賣") for p, v in reversed(五["賣"])) + "</table>",
+                   unsafe_allow_html=True)
+        b.markdown("**委買（下方支撐）**")
+        b.markdown('<table style="width:100%;font-size:.9em">' + "".join(列(p, v, "買") for p, v in 五["買"]) + "</table>",
+                   unsafe_allow_html=True)
+        句 = engine.五檔解讀(五)
+        if 句:
+            st.markdown(f"**白話：** {句}")
+        st.caption("五檔是掛單，隨時可能撤單或改價，只能看當下買賣力道，不代表等一下的走勢。"
+                   "內外盤（成交在買價或賣價）需要逐筆成交資料，免費來源沒有，所以這裡用五檔委買／委賣量代替。")
+
+
 def 重點卡區(代號, r):
     """個股頁最上面的重點整理：一句話摘要、短中長線三格（附依據與回測可信度）、風險提示框（含看錯會怎樣）、
     網站評分／券商／影片／AI 四方意見一致或分歧。只用規則，不用呼叫 AI。"""
@@ -1470,6 +1513,9 @@ try:
     價位尺區(代號, float(r["收盤"]))
 except Exception:
     pass
+if r["市場"] in ("上市", "上櫃") and 盤中階段() == "盤中":
+    with 區塊防護("即時五檔"):
+        即時五檔區(代號, r["市場"])
 with 區塊防護("重點整理"):
     重點卡區(代號, r)
 # 只計算打開的那個分頁（以前 6 個分頁每次全部算，換一檔股票要 5～9 秒）；換股票時停在同一個分頁

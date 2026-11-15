@@ -81,7 +81,9 @@ def 庫存管理(持股, 來源):
             st.toast(訊息)
             st.rerun()
 
-        加, 減 = st.tabs(["➕ 新增／加碼", "➖ 減碼／移除"])
+        加, 減, 匯 = st.tabs(["➕ 新增／加碼", "➖ 減碼／移除", "📄 匯入集保 e 存摺"])
+        with 匯:
+            存摺匯入(現有, 存)
         with 加:
             with st.form("新增庫存", clear_on_submit=True):
                 股 = st.selectbox("股票", 股票選項, index=None, placeholder="輸入代號或名稱")
@@ -124,6 +126,69 @@ def 庫存管理(持股, 來源):
             st.rerun()
         st.caption("庫存清單和交易日記存在同一個檔案（有設密碼時會加密）。每天的 LINE 收盤摘要還是用 GitHub 的 HOLDINGS 設定，"
                    "要一起改請到 GitHub → Settings → Secrets 更新 HOLDINGS。")
+
+
+def 讀存摺檔(檔):
+    """上傳的 e 存摺／券商庫存檔 → engine.解析存摺 的結果。PDF 抽文字；CSV、Excel 直接讀表。"""
+    名 = 檔.name.lower()
+    if 名.endswith(".pdf"):
+        from pypdf import PdfReader
+        文字 = "\n".join((頁.extract_text() or "") for 頁 in PdfReader(檔).pages)
+        return engine.解析存摺(文字, 已知代號=set(市場名稱)), 文字
+    if 名.endswith(".xlsx"):
+        表 = pd.read_excel(檔, dtype=str)
+    else:
+        原 = 檔.getvalue()
+        for 編碼 in ("utf-8-sig", "cp950", "big5"):
+            try:
+                表 = pd.read_csv(io.BytesIO(原), dtype=str, encoding=編碼)
+                break
+            except Exception:
+                表 = None
+        if 表 is None:
+            return engine.解析存摺(""), ""
+    return engine.解析存摺(表, 已知代號=set(市場名稱)), 表.to_csv(index=False)
+
+
+def 存摺匯入(現有, 存):
+    """T2：上傳集保 e 存摺（或券商 App）匯出的庫存，對照網站庫存後一次更新股數。"""
+    st.markdown("在 **集保 e 存摺 App** 的「庫存」頁匯出／列印成 PDF（或券商 App 匯出庫存 CSV／Excel），上傳後網站會讀出代號與股數，"
+                "跟目前庫存逐筆對照，確認後才寫入。")
+    檔 = st.file_uploader("上傳 e 存摺 PDF、CSV 或 Excel", type=["pdf", "csv", "xlsx"], key="存摺檔")
+    if 檔 is None:
+        st.caption("集保 e 存摺沒有開放給個人網站的連線 API，所以用匯出檔代替；檔案只在這次讀取，不會另外保存。"
+                   "e 存摺沒有成本資料：股數有變的依原本均價換算、新股票先用最近收盤估，請在表格裡改成你的實際成本。")
+        return
+    try:
+        讀到, 原文 = 讀存摺檔(檔)
+    except Exception as e:
+        st.error(f"讀不出這個檔案（{type(e).__name__}）。PDF 如果是掃描圖片，請改用 CSV／Excel，或用上面「新增／加碼」手動輸入。")
+        return
+    if 讀到.empty:
+        st.warning("檔案裡找不到股票代號和股數。可以打開下面的「讀到的文字」看看格式，再把截圖給 Claude 調整讀法。")
+        with st.expander("讀到的文字"):
+            st.text(原文[:3000] or "（空白）")
+        return
+    收盤 = dict(zip(今日["代號"], 今日["收盤"]))
+    對照 = engine.存摺對照(讀到, 現有, 收盤)
+    對照["名稱"] = [n or 市場名稱.get(c, "") for c, n in zip(對照["代號"], 對照["名稱"])]
+    st.caption(f"讀到 {len(讀到)} 檔；相同 {int((對照['狀態'] == '相同').sum())} 檔、變動 {int((對照['差'] != 0).sum())} 檔。"
+               "「總成本」欄可以直接改；不想動的股票把「套用」取消勾選。存摺裡沒有的股票預設不刪，要刪請自己勾。")
+    對照.insert(0, "套用", ~對照["狀態"].isin(["相同", "存摺沒有（會移除）"]))  # 存摺沒列的預設不刪（可能在別的帳戶）
+    改 = st.data_editor(對照, hide_index=True, width="stretch", key="存摺對照表",
+                       disabled=["代號", "名稱", "網站股數", "存摺股數", "差", "狀態"],
+                       column_config={"總成本": st.column_config.NumberColumn("總成本（可改）", format="%d", min_value=0),
+                                      "網站股數": st.column_config.NumberColumn(format="%d"),
+                                      "存摺股數": st.column_config.NumberColumn(format="%d"),
+                                      "差": st.column_config.NumberColumn(format="%+d")})
+    with st.expander("讀到的文字（核對用）"):
+        st.text(原文[:3000])
+    要 = 改[改["套用"]]
+    if st.button(f"✔ 套用 {len(要)} 筆到我的庫存", type="primary", key="存摺套用", disabled=要.empty):
+        新 = 現有.assign(代號=現有["代號"].astype(str)).set_index("代號")[["股數", "總成本"]].astype(float)
+        for _, x in 要.iterrows():
+            新.loc[x["代號"], ["股數", "總成本"]] = [float(x["存摺股數"]), float(x["總成本"])]
+        存(新.reset_index(), f"已依 e 存摺更新 {len(要)} 檔")
 
 
 def 股利預估區(持股):
@@ -431,6 +496,14 @@ def 庫存注意欄(明細, 已息):
     return t[欄[:i] + ["含息報酬%", "佔比%", "注意理由"] + 欄[i:] + ["注意"]]
 
 
+@st.cache_data(ttl=30, show_spinner=False)
+def 台指期即時():
+    try:
+        return engine.台指期()
+    except Exception:
+        return {}
+
+
 def 庫存區(持股):
     """盤中每 30 秒自動抓一次即時報價；收盤後用資料庫的收盤價。"""
     輪詢檢查()  # 開盤／收盤時切換自動更新頻率
@@ -452,6 +525,13 @@ def 庫存區(持股):
     except Exception:
         已息, 待息 = pd.Series(dtype=float), 0.0
     含息 = 合計["累積損益"] + float(已息.sum())
+    期卡 = []
+    if 即時 is not None:   # 盤中才放台指期即時卡（對照庫存今天跟大盤期貨誰強）
+        期 = 台指期即時().get("日盤")
+        if 期:
+            差 = 合計["今日損益(%)"] - 期["幅度"]
+            期卡 = [卡片(f"台指期近月 · {期['時間']}", f"{期['價']:,.0f}", f"{期['漲跌']:+,.0f}（{期['幅度']:+.2f}%）｜"
+                       f"庫存{'強' if 差 >= 0 else '弱'}於期貨 {abs(差):.2f} 個百分點", 漲跌色(期["漲跌"]))]
     卡片格([
         卡片(f"今日損益 · {日期}", f"{合計['今日損益']:+,.0f}", f"{合計['今日損益(%)']:+.2f}%",
            漲跌色(合計["今日損益"])),
@@ -459,7 +539,7 @@ def 庫存區(持股):
         卡片("股票市值", f"{合計['股票市值']:,.0f}", f"成本 {合計['總成本']:,.0f}"),
         卡片("含今年股利", f"{含息:+,.0f}", f"已入帳 {已息.sum():,.0f}｜還會領 {待息:,.0f}"
              + (f"｜{含息 / 合計['總成本'] * 100:+.2f}%" if 合計["總成本"] else ""), 漲跌色(含息)),
-    ])
+    ] + 期卡)
     明細 = 庫存注意欄(明細, 已息)
     if len(明細) and 明細["注意"].max() > 0:
         先 = 明細.sort_values("注意", ascending=False)
