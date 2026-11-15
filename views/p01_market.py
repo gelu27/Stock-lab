@@ -3,8 +3,11 @@ def 排行表(表, 額外=None, 額外標題=None):
     """額外欄位：週轉率、鎖死（漲跌停的首次觸及與鎖死時間）、法人（表要有「法人值」與「法人單位」欄）。"""
     標題額外 = 額外標題 or {"週轉率": "週轉率", "鎖死": "觸及 / 鎖死"}.get(額外, "")
     鎖們 = 鎖死資訊(表) if 額外 == "鎖死" else {}
+    線們 = 近期收盤(tuple(表["code"].astype(str)), _版本) if len(表) else {}
+    重訊, 族群 = 排行原因底稿(_版本)
     列們 = []
     for _, r in 表.iterrows():
+        因 = glance.漲跌原因(r, 重訊, 族群)
         色 = 漲跌色(r["change"])
         底 = ""
         if r.get("漲停"):
@@ -27,18 +30,26 @@ def 排行表(表, 額外=None, 額外標題=None):
         else:
             加 = ""
         列們.append(
-            f'<tr><td class="n"><a href="?s={r["code"]}{登入參數()}" target="_self"><small>{r["code"]}</small>{r["name"]}</a></td>'
+            f'<tr><td class="n"><a href="?s={r["code"]}{登入參數()}" target="_self"><small>{r["code"]}</small>{r["name"]}'
+            + (f'<em class="why">{html.escape(因)}</em>' if 因 else "") + '</a></td>'
             f'<td style="{底 or "color:" + 色}">{r["close"]:,.2f}</td>'
             f'<td style="color:{色}">{r["change"]:+,.2f}</td>'
             f'<td style="color:{色}">{r["幅度"]:+.2f}%</td>'
             f'<td style="color:#BDBDBD">{r["張數"]:,.0f}</td>'
-            f'<td style="color:#BDBDBD">{r["成交金額億"]:,.2f}</td>{加}</tr>')
+            f'<td style="color:#BDBDBD">{r["成交金額億"]:,.2f}</td>{加}<td class="sp">{迷你線(線們.get(str(r["code"]), []))}</td></tr>')
     if not 列們:
         st.caption("今天沒有符合的股票。")
         return
     st.markdown('<div class="rankwrap"><table class="rank"><tr><th>商品</th><th>成交</th><th>漲跌</th><th>幅度</th>'
-                f'<th>張數</th><th>金額(億)</th>{f"<th>{標題額外}</th>" if 標題額外 else ""}</tr>'
+                f'<th>張數</th><th>金額(億)</th>{f"<th>{標題額外}</th>" if 標題額外 else ""}<th>近 20 日</th></tr>'
                 + "".join(列們) + "</table></div>", unsafe_allow_html=True)
+
+
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=1)
+def 排行原因底稿(版本鍵):
+    """排行榜「可能原因」用：當天（含前一天盤後）的重大訊息、各產業平均漲跌幅。"""
+    t = 今日[~今日["代號"].str.startswith("0")]
+    return glance.讀重大訊息(最新日), t.groupby("產業")["漲跌幅"].mean().round(2).to_dict()
 
 
 @st.cache_data(ttl=3600, show_spinner="查詢漲跌停鎖死時間…", max_entries=10)
@@ -3123,11 +3134,72 @@ def 漲跌分布區():
     st.caption(f"{判}；大漲（7% 以上）比大跌多 {尾:+d} 家。每根柱子＝漲跌幅落在那個區間（%）的股票家數，越往兩邊顏色越亮代表漲跌越大；只算上市櫃普通股，不含 ETF。")
 
 
-首頁區塊 = ["晨報", "必知", "大盤走勢", "30秒", "市場", "分布", "狀態", "價位", "AI解讀", "焦點", "國際", "總經", "連動", "月曆", "流向", "滑卡", "週報", "權值", "資金", "跌深", "止跌", "護盤", "選擇權", "情緒", "水位", "族群", "行事曆", "事件", "輝達", "延續", "排行"]
+def 指數卡區():
+    """加權、櫃買、台指期三張小卡（近 20 日迷你走勢）＋漲跌家數條＋散戶情緒刻度，一眼看完大盤。"""
+    卡們 = []
+    for 名, K, 單 in (("加權指數", 指數K線("TAIEX", _版本), "{:,.2f}"), ("櫃買指數", 指數K線("TPEX", _版本), "{:,.2f}"),
+                     ("台指期近月", engine.讀取台指期K線(), "{:,.0f}")):
+        if K is None or len(K) < 3:
+            continue
+        c = K["close"].astype(float)
+        v, 前 = float(c.iloc[-1]), float(c.iloc[-2])
+        差 = v - 前
+        色 = 漲跌色(差)
+        卡們.append(f'<div class="card idx"><div class="k">{名} · {pd.Timestamp(K["date"].iloc[-1]):%m/%d}</div>'
+                   f'<div class="v" style="color:{色}">{單.format(v)}</div>'
+                   f'<div class="d" style="color:{色}">{差:+,.2f}（{差 / 前 * 100:+.2f}%）</div>'
+                   f'<div class="sp">{迷你線(c.tail(20).tolist(), 寬=220, 高=40)}</div></div>')
+    t = 今日[~今日["代號"].str.startswith("0") & (今日["收盤"] > 0)]
+    漲, 平, 跌 = int((t["漲跌"] > 0).sum()), int((t["漲跌"] == 0).sum()), int((t["漲跌"] < 0).sum())
+    總 = max(漲 + 平 + 跌, 1)
+    條 = (f'<div class="card idx"><div class="k">漲跌家數 · 上市櫃</div><div class="adv"><b style="color:{紅}">{漲:,}</b>'
+         f'<b style="color:#9A9A9A">{平:,}</b><b style="color:{綠}">{跌:,}</b></div>'
+         f'<div class="advbar"><i style="width:{漲 / 總 * 100:.1f}%;background:{紅}"></i><i style="width:{平 / 總 * 100:.1f}%;background:#555"></i>'
+         f'<i style="width:{跌 / 總 * 100:.1f}%;background:{綠}"></i></div></div>')
+    情 = None
+    try:
+        情表 = 情緒資料(_版本)
+        有 = 情表.dropna(subset=["散戶"])
+        if len(有):
+            情 = float(有["散戶"].iloc[-1])
+            情日 = 有.index[-1]
+    except Exception:
+        pass
+    if 情 is not None:
+        說 = engine.情緒說明(情)
+        情卡 = (f'<div class="card idx"><div class="k">散戶情緒 · {pd.Timestamp(情日):%m/%d}</div>'
+               f'<div class="adv"><b style="color:{紅 if 情 >= 60 else (綠 if 情 <= 40 else "#EDEDED")}">{情:.0f}</b><small>/100 {說}</small></div>'
+               f'<div class="fg"><i style="left:{情:.0f}%"></i></div></div>')
+    else:
+        情卡 = ""
+    st.markdown(f'<div class="idxrow">{"".join(卡們)}</div><div class="idxrow two">{條}{情卡}</div>', unsafe_allow_html=True)
+    st.caption("散戶情緒 0 恐慌～100 貪婪，是反向指標：太貪婪要小心、太恐慌常接近低點。")
 
 
-新手區塊 = ["大盤走勢", "30秒", "市場", "分布", "流向", "狀態", "水位", "AI解讀", "焦點", "排行"]
-手機區塊 = ["必知", "大盤走勢", "滑卡", "分布", "30秒", "流向", "月曆", "焦點"]
+def 籌碼快訊區():
+    """今晚籌碼快訊：外資台指期、選擇權、小台散戶，每個數字標出在近一年的高低位置（極端才有意義）。"""
+    項們 = glance.籌碼快訊()
+    if not 項們:
+        st.info("期貨、選擇權籌碼資料還沒有。")
+        return
+    段落(f"CHIPS // 盤後籌碼快訊　{項們[0]['日期']:%m/%d}")
+    卡們 = []
+    for x in 項們:
+        值 = f"{x['值']:+,.0f} 口" if x["單位"] == "口" else f"{x['值']:+.2f}%"
+        增 = f"{x['增減']:+,.0f}" if x["單位"] == "口" else f"{x['增減']:+.2f}"
+        極 = glance.極端標籤(x["百分位"])
+        小 = f"較前一日 {增}｜一年位置 {x['百分位']:.0f}%" + (f"（{極}）" if 極 else "") if pd.notna(x["百分位"]) else f"較前一日 {增}"
+        卡們.append(卡片(x["項目"], 值, f"{x['說明']}｜{小}", 紅 if x["偏多"] else 綠))
+    卡片格(卡們)
+    st.caption("一年位置＝這個數字比過去一年幾 % 的日子高；90% 以上或 10% 以下才算極端。外資台指期淨空單很大時，"
+               "常是避險（手上有現股），不一定看空；小台散戶多空比是反向指標。紅＝偏多、綠＝偏空。")
+
+
+首頁區塊 = ["晨報", "指數", "必知", "大盤走勢", "30秒", "市場", "分布", "狀態", "價位", "AI解讀", "焦點", "國際", "總經", "連動", "月曆", "流向", "滑卡", "週報", "權值", "資金", "跌深", "止跌", "護盤", "選擇權", "籌碼", "情緒", "水位", "族群", "行事曆", "事件", "輝達", "延續", "排行"]
+
+
+新手區塊 = ["指數", "大盤走勢", "30秒", "市場", "分布", "流向", "狀態", "水位", "AI解讀", "焦點", "排行"]
+手機區塊 = ["指數", "必知", "大盤走勢", "滑卡", "分布", "30秒", "流向", "月曆", "焦點"]
 版面們 = {"手機": "今天必須知道＋大盤 K 線＋滑卡＋漲跌溫度帶＋三十秒看盤＋法人資金流向＋漲跌月曆＋焦點股，字大好讀", "新手": "只看 10 個重點區塊", "完整": "全部區塊", "自訂": "自己挑、自己排順序"}
 預設版面 = "手機" if 手機 else "新手"
 _時 = pd.Timestamp.now(tz="Asia/Taipei")
@@ -3176,7 +3248,7 @@ def _國際():
         國際行情()
     except Exception:
         st.caption("國際行情暫時無法顯示。")
-區塊函式 = {"必知": 必知區, "分布": 漲跌分布區, "月曆": 漲跌月曆區, "流向": 資金流向區, "滑卡": 滑卡區, "晨報": 晨報區, "週報": 週報區, "30秒": 三十秒卡, "市場": 市場卡片, "狀態": 狀態區, "價位": 關鍵價位區, "AI解讀": AI解讀區, "焦點": 焦點區, "國際": _國際, "總經": 總經區, "連動": 連動區,
+區塊函式 = {"指數": 指數卡區, "籌碼": 籌碼快訊區, "必知": 必知區, "分布": 漲跌分布區, "月曆": 漲跌月曆區, "流向": 資金流向區, "滑卡": 滑卡區, "晨報": 晨報區, "週報": 週報區, "30秒": 三十秒卡, "市場": 市場卡片, "狀態": 狀態區, "價位": 關鍵價位區, "AI解讀": AI解讀區, "焦點": 焦點區, "國際": _國際, "總經": 總經區, "連動": 連動區,
          "大盤走勢": 加權圖 if 加權 is not None and len(加權) > 1 else None, "權值": 權值區, "資金": 資金面區, "跌深": 跌深區, "止跌": 止跌訊號區, "護盤": 護盤區, "選擇權": 選擇權區, "事件": 事件區, "輝達": 輝達週區, "延續": 反彈延續區,
          "情緒": 情緒區, "水位": 資金水位區, "族群": 族群熱力圖, "行事曆": 行事曆區, "排行": 排行區}
 要畫 = [x for x in 顯示 if 區塊函式.get(x)]

@@ -1155,6 +1155,189 @@ def 價位尺區(代號, 收盤):
     st.caption("📏 價位尺：" + "，".join(句) + "。淺色區段是最近支撐到壓力之間；詳細價位在「📈 技術」分頁。")
 
 
+def 讀回饋():
+    try:
+        return json.loads((engine.資料夾 / "feedback.json").read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def 重點卡區(代號, r):
+    """個股頁最上面的重點整理：一句話摘要、短中長線三格（附依據與回測可信度）、風險提示框（含看錯會怎樣）、
+    網站評分／券商／影片／AI 四方意見一致或分歧。只用規則，不用呼叫 AI。"""
+    分 = 評分資料(_版本)[0]
+    分列 = 分.loc[代號] if 代號 in 分.index else None
+    try:
+        動 = 動能資料(_版本)
+        動列 = 動.loc[代號] if 代號 in 動.index else None
+    except Exception:
+        動列 = None
+    健 = 健檢欄((代號,), 動能=False)
+    位 = 健.at[代號, "位階"] if 代號 in 健.index else np.nan
+    體 = 徽章底稿(_版本)[5]
+    三 = glance.三格判斷(r, 動列, 位, 分列, 體)
+    K = 個股K線(代號)
+    try:
+        停 = engine.停損紀律狀態(K)
+    except Exception:
+        停 = None
+    險 = glance.風險清單(r, 警示表(_版本).get(代號, ""), 位, 停)
+    估 = 健.at[代號, "估值"] if 代號 in 健.index else "—"
+    摘 = glance.重點摘要(三, 估, 險)
+    # AI 報告最新看法（有存過才有）
+    AI看 = AI時 = None
+    try:
+        紀錄們 = AI紀錄快取(代號, _設定().get("GITHUB_TOKEN", ""))
+        if 紀錄們:
+            上 = 紀錄們[0]
+            AI看 = (上.get("建議") or {}).get("看法")
+            AI時 = str(上.get("時間", ""))[:10]
+    except Exception:
+        pass
+    色 = {"偏多": 紅, "偏空": 綠}
+    格 = ""
+    for x in 三:
+        類 = {"偏多": "up", "偏空": "dn"}.get(x["看法"], "")
+        首 = next((t for t, v, _ in x["依據"] if v != 0), x["依據"][0][0] if x["依據"] else "沒有明顯訊號")
+        格 += (f'<div class="tc {類}"><b>{x["期"]} · {x["說明"]}</b><strong style="color:{色.get(x["看法"], "#EDEDED")}">{x["看法"]}</strong>'
+              f'<span>{html.escape(首)}</span></div>')
+    最壞 = None
+    try:
+        全 = 個股全史(代號, _版本)
+        最壞 = glance.最壞情境(全["收盤"]) if 全 is not None else None
+    except Exception:
+        pass
+    _, 支撐, _, _ = 個股位階(代號)
+    險框 = ""
+    if 險 or 最壞:
+        項 = "".join(f'<li class="{"hi" if 等 == "高" else ""}">{html.escape(t)}</li>' for 等, t in 險) or "<li>目前沒有特別的警示</li>"
+        看錯 = []
+        if 支撐:
+            看錯.append(f"最近支撐 {支撐:,.2f}（{(支撐 / float(r['收盤']) - 1) * 100:+.1f}%），收盤跌破就該重新評估")
+        if 最壞:
+            看錯.append(f"這檔過去 5 年任一天買進，20 天內最深平均跌 {abs(最壞['中位數']):.1f}%、運氣差的 1/4 會跌超過 {abs(最壞['差的1/4']):.1f}%")
+        高數 = sum(等 == "高" for 等, _ in 險)
+        險框 = (f'<div class="riskbox"><div class="h"><span>⚠ 風險提示</span><span>{"高風險 " + str(高數) + " 項" if 高數 else ("留意 " + str(len(險)) + " 項" if 險 else "常態監控")}</span></div>'
+                f'<ul>{項}</ul>' + (f'<div class="w">看錯會怎樣：{"；".join(看錯)}。</div>' if 看錯 else "") + '</div>')
+    # 四方意見
+    券 = None
+    try:
+        報告們 = [x for x in 券商報告清單(st.session_state.get("_券商版本", 0)) if str(x.get("代號")) == str(代號)]
+        券 = engine.券商共識(報告們, float(r["收盤"])) if 報告們 else None
+    except Exception:
+        pass
+    try:
+        片 = glance.影片多空(網紅說法清單(st.session_state.get("_網紅版本", 0)), 代號)
+    except Exception:
+        片 = None
+    方們, 總 = glance.三方意見(分列["看法"] if 分列 is not None else None, 券, 片, AI看, 讀回饋(),
+                         分列["總分"] if 分列 is not None else None)
+    方 = "".join(f'<div><b>{x["方"]}</b><strong style="color:{色.get(x["看法"], "#EDEDED")}">{x["看法"]}</strong>'
+                f'<span>{html.escape(x["細節"])}</span></div>' for x in 方們)
+    段落("INSIGHT // 重點整理")
+    st.markdown(
+        f'<div class="ins"><div class="sum">{html.escape(摘)}' + (f'<small>AI 報告 {AI時}：{html.escape(str(AI看))}</small>' if AI看 else "") + '</div>'
+        f'<div class="tri">{格}</div>{險框}'
+        + (f'<div class="pty-h">多方意見：<b style="color:{紅 if "偏多" in 總 else (綠 if "偏空" in 總 else "#EDEDED")}">{總}</b></div><div class="pty">{方}</div>' if 方們 else "")
+        + '</div>', unsafe_allow_html=True)
+    依據數 = sum(len(x["依據"]) for x in 三)
+    with st.expander(f"🧾 {依據數} 項判定依據與準度（🟢 回測有效、⚪ 沒有優勢、🔴 反向）"):
+        for x in 三:
+            st.markdown(f"**{x['期']}：{x['看法']}**" + ("".join(
+                f"\n- {'🔺' if v > 0 else ('🔻' if v < 0 else '▫️')} {t}" + (f" {圖}" if 圖 else "") for t, v, 圖 in x["依據"]) or "\n- 沒有明顯訊號"))
+        if 方們:
+            st.markdown("**各方過去準不準**" + "".join(f"\n- {x['方']}：{x['準度']}" for x in 方們))
+        st.caption("三格依數字規則判斷：每條偏多 +1、偏空 −1，合計 ≥ 2 偏多、≤ −2 偏空。🟢🔴⚪ 是每月規則體檢的結果，"
+                   "沒有圖示的依據還沒有回測過。多方意見不寫評論者名字，只看彙總；不是買賣建議。")
+
+
+def 估值刻度區(代號, r):
+    """便宜／合理／昂貴價刻度：近四季 EPS 與券商預估 EPS × 這檔過去 5 年本益比分位，標出現價在哪一區。"""
+    位 = 徽章底稿(_版本)[4]
+    if 代號 not in 位.index:
+        return
+    列 = 位.loc[代號]
+    收 = float(r["收盤"])
+    組們 = []
+    pe = r.get("本益比")
+    if pd.notna(pe) and pe > 0:
+        組們.append(("近四季 EPS", 收 / float(pe)))
+    下半年 = pd.Timestamp.now().month >= 7
+    for 欄, 名 in ((("預估EPS明年", "明年預估 EPS"), ("預估EPS今年", "今年預估 EPS")) if 下半年 else
+                  (("預估EPS今年", "今年預估 EPS"),)):
+        e = r.get(欄)
+        if pd.notna(e) and float(e) > 0:
+            組們.append((f"{名}（券商共識）", float(e)))
+            break
+    if not 組們:
+        return
+    色們 = [glance.估值色[k] for k in ("特價", "便宜", "合理", "偏貴", "昂貴")]
+    列html = ""
+    for 名, eps in 組們:
+        價們 = glance.估值價位(eps, 列)
+        if len(價們) < 5:
+            continue
+        xs = [p for _, p, _ in 價們]
+        位置 = float(np.interp(收, [xs[0] * 0.6] + xs + [xs[-1] * 1.5], [0, 10, 30, 50, 70, 90, 100]))
+        位置 = min(max(位置, 0), 100)
+        標 = ("特價", "便宜", "合理", "偏貴", "昂貴")[min(int(位置 // 20), 4)]
+        刻 = "".join(f'<span>{p:,.0f}<em style="color:{glance.估值色[n]}">{n} {倍:g}倍</em></span>' for n, p, 倍 in 價們)
+        列html += (f'<div class="row"><div class="lab">{名} {eps:,.2f} 元 → 現價落在 <b style="color:{glance.估值色[標]}">{標}</b></div>'
+                  f'<div class="bar">' + "".join(f'<i style="background:{c};opacity:.75"></i>' for c in ["#00D68F", "#5BE7A9", "#4A4A4A", "#FFB020", "#FF3B5C"]) +
+                  f'</div><div class="now" style="left:{位置:.1f}%"><em>{收:,.2f}</em></div><div class="ticks">{刻}</div></div>')
+    if not 列html:
+        return
+    st.markdown(f'<div class="vsc">{列html}</div>', unsafe_allow_html=True)
+    st.caption(f"⚖️ 估值刻度：EPS × 這檔 {列.get('起', '')} 以來每天本益比的 10／25／50／75／90 百分位"
+               "（特價／便宜／合理／偏貴／昂貴）。成長股用預估 EPS 那一條比較準；景氣循環股獲利高峰時本益比會偏低，反而要小心。")
+
+
+def 檢查表區(代號, r):
+    """成長／價值檢查表：每項打 優／可／-，比只給一個總分好懂。"""
+    配, 獲, 上限, _, _, _ = 徽章底稿(_版本)
+    健 = 健檢欄((代號,), 動能=False)
+    位 = 健.at[代號, "位階"] if 代號 in 健.index else np.nan
+    預 = 健.at[代號, "預估位階"] if 代號 in 健.index else np.nan
+    項們 = glance.檢查表(r, 配.get(代號, 0), 獲.get(代號, 0), 位, 預)
+    等 = {"優": "g1", "可": "g2", "-": "g3"}
+    表們 = ""
+    for 類 in ("成長", "價值"):
+        列 = [x for x in 項們 if x[0] == 類]
+        優 = sum(x[3] == "優" for x in 列)
+        表們 += (f'<table><caption>{類}檢查　{優}/{len(列)} 項優</caption>' + "".join(
+            f'<tr><td>{項}</td><td class="v">{html.escape(值)}</td><td class="g"><i class="{等[g]}">{g}</i></td></tr>' for _, 項, 值, g in 列)
+            + '</table>')
+    段落("CHECKLIST // 成長、價值檢查表")
+    st.markdown(f'<div class="chk">{表們}</div>', unsafe_allow_html=True)
+    st.caption("優／可的門檻：營收年增 ≥ 20%／≥ 0、毛利率年增 ≥ 1／≥ 0 個百分點、離 52 週高點 3%／15% 內、連續配息 ≥ 5／3 年"
+               + ("（資料從 " + str(pd.Timestamp.now().year - 上限 + 1) + " 年起）" if 上限 else "")
+               + "、連續獲利 ≥ 8／4 季、本益比 ≤ 12／20 倍、本益比 5 年位階 < 30%／≤ 70%、殖利率 ≥ 5%／3%、淨值比 ≤ 1.2／2.5、負債比 ≤ 40%／60%。")
+
+
+def 籌碼集中度區(代號, r):
+    """沒有免費的券商分點資料，用千張大戶週變化＋外資持股比＋投信＋融資＋當沖，合成 0～100 的籌碼集中度（主力分點的替代）。"""
+    大 = np.nan
+    try:
+        t = 集保資料(代號)
+        if t is not None and len(t) >= 2 and "big1000" in t.columns:
+            t = t.sort_values("date")
+            大 = float(t["big1000"].iloc[-1] - t["big1000"].iloc[-2])
+    except Exception:
+        pass
+    分, 項 = glance.籌碼集中度(r, 大)
+    if 分 is None:
+        return
+    段落("CONCENTRATION // 籌碼集中度（大戶、法人、散戶合成）")
+    色 = 紅 if 分 >= 60 else (綠 if 分 <= 40 else "#EDEDED")
+    說 = "籌碼往大戶、法人集中" if 分 >= 60 else ("籌碼往散戶分散" if 分 <= 40 else "中性")
+    列 = "".join(f'<li>{"🔺" if v > 0 else ("🔻" if v < 0 else "▫️")} {html.escape(名)}：{html.escape(值)}</li>' for 名, 值, v in 項)
+    st.markdown(f'<div class="ins"><div class="sum">籌碼集中度 <b style="color:{色};font-size:22px">{分}</b> /100　{說}</div>'
+                f'<div class="fg" style="margin:10px 0 6px"><i style="left:{分}%"></i></div><ul style="margin:6px 0 0;padding-left:4px;list-style:none">{列}</ul></div>',
+                unsafe_allow_html=True)
+    st.caption("50＝中性。千張大戶增、外資持股增、投信買超加分；融資增、當沖比率高扣分。主力分點（哪家券商買）需要付費資料，"
+               "這裡用免費的集保、外資、投信、融資、當沖資料代替，只看方向，不是買賣建議。")
+
+
 def AI數據包(代號, r):
     """AI 只能用的 JSON 數字包（網站即時資料＋回測），辯論庭、數字查核共用。"""
     百分位, 支撐, 壓力, 列 = 個股位階(代號)
@@ -1283,13 +1466,15 @@ _卡 = {
     "股本": 卡片("股本", 數(r.get("股本億"), "{:,.1f}", " 億")),
     "發行股數": 卡片("發行股數", 數(股數 / 1000 if pd.notna(股數) else np.nan, "{:,.0f}", " 張")),
     "市值": 卡片("市值", 數(股數 * r["收盤"] / 1e8 if pd.notna(股數) else np.nan, "{:,.0f}", " 億")),
-    "成交量": 卡片("成交量", 數(r["成交張數"], "{:,.0f}", " 張"), f"週轉率 {數(r['volume'] / 股數 * 100 if pd.notna(股數) else np.nan, '{:.2f}', '%')}"),
+    "成交量": 卡片("成交量", 數(r["成交張數"], "{:,.0f}", " 張"), f"週轉率 {數(r['volume'] / 股數 * 100 if pd.notna(股數) else np.nan, '{:.2f}', '%')}｜量比 {數(r.get('量對5日均'), '{:.2f}')}"),
 }
 卡片格([_卡[k] for k in (("收盤", "成交量", "市值", "產業") if 手機 else _卡)])  # 手機只留 4 張重點卡
 try:
     價位尺區(代號, float(r["收盤"]))
 except Exception:
     pass
+with 區塊防護("重點整理"):
+    重點卡區(代號, r)
 # 只計算打開的那個分頁（以前 6 個分頁每次全部算，換一檔股票要 5～9 秒）；換股票時停在同一個分頁
 均線 = {n: r[f"MA{n}"] * 比 for n in (5, 10, 20, 60)}  # 技術分頁與 AI 分頁都會用
 營收 = r.get("營收年增率")
@@ -1365,6 +1550,8 @@ with 分頁[1], 區塊防護("籌碼"):
     if 分頁[1].open:
         if not 有籌碼:
             st.caption("目前沒有籌碼資料。")
+        with 區塊防護("籌碼集中度"):
+            籌碼集中度區(代號, r)
         if 有籌碼:
             段落("CHIPS // 籌碼面（張）")
             卡片格([
@@ -1512,6 +1699,11 @@ with 分頁[2], 區塊防護("基本面"):
         ] + 毛利卡片(r) + ROE卡片(代號, r))
         預估EPS區(r)
         全年EPS反推區(代號)
+        with 區塊防護("檢查表"):
+            檢查表區(代號, r)
+        with 區塊防護("估值刻度"):
+            段落("VALUATION // 便宜、合理、昂貴價")
+            估值刻度區(代號, r)
         河流 = engine.本益比河流(個股全史(代號, _版本))
         if 河流:
             段落("VALUATION // 本益比河流圖")

@@ -13,6 +13,7 @@ import pandas as pd
 import requests
 
 import engine
+import glance
 
 倉庫 = os.environ.get("GITHUB_REPOSITORY") or "gelu27/Stock-lab"
 網站 = "https://taisc-stock.streamlit.app"
@@ -82,8 +83,11 @@ def 均線位置(r):
 
 
 def 重點行們(代號, r, 全):
-    """LINE 文字報告的基本面、籌碼、技術面、綜合判讀幾行。"""
+    """LINE 文字報告的健檢（短中長線、估值、徽章）、基本面、籌碼、技術面、綜合判讀幾行。"""
     行們 = []
+    健 = glance.LINE健檢行(代號, r)
+    if 健:
+        行們.append(健)
     比 = r["收盤"] / r["還原價"] if r.get("還原價") else 1
     營 = r.get("營收年增率")
     if pd.notna(營):

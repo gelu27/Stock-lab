@@ -998,6 +998,33 @@ def 抓台指期價差(天數=400):
     print(f"台指期價差完成，共 {len(表)} 天（最新 {表['date'].max()}）")
 
 
+def 抓個股期貨標的():
+    """期交所「股票期貨契約標的」清單 → data/stock_futures.csv（code, name），網站清單的「期」徽章用。
+    不用 lxml：逐列找「兩個英文字母＋F」的契約代碼與 4 碼證券代號；解析不到 100 檔就不覆蓋舊檔。"""
+    import re
+    try:
+        r = requests.get("https://www.taifex.com.tw/cht/2/stockLists", headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+        r.encoding = "utf-8"
+        頁 = r.text
+    except Exception as 錯誤:
+        print(f"個股期貨標的失敗：{錯誤}")
+        return
+    列們 = {}
+    for 列 in re.findall(r"<tr[^>]*>(.*?)</tr>", 頁, re.S):
+        格 = [re.sub(r"<[^>]+>|&nbsp;", "", x).strip() for x in re.findall(r"<td[^>]*>(.*?)</td>", 列, re.S)]
+        if not any(re.fullmatch(r"[A-Z]{2}F", x) for x in 格):
+            continue
+        碼 = next((x for x in 格 if re.fullmatch(r"\d{4}", x)), None)
+        if 碼:
+            i = 格.index(碼)
+            列們[碼] = 格[i + 1] if i + 1 < len(格) else ""
+    if len(列們) < 100:
+        print(f"個股期貨標的只解析到 {len(列們)} 檔，略過")
+        return
+    pd.DataFrame({"code": list(列們), "name": list(列們.values())}).to_csv(資料夾 / "stock_futures.csv", index=False)
+    print(f"個股期貨標的完成：{len(列們)} 檔")
+
+
 def 抓期貨保證金():
     """期交所「股價指數類保證金一覽表」的大台、小台、微台原始／維持保證金 → data/futures_margin.csv。
     不用 lxml：找到商品名稱後面的三個數字，最大＝原始、中間＝維持（最小是結算保證金）。"""
@@ -1909,7 +1936,7 @@ def main():
     if not 參數.skip_latest:
         for 工作 in (抓分時, 抓興櫃, 抓基本面, 抓匯率, 抓處置注意, 抓借券, 抓法說會, 抓融資金額, 抓期貨未平倉, 抓小台散戶,
                      抓美股日線, 抓經濟行事曆, 抓美股財報, 抓指數K線, 抓指數長期, 抓選擇權, 抓新股申購, 抓外資持股, 抓當沖, 抓庫藏股, 抓可轉債, 抓公司簡介, 抓合約負債, 抓合約負債歷史,
-                     抓內部人轉讓, 抓興櫃推薦券商, 抓重大訊息, 抓美國數據, 抓美股資本支出, 抓美股K線, 抓費半長線, 抓VIX長線, 抓夜盤法人, 抓台指期價差, 抓期貨保證金, 抓0050成分):  # 這些出問題不影響主資料庫
+                     抓內部人轉讓, 抓興櫃推薦券商, 抓重大訊息, 抓美國數據, 抓美股資本支出, 抓美股K線, 抓費半長線, 抓VIX長線, 抓夜盤法人, 抓台指期價差, 抓期貨保證金, 抓個股期貨標的, 抓0050成分):  # 這些出問題不影響主資料庫
             try:
                 工作()
             except Exception as 錯誤:

@@ -38,6 +38,7 @@ import momentum
 import beginner
 import ai_debate
 import feedback
+import glance
 
 importlib.reload(engine)
 importlib.reload(etf_data)  # 程式更新後確保用的是最新版的計算規則
@@ -48,6 +49,7 @@ importlib.reload(beginner)  # 新手白話：名詞小卡、白話燈號
 importlib.reload(ai_debate)  # AI 多空辯論、數字查核
 importlib.reload(macro)  # 01 首頁總經／資金用；沒重新載入時，部署新版後會沿用舊版 macro 而找不到新函式
 importlib.reload(feedback)  # 回饋循環：錯誤本、券商與網紅記分板、規則體檢
+importlib.reload(glance)  # 一眼判斷：清單表情徽章、估值位階、重點卡三格、風險框、檢查表
 
 _圖示 = Path(__file__).parent / "static" / "icon-192.png"
 st.set_page_config(page_title="台股觀測站", page_icon=str(_圖示) if _圖示.exists() else "◢", layout="wide")
@@ -150,6 +152,8 @@ a.cardlink:hover .card, a.cardlink:active .card {{ border-color: {青}; backgrou
 .rankwrap {{ overflow-x: auto; }}
 @media (max-width: 480px) {{ .rank td, .rank td.n {{ font-size: 14px; padding: 8px 6px; }} .rank th {{ padding: 8px 6px; }}
     .rank td:nth-child(5), .rank th:nth-child(5) {{ display: none; }} }}
+.rank td.n em.why {{ display: block; font-style: normal; font-size: 11px; color: #8A8A8A; margin-top: 1px; white-space: normal; line-height: 1.3; }}
+.rank td.sp {{ padding: 4px 6px; text-align: center; }}
 .rank {{ width: 100%; border-collapse: collapse; font-family: 'Noto Sans TC', sans-serif; }}
 .rank th {{ background: #141414; color: #9A9A9A; font-weight: 400; padding: 8px 10px; text-align: right;
     font-size: 14px; }}
@@ -380,6 +384,66 @@ svg.spark {{ flex: 0 0 auto; align-self: center; margin-left: auto; }}
 a.cardlink:hover .card, a.cardlink:active .card {{ box-shadow: 0 0 18px rgba(0,229,255,.25); }}
 [data-testid="stExpander"] details {{ border-color: rgba(0,229,255,.16) !important; background: rgba(3,12,15,.85) !important; }}
 [data-testid="stVerticalBlockBorderWrapper"] {{ border-color: rgba(0,229,255,.16) !important; }}
+/* 首頁指數卡列 */
+.idxrow {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 6px 0; }}
+.idxrow.two {{ grid-template-columns: 1fr 1fr; }}
+.card.idx {{ border-radius: 10px; border-color: #1A262B; }}
+.card.idx .v {{ font-size: 24px; }}
+.card.idx .sp svg {{ width: 100%; height: 40px; margin-top: 6px; }}
+.adv {{ display: flex; gap: 14px; align-items: baseline; margin-top: 4px; font-family: 'JetBrains Mono'; font-size: 22px; }}
+.adv small {{ font-family: 'Noto Sans TC'; font-size: 12px; color: #9A9A9A; }}
+.advbar {{ display: flex; height: 8px; border-radius: 4px; overflow: hidden; margin-top: 8px; }}
+.fg {{ position: relative; height: 8px; border-radius: 4px; margin-top: 10px; background: linear-gradient(90deg, {綠}, #FFB020 50%, {紅}); }}
+.fg i {{ position: absolute; top: -4px; width: 4px; height: 16px; margin-left: -2px; background: #FFF; border-radius: 2px; box-shadow: 0 0 6px #FFF; }}
+@media (max-width: 640px) {{ .idxrow {{ grid-template-columns: 1fr 1fr 1fr; gap: 5px; }} .card.idx {{ padding: 8px 7px; }}
+    .card.idx .v {{ font-size: clamp(14px, 4.2vw, 22px); }} .card.idx .k {{ font-size: 9px; letter-spacing: .05em; }}
+    .card.idx .d {{ font-size: 10px; }} .adv {{ font-size: 18px; gap: 10px; }} }}
+/* 一眼判斷：個股重點卡（三格、風險框、三方意見、估值刻度） */
+.ins {{ margin: 10px 0 6px; padding: 14px 16px; border: 1px solid #1A262B; background: #05090B; border-radius: 10px; }}
+.ins .sum {{ font-family: 'Noto Sans TC', sans-serif; font-size: 15px; color: #EDEDED; line-height: 1.6; }}
+.ins .sum small {{ color: #8A8A8A; font-size: 12px; margin-left: 6px; }}
+.tri {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }}
+.tri .tc {{ border: 1px solid #22303A; border-radius: 8px; padding: 9px 10px; background: #070B0D; }}
+.tri .tc.up {{ border-color: rgba(255,59,92,.55); box-shadow: inset 0 0 12px -6px {紅}; }}
+.tri .tc.dn {{ border-color: rgba(0,214,143,.55); box-shadow: inset 0 0 12px -6px {綠}; }}
+.tri .tc b {{ display: block; font-family: 'Noto Sans TC'; font-size: 12px; color: #8A8A8A; font-weight: 400; }}
+.tri .tc strong {{ display: block; font-family: 'Noto Sans TC'; font-size: 20px; margin: 2px 0; }}
+.tri .tc span {{ display: block; font-family: 'Noto Sans TC'; font-size: 12px; color: #9A9A9A; line-height: 1.45; }}
+.riskbox {{ margin-top: 10px; border: 1px solid rgba(255,176,32,.45); background: rgba(255,176,32,.05); border-radius: 8px; padding: 9px 12px; }}
+.riskbox .h {{ font-family: 'Noto Sans TC'; font-size: 13px; color: #FFB020; display: flex; justify-content: space-between; }}
+.riskbox ul {{ margin: 4px 0 0 0; padding-left: 18px; }}
+.riskbox li {{ font-family: 'Noto Sans TC'; font-size: 13px; color: #D8D8D8; line-height: 1.55; }}
+.riskbox li.hi::marker {{ color: {紅}; }}
+.riskbox .w {{ margin-top: 6px; font-family: 'Noto Sans TC'; font-size: 12.5px; color: #BFBFBF; border-top: 1px dashed rgba(255,176,32,.25); padding-top: 6px; }}
+.pty {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-top: 10px; }}
+.pty div {{ border: 1px solid #1E2A30; border-radius: 8px; padding: 7px 10px; font-family: 'Noto Sans TC'; }}
+.pty b {{ display: block; font-size: 12px; color: #8A8A8A; font-weight: 400; }}
+.pty strong {{ font-size: 16px; }}
+.pty span {{ display: block; font-size: 11.5px; color: #8A8A8A; line-height: 1.4; margin-top: 2px; }}
+.pty-h {{ margin-top: 10px; font-family: 'Noto Sans TC'; font-size: 13px; color: #BDBDBD; }}
+.vsc {{ margin: 12px 0 4px; padding: 14px 14px 2px; border: 1px solid #1A262B; background: #05090B; border-radius: 10px; }}
+.vsc .row {{ position: relative; margin: 0 0 26px; }}
+.vsc .lab {{ font-family: 'Noto Sans TC'; font-size: 12.5px; color: #9A9A9A; margin-bottom: 28px; }}
+.vsc .bar {{ display: flex; height: 10px; border-radius: 5px; overflow: hidden; }}
+.vsc .bar i {{ flex: 1; }}
+.vsc .ticks {{ display: flex; justify-content: space-between; font-family: 'JetBrains Mono'; font-size: 11px; color: #8A8A8A; margin-top: 5px; }}
+.vsc .ticks span {{ text-align: center; flex: 1; }}
+.vsc .ticks em {{ display: block; font-style: normal; font-family: 'Noto Sans TC'; font-size: 11px; }}
+.vsc .now {{ position: absolute; top: 40px; width: 4px; height: 20px; margin-left: -2px; background: #FFF; border-radius: 2px; box-shadow: 0 0 8px #FFF; }}
+.vsc .now em {{ position: absolute; top: -20px; left: 50%; transform: translateX(-50%); font-style: normal; font-family: 'JetBrains Mono'; font-size: 12px;
+    background: #FFF; color: #000; padding: 0 5px; border-radius: 3px; white-space: nowrap; }}
+.chk {{ display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }}
+.chk table, .chk tr, .chk td, .chk th {{ border: 0 !important; background: transparent !important; }}
+.chk table {{ width: 100%; border-collapse: collapse; font-family: 'Noto Sans TC'; font-size: 13.5px; }}
+.chk caption {{ text-align: left; color: {青}; font-size: 14px; padding: 4px 0; }}
+.chk td {{ padding: 5px 4px !important; border-bottom: 1px solid #12191C !important; color: #D0D0D0; }}
+.chk td.v {{ font-family: 'JetBrains Mono'; color: #EDEDED; text-align: right; white-space: nowrap; }}
+.chk td.g {{ width: 3.2em; text-align: center; }}
+.chk td.g i {{ display: inline-block; min-width: 2.2em; padding: 1px 0; border-radius: 4px; font-style: normal; font-size: 12.5px; }}
+.chk i.g1 {{ background: rgba(0,229,255,.22); color: #7FE9FF; }}
+.chk i.g2 {{ background: rgba(255,255,255,.08); color: #CFCFCF; }}
+.chk i.g3 {{ color: #555; }}
+@media (max-width: 640px) {{ .tri .tc strong {{ font-size: 17px; }} .tri .tc {{ padding: 8px 7px; }} .chk {{ grid-template-columns: 1fr; }} }}
 .verdict {{ border-color: rgba(0,229,255,.18); border-left-color: {青}; background: linear-gradient(90deg, rgba(0,229,255,.07), rgba(0,0,0,.3) 60%);
     box-shadow: inset 3px 0 12px -6px {青}; }}
 [data-testid="stButtonGroup"] button[aria-checked="true"], [data-testid="stButtonGroup"] button[kind$="Active"] {{
@@ -394,6 +458,15 @@ a.cardlink:hover .card, a.cardlink:active .card {{ box-shadow: 0 0 18px rgba(0,2
 
 # 手機模式：只在打開時加上，字體整體放大、卡片改兩欄、說明文字變亮
 手機CSS = f"""<style>
+.bnav {{ position: fixed; left: 0; right: 0; bottom: 0; z-index: 998; display: grid; grid-template-columns: repeat(5, 1fr);
+    background: rgba(4,8,10,.96); border-top: 1px solid #1A262B; backdrop-filter: blur(8px); padding: 6px 0 calc(6px + env(safe-area-inset-bottom)); }}
+.bnav a {{ display: flex; flex-direction: column; align-items: center; gap: 2px; color: #8A9BA3 !important; text-decoration: none !important; }}
+.bnav a svg {{ width: 23px; height: 23px; }}
+.bnav a span {{ font-family: 'Noto Sans TC', sans-serif; font-size: 11px; }}
+.bnav a.on {{ color: {青} !important; }}
+.bnav a.on svg {{ filter: drop-shadow(0 0 6px rgba(0,229,255,.6)); }}
+.fab {{ bottom: 78px !important; }}
+[data-testid="stMainBlockContainer"], .block-container {{ padding-bottom: 96px !important; }}
 html {{ font-size: 18px; }}
 .hero {{ padding: 10px 14px 8px; margin-bottom: 8px; }}
 .hero::after, .hero .kicker, .hero .sub {{ display: none; }}
@@ -553,8 +626,8 @@ def 圖表外觀(圖, 高=380):
 
 
 def 上色(表):
-    欄們 = [c for c in ["漲跌幅", "5日漲幅", "20日漲幅", "報酬率(%)", "加入至今%", "報告後漲跌%", "今日損益", "總損益", "法人(張)"] if c in 表.columns]
-    整數 = {"成交張數", "報告次數", "今日損益", "總損益", "股數", "總成本", "法人(張)", "市值億"}
+    欄們 = [c for c in ["漲跌幅", "5日漲幅", "20日漲幅", "報酬率(%)", "含息報酬%", "加入至今%", "報告後漲跌%", "今日損益", "總損益", "法人(張)"] if c in 表.columns]
+    整數 = {"成交張數", "報告次數", "今日損益", "總損益", "股數", "總成本", "法人(張)", "市值億", "注意"}
     格式 = {c: ("{:,.0f}" if c in 整數 else "{:,.2f}") for c in 表.select_dtypes("number").columns}
     return 表.style.map(lambda v: f"color:{漲跌色(v)}", subset=欄們).format(格式, na_rep="—")
 
@@ -1137,6 +1210,20 @@ def 圖示選單(小=False):
 
 if 手機:
     圖示選單(小=頁面 != 頁面們[0])
+
+
+def 底部選單():
+    """手機模式：畫面最下面固定一排（大盤、我的股票、個股、選股、評分），滑到哪裡都能直接換頁。"""
+    名 = {"01": "大盤", "02": "我的", "03": "個股", "04": "選股", "07": "評分"}
+    格 = "".join(
+        f'<a href="?p={碼}" target="_self" class="{"on" if 頁面.startswith(碼) else ""}">'
+        f'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">{_圖示路徑[碼]}</svg>'
+        f'<span>{字}</span></a>' for 碼, 字 in 名.items() if 碼 in _圖示路徑)
+    st.markdown(f'<nav class="bnav">{格}</nav>', unsafe_allow_html=True)
+
+
+if 手機:
+    底部選單()
 st.session_state["_網址p"] = 頁面[:2]
 
 
@@ -1226,14 +1313,16 @@ def 點選表(表, 樣式, key, 動作=None, **參數):
         if 列們:
             (動作 or 前往)(表.iloc[列們[0]]["代號"])
     if st.session_state.get("精簡表格"):
-        留 = [c for c in 表.columns if c in 精簡欄位]
+        顯欄 = list(樣式.data.columns if isinstance(樣式, Styler) else getattr(樣式, "columns", 表.columns))
+        留 = [c for c in 顯欄 if c in 精簡欄位]
         if len(留) >= 3:
-            參數["column_config"] = {**{c: None for c in 表.columns if c not in 留}, **參數.get("column_config", {})}
+            藏 = {c: None for c in 顯欄 if c not in 留}
+            參數["column_config"] = {**{k: v for k, v in 參數.get("column_config", {}).items() if k not in 藏}, **藏}
     表格(樣式, key=key, on_select=點了, selection_mode="single-row", hide_index=True, width="stretch", **參數)
 
 
 # 手機精簡表格只留這些欄（有的才顯示）
-精簡欄位 = {"名稱", "股票", "股價", "收盤", "漲跌幅", "今日損益", "總損益", "報酬率(%)", "總分", "較昨日", "看法",
+精簡欄位 = {"名稱", "股票", "健檢", "估值", "注意理由", "股價", "收盤", "漲跌幅", "今日損益", "總損益", "報酬率(%)", "總分", "較昨日", "看法",
           "加入至今%", "驗收", "距目標價%", "20日漲幅", "符合策略", "市值億", "規模", "營收(億)", "年增%",
           "理由", "金額(億)", "貢獻點數", "投信(張)"}
 
@@ -1338,6 +1427,77 @@ def 評分卡片(代號):
                 continue
             理由 = [f"🔴 {x}" for x in 項["利多"]] + [f"🟢 {x}" for x in 項["利空"]]
             st.markdown(f"**{面}面 {r[面]:.0f} 分**" + ("".join(f"\n- {x}" for x in 理由) or "\n- 沒有加減分（50 分＝中性）"))
+
+
+# ---------- 一眼判斷：清單的表情、徽章、估值位階（glance.py；自選股、庫存、選股共用） ----------
+@st.cache_data(ttl=43200, show_spinner=False, max_entries=1)
+def 徽章底稿(版本鍵):
+    """每天算一次：連續配息年數、連續獲利季數、配息資料起年、個股期貨標的、本益比 5 年位階、規則體檢。"""
+    夾 = engine.資料夾 / "fundamental"
+    try:
+        股利 = pd.read_csv(夾 / "dividend.csv", dtype={"code": str})
+    except Exception:
+        股利 = None
+    try:
+        損益 = pd.read_csv(夾 / "income.csv", dtype={"code": str}, usecols=["code", "quarter", "eps"])
+    except Exception:
+        損益 = None
+    起 = glance.配息資料起年(股利) if 股利 is not None else None
+    上限 = (pd.Timestamp.now().year - 起 + 1) if 起 else None
+    return (glance.連續配息年數(股利), glance.連續獲利季數(損益), 上限, glance.讀期貨標的(),
+            glance.讀本益比位階(), glance.讀規則體檢())
+
+
+def 健檢欄(代號們, 動能=True):
+    """代號們 → 以代號為索引的 表情、徽章、估值、位階、預估估值、預估位階。評分、順勢訊號算不出來就略過那部分。"""
+    配, 獲, 上限, 期, 位, 體 = 徽章底稿(_版本)
+    try:
+        分 = 評分資料(_版本)[0]
+    except Exception:
+        分 = None
+    動 = None
+    if 動能:
+        try:
+            動 = 動能資料(_版本)
+        except Exception:
+            動 = None
+    return glance.徽章表(list(代號們), 今日, 分數=分, 動能=動, 警示=警示表(_版本), 配息=配, 獲利=獲, 期貨=期,
+                       位階表=位, 體檢=體, 配息上限=上限)
+
+
+健檢欄設定 = {
+    "健檢": st.column_config.TextColumn("健檢", help="表情＝基本面分數（😀 ≥ 58、😟 ≤ 42），↑↓＝總分比昨天變動 3 分以上", width="small"),
+    "徽章": st.column_config.TextColumn("徽章", help="連配N 連續配息、賺 近 8 季都賺、期 有個股期貨、營收高、順勢訊號（回測有效才顯示）、⚠處置／注意、融資危"),
+    "估值": st.column_config.TextColumn("估值", help="本益比在這檔過去 5 年的位置：特價／便宜／合理／偏貴／昂貴；括號是用券商預估 EPS 算的", width="medium"),
+    "注意": st.column_config.NumberColumn("注意", help="越高越該先處理：處置 3、破 10 日線 3、破 5 日線 2、虧 15% 2、評分降 5 分、基本面弱、融資危、估值昂貴、今天跌 5% 各 1", width="small"),
+    "注意理由": st.column_config.TextColumn("該注意", width="medium"),
+    "位階": st.column_config.ProgressColumn("本益比位階", help="0＝5 年最便宜、100＝5 年最貴", min_value=0, max_value=100, format="%.0f"),
+}
+
+
+def 加健檢欄(表, 動能=True):
+    """在「名稱」後面插入 健檢、徽章、估值、位階 四欄（表要有 代號 欄）。"""
+    if 表 is None or not len(表) or "代號" not in 表.columns:
+        return 表
+    try:
+        b = 健檢欄(tuple(表["代號"].astype(str)), 動能)
+    except Exception:
+        return 表
+    t = 表.copy()
+    c = t["代號"].astype(str)
+    t["健檢"] = c.map(b["表情"]).fillna("·")
+    t["徽章"] = c.map(b["徽章"]).fillna("")
+    估, 預 = c.map(b["估值"]).fillna("—"), c.map(b["預估估值"]).fillna("—")
+    t["估值"] = [a if p in ("—", a) else f"{a}→預估{p}" for a, p in zip(估, 預)]
+    t["位階"] = c.map(b["位階"]).astype(float)
+    欄 = list(表.columns)
+    i = 欄.index("名稱") + 1 if "名稱" in 欄 else 0
+    return t[欄[:i] + ["健檢", "徽章", "估值", "位階"] + 欄[i:]]
+
+
+def 健檢圖例():
+    _, _, _, _, _, 體 = 徽章底稿(_版本)
+    st.caption("🩺 " + glance.徽章圖例(體))
 
 
 def 交易日記():
