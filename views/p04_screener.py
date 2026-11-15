@@ -745,6 +745,39 @@ with 選股分頁[3], 區塊防護("烏賊策略總覽"):
             點選表(提, 上色(提), "烏賊高分提醒表", column_config={"符合策略": st.column_config.TextColumn(width="large")})
         else:
             st.caption("⭐ 今天沒有股票同時符合「烏賊多方策略」與「高分（≥ 80）或分數大增（1 日 +10／3 日 +15／5 日 +20）」。")
+        with st.expander("📈 追蹤這個提醒策略的績效（近半年逐日重播）"):
+            if not st.toggle("計算並顯示績效（第一次約 15 秒）", key="烏賊績效開"):
+                st.caption("打開上面的開關才會計算，避免每次進來都等。")
+            else:
+                try:
+                    事, 彙 = 烏賊高分績效資料(_版本)
+                except Exception as e:
+                    事, 彙 = None, None
+                    st.caption(f"績效暫時算不出來：{type(e).__name__}")
+                if 事 is not None and len(事) and len(彙):
+                    st.caption("每個交易日重播「烏賊多方（一）～（四）× 總分 ≥ 80 或分數大增」的訊號，同一檔 10 個交易日內只算第一次；"
+                               "之後 5／10／20 日報酬（還原價）與扣掉加權指數後的超額。條件（五）要當時財報，無法重播所以不含；"
+                               "評分裡的財報部分用最新資料，回補分數略有偏誤。這是追蹤紀錄，不是買賣建議。")
+                    卡們 = []
+                    for _, r in 彙.iterrows():
+                        卡們.append(卡片(f"{r['持有']}平均超額", f"{r['平均超額%']:+.2f}%", f"{r['次數']} 次，勝率 {r['勝率%']:.0f}%、贏大盤 {r['贏大盤%']:.0f}%",
+                                     漲跌色(r["平均超額%"])))
+                    卡片格(卡們)
+                    表們 = {"全部訊號": 彙.assign(類型="全部")}
+                    for 名, 遮 in (("高分（≥ 80）", 事["原因"].str.contains("高分")), ("分數大增", 事["原因"].str.contains("大增|日 \\+"))):
+                        if 遮.any():
+                            _, 子 = engine.彙總訊號績效(事[遮])
+                            表們[名] = 子.assign(類型=名)
+                    對比 = pd.concat(表們.values(), ignore_index=True)[["類型", "持有", "次數", "平均報酬%", "勝率%", "平均超額%", "贏大盤%"]]
+                    表格(對比.style.format({"平均報酬%": "{:+.2f}", "平均超額%": "{:+.2f}", "勝率%": "{:.0f}", "贏大盤%": "{:.0f}"}, na_rep="—"),
+                         hide_index=True, width="stretch")
+                    段落("TRACKING // 最近的訊號與目前報酬")
+                    近 = 事.head(60)[["訊號日", "代號", "名稱", "訊號價", "總分", "原因", "符合策略", "5日超額%", "10日超額%", "20日超額%", "目前報酬%", "目前超額%"]]
+                    點選表(近, 近.style.format({"訊號日": "{:%m/%d}", "訊號價": "{:,.2f}", "總分": "{:.0f}", **{c: "{:+.2f}" for c in 近.columns if c.endswith("%")}}, na_rep="—")
+                          .map(lambda v: f"color:{漲跌色(v)}" if isinstance(v, (int, float)) and pd.notna(v) else "",
+                               subset=[c for c in 近.columns if c.endswith("%")]), "烏賊高分追蹤表", height=380)
+                elif 事 is not None:
+                    st.caption("資料天數不足，還算不出績效。")
         段落("SUMMARY // 各策略符合檔數與過去成績")
         績 = 策略成績()
         if 績 is not None and "策略" in 總表.columns:

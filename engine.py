@@ -1050,14 +1050,14 @@ def 評分累計變化(指標, 基本面, 加權, 天數們=(3, 5)):
     return 表
 
 
-def 烏賊多方高分重疊(今日, 分, 累計=None, 高分=提醒高分門檻, 大增=None):
+def 烏賊多方高分重疊(今日, 分, 累計=None, 高分=提醒高分門檻, 大增=None, 略過=()):
     """今天出現在任一「烏賊多方」策略名單、而且評分 ≥ 高分，或 1／3／5 日分數增加達門檻的股票。
     累計＝評分累計變化() 的結果（沒給就只看 1 日）。回傳欄位：代號、名稱、總分、較昨日、較3日、較5日、收盤、漲跌幅、原因、符合策略。"""
     大增 = 大增 or 提醒大增門檻
     欄 = ["代號", "名稱", "總分", "較昨日", "較3日", "較5日", "收盤", "漲跌幅", "原因", "符合策略"]
     策略們 = {}
     for 名, 設定 in 烏賊條件.items():
-        if 設定["方向"] != "多":
+        if 設定["方向"] != "多" or any(k in 名 for k in 略過):
             continue
         for 代 in 選股(今日, dict(設定["條件"], 排除ETF=True))["代號"]:
             策略們.setdefault(代, []).append(名.replace("烏賊", ""))
@@ -1080,6 +1080,77 @@ def 烏賊多方高分重疊(今日, 分, 累計=None, 高分=提醒高分門檻
                        "原因": "、".join(原因), "符合策略": "、".join(策)})
     表 = pd.DataFrame(列們, columns=欄)
     return 表.sort_values("總分", ascending=False).reset_index(drop=True)
+
+
+def 烏賊高分績效(指標, 基本面, 大盤K線, 天數=120, 冷卻=10):
+    """逐日重播「烏賊多方 × 高分／分數大增」訊號，追蹤訊號出現後 5／10／20 日報酬與贏大盤多少。
+    只用價量型的條件（一）～（四）；條件（五）要當時的財報與月營收，沒有歷史可重播所以略過。
+    基本面（評分中的營收、EPS 部分）用最新資料，所以回補的分數略有偏誤；同一檔 冷卻 個交易日內只算第一次。
+    回傳 (事件表, 彙總表)；事件表含「目前」＝到最新收盤為止的報酬。"""
+    日們 = sorted(指標["date"].unique())
+    if len(日們) < 8:
+        return pd.DataFrame(), pd.DataFrame()
+    權 = 大盤K線[["date", "close"]].copy()
+    權["change"] = 權["close"].diff()
+    分快取, 框快取 = {}, {}
+    def 框(日):
+        if 日 not in 框快取:
+            框快取[日] = 加基本面(指標[指標["date"] == 日], 基本面)
+        return 框快取[日]
+    def 總分(日):
+        if 日 not in 分快取:
+            當 = 框(日)
+            w = 權[權["date"] <= 日]
+            分快取[日] = 每日評分(當, w, 大盤評分(w, 當))[0]["總分"]
+        return 分快取[日]
+    價 = 指標.pivot_table(index="date", columns="代號", values="還原價")
+    大 = 權.set_index("date")["close"]
+    名稱 = 指標.drop_duplicates("代號", keep="last").set_index("代號")["名稱"]
+    起 = max(5, len(日們) - 天數)
+    最近 = {}
+    列們 = []
+    for i in range(起, len(日們)):
+        日 = 日們[i]
+        今 = 總分(日)
+        分 = pd.DataFrame({"總分": 今, "較昨日": 今 - 總分(日們[i - 1]).reindex(今.index)})
+        累 = pd.DataFrame({"較3日": 今 - 總分(日們[i - 3]).reindex(今.index), "較5日": 今 - 總分(日們[i - 5]).reindex(今.index)})
+        try:
+            表 = 烏賊多方高分重疊(框(日), 分, 累, 略過=("（五）",))
+        except Exception:
+            continue
+        for _, r in 表.iterrows():
+            代 = r["代號"]
+            if 代 in 最近 and i - 最近[代] <= 冷卻:
+                最近[代] = i
+                continue
+            最近[代] = i
+            列 = {"訊號日": 日, "代號": 代, "名稱": 名稱.get(代, ""), "訊號價": r["收盤"], "總分": r["總分"],
+                 "原因": r["原因"], "符合策略": r["符合策略"]}
+            for n in (5, 10, 20, None):
+                j = i + n if n else len(日們) - 1
+                欄 = f"{n}日" if n else "目前"
+                if j > i and j < len(日們) and 代 in 價.columns and pd.notna(價.at[日, 代]) and pd.notna(價.at[日們[j], 代]):
+                    報 = (價.at[日們[j], 代] / 價.at[日, 代] - 1) * 100
+                    列[f"{欄}報酬%"] = 報
+                    if 日 in 大.index and 日們[j] in 大.index:
+                        列[f"{欄}超額%"] = 報 - (大.at[日們[j]] / 大.at[日] - 1) * 100
+            列們.append(列)
+    事件 = pd.DataFrame(列們)
+    if 事件.empty:
+        return 事件, pd.DataFrame()
+    return 事件.sort_values("訊號日", ascending=False).reset_index(drop=True), 彙總訊號績效(事件)[1]
+
+
+def 彙總訊號績效(事件):
+    """事件表 → (事件表, 5／10／20 日彙總：次數、平均報酬、勝率、平均超額、贏大盤比例)。"""
+    彙 = []
+    for n in (5, 10, 20):
+        r, x = 事件.get(f"{n}日報酬%"), 事件.get(f"{n}日超額%")
+        if r is None or r.notna().sum() == 0:
+            continue
+        彙.append({"持有": f"{n} 日", "次數": int(r.notna().sum()), "平均報酬%": r.mean(), "勝率%": (r.dropna() > 0).mean() * 100,
+                 "平均超額%": x.mean(), "贏大盤%": (x.dropna() > 0).mean() * 100})
+    return 事件, pd.DataFrame(彙)
 
 
 def 每日功課(今日, 檔數=20):
