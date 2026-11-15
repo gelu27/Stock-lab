@@ -5457,6 +5457,13 @@ def 讀取產業鏈():
 
 
 賺錢順序鏈 = {"玻璃基板"}   # Vic：設備與檢測 → 代工與材料 → 基板廠
+部位鏈 = {"人形機器人"}   # 依身體部位分，不是上下游
+
+
+def 讀取產業鏈註記():
+    """data/chain_notes.csv（chain, code, 等級, 依據, 更新日）：題材受惠等級（A 已出貨／B 送樣驗證／C 間接題材），手動維護。"""
+    f = 資料夾 / "chain_notes.csv"
+    return pd.read_csv(f, dtype=str) if f.exists() else pd.DataFrame(columns=["chain", "code", "等級", "依據", "更新日"])
 
 
 def 產業鏈位置(代號, 名稱表=None):
@@ -5471,6 +5478,14 @@ def 產業鏈位置(代號, 名稱表=None):
         鏈 = t[t["chain"] == r["chain"]]
         同 = 鏈[(鏈["group"] == r["group"]) & (鏈["code"] != r["code"])]["code"]
         段們 = sorted(x for x in 鏈["stage"].unique() if "支援" not in x)   # 製程支援（設備、耗材）服務各段，不算上下游
+        if r["chain"] in 部位鏈:
+            註 = 讀取產業鏈註記()
+            註 = 註[(註["chain"] == r["chain"]) & (註["code"] == str(代號))]
+            行.append(f"{r['chain']} 供應鏈：{r['stage'][3:]}／{r['group']}"
+                     + (f"；同組：{'、'.join(名(c) for c in 同)}" if len(同) else "")
+                     + (f"；受惠等級：{註.iloc[0]['等級']}（{註.iloc[0]['依據']}，{註.iloc[0]['更新日']} 整理）" if len(註) else "")
+                     + "；這條鏈依身體部位分類，不是上下游")
+            continue
         if r["chain"] in 賺錢順序鏈:   # 新技術的鏈依建廠順序排，不是上下游
             行.append(f"{r['chain']} 產業鏈：{r['stage']}／{r['group']}"
                      + (f"；同組：{'、'.join(名(c) for c in 同)}" if len(同) else "")
@@ -5486,6 +5501,94 @@ def 產業鏈位置(代號, 名稱表=None):
                  + (f"；同組：{'、'.join(名(c) for c in 同)}" if len(同) else "")
                  + (f"；上游環節：{上}" if 上 else "") + (f"；下游環節：{下}" if 下 else ""))
     return "\n".join(行)
+
+
+def 產業鏈族群表(今日, 評分=None, 鏈="人形機器人"):
+    """某條產業鏈每一檔的現況：環節、等級、漲跌、評分、本益比位階、預估本益比、營收年增、法人。
+    今日：app 的 今日資料（要有 收盤、20日漲幅、本益比…）；評分：每日評分 的表（以代號為索引）。"""
+    import glance
+    t = 讀取產業鏈()
+    t = t[t["chain"] == 鏈].drop_duplicates("code")
+    if t.empty:
+        return pd.DataFrame()
+    註 = 讀取產業鏈註記()
+    註 = 註[註["chain"] == 鏈].drop_duplicates("code").set_index("code")
+    今 = 今日.drop_duplicates("代號").set_index("代號")
+    帶 = glance.讀本益比位階()
+    列們 = []
+    for _, r in t.iterrows():
+        c = r["code"]
+        if c not in 今.index:
+            continue
+        x = 今.loc[c]
+        g = lambda k: x[k] if k in x.index else np.nan
+        位 = glance.位階百分位(g("本益比"), 帶.loc[c] if c in 帶.index else None)
+        列們.append({"環節": r["stage"], "零件": r["group"], "代號": c, "名稱": g("名稱"),
+                   "等級": 註.loc[c, "等級"] if c in 註.index else "",
+                   "收盤": g("收盤"), "漲跌幅": g("漲跌幅"), "20日漲幅": g("20日漲幅"), "距52週高": g("距52週高點"),
+                   "總分": 評分["總分"].get(c, np.nan) if 評分 is not None else np.nan,
+                   "本益比": g("本益比") if g("本益比") and g("本益比") > 0 else np.nan,
+                   "本益比位階%": round(位, 0) if pd.notna(位) else np.nan, "估值": glance.估值標籤(位),
+                   "預估本益比": g("預估本益比"), "明年預估本益比": g("明年預估本益比"),
+                   "營收年增率": g("營收年增率"), "法人5日買超": g("法人5日買超"),
+                   "依據": 註.loc[c, "依據"] if c in 註.index else ""})
+    return pd.DataFrame(列們)
+
+
+def 產業鏈指數(指標, 加權, 鏈="人形機器人", 分組="等級", 起=None):
+    """產業鏈等權指數（每天再平衡，用還原價）。分組＝"等級"（有 chain_notes 時）或 "環節"。
+    回傳 DataFrame：index＝日期，欄＝各組＋「全部」＋「加權指數」，起點＝1。"""
+    t = 讀取產業鏈()
+    t = t[t["chain"] == 鏈].drop_duplicates("code")
+    if t.empty or 指標 is None:
+        return pd.DataFrame()
+    碼們 = set(t["code"])
+    p = 指標[指標["代號"].isin(碼們)]
+    if 起 is not None:
+        p = p[p["date"] >= pd.Timestamp(起)]
+    r = p.pivot_table(index="date", columns="代號", values="還原價").pct_change().iloc[1:]
+    if r.empty:
+        return pd.DataFrame()
+    組 = {}
+    if 分組 == "等級":
+        註 = 讀取產業鏈註記()
+        註 = 註[註["chain"] == 鏈]
+        if len(註):
+            組 = 註.groupby("等級")["code"].apply(list).to_dict()
+    if not 組:
+        組 = t.groupby("stage")["code"].apply(list).to_dict()
+    out = {}
+    for 名, cs in sorted(組.items()):
+        cs = [c for c in cs if c in r.columns]
+        if cs:
+            out[名] = (1 + r[cs].mean(axis=1).fillna(0)).cumprod()
+    out["全部"] = (1 + r.mean(axis=1).fillna(0)).cumprod()
+    if 加權 is not None and len(加權):
+        k = 加權.set_index("date")["close"].astype(float)
+        k = k[k.index <= r.index[-1]]
+        k = k[k.index >= r.index[0] - pd.Timedelta(days=10)]
+        kr = k.pct_change().reindex(r.index).fillna(0)
+        out["加權指數"] = (1 + kr).cumprod()
+    return pd.DataFrame(out)
+
+
+def 族群熱度回測(指數, 欄="全部", 天數=20):
+    """族群過去 天數 日贏加權幾 %，分組看之後 天數 日還會不會贏。回傳 (表, 目前過去超額%)。"""
+    if 指數 is None or 指數.empty or 欄 not in 指數 or "加權指數" not in 指數:
+        return pd.DataFrame(), np.nan
+    a, b = 指數[欄], 指數["加權指數"]
+    前 = (a / a.shift(天數) - b / b.shift(天數)) * 100
+    後 = (a.shift(-天數) / a - b.shift(-天數) / b) * 100
+    t = pd.DataFrame({"前": 前, "後": 後}).dropna()
+    if len(t) < 100:
+        return pd.DataFrame(), float(前.iloc[-1]) if len(前.dropna()) else np.nan
+    t["組"] = pd.cut(t["前"], [-999, -10, -5, 0, 5, 10, 999],
+                    labels=["落後 10% 以上", "落後 5～10%", "落後 0～5%", "領先 0～5%", "領先 5～10%", "領先 10% 以上"])
+    表 = t.groupby("組", observed=True)["後"].agg(天數="size", 之後平均超額="mean",
+                                                 之後贏大盤機率=lambda s: (s > 0).mean() * 100).round(1).reset_index()
+    表 = 表.rename(columns={"組": f"過去 {天數} 日相對加權", "之後平均超額": f"之後 {天數} 日平均超額%",
+                          "之後贏大盤機率": "之後贏大盤機率%"})
+    return 表, round(float(前.iloc[-1]), 1)
 
 
 # ========== 29. 影片分析師的技術觀察：週線位置、KD、扣抵值、爆量 K 棒、買貴檢查、守週線強勢股 ==========
