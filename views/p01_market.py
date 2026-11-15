@@ -340,6 +340,77 @@ def 族群熱力圖():
                    "想增刪可以直接在 GitHub 編輯這個檔案。")
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def 產業鏈指數資料(版本鍵, 鏈, 分組):
+    """網站常駐資料只有近 300 天，這裡另外讀這條鏈幾十檔的完整 5 年（月檔 parquet，約 2 秒）。"""
+    t = engine.讀取產業鏈()
+    原始 = engine.讀取資料庫(代號=t[t["chain"] == 鏈]["code"].unique().tolist())
+    全史 = engine.計算指標(原始) if 原始 is not None else 指標
+    指數 = engine.產業鏈指數(全史, 加權, 鏈, 分組)
+    return 指數, engine.族群熱度回測(指數)
+
+
+def 產業鏈區():
+    """題材產業鏈（data/supply_chain.csv）：每一檔現況、族群等權指數對加權、追高回測。人形機器人另有受惠等級。"""
+    段落("CHAIN // 題材產業鏈")
+    鏈們 = engine.讀取產業鏈()["chain"].dropna().unique().tolist()
+    if not 鏈們:
+        st.info("還沒有產業鏈清單（data/supply_chain.csv）。")
+        return
+    a, b = st.columns([2, 1])
+    鏈 = a.segmented_control("產業鏈", 鏈們, default="人形機器人" if "人形機器人" in 鏈們 else 鏈們[0], key="產業鏈選擇") or 鏈們[0]
+    天數 = b.segmented_control("走勢區間", [60, 250, 0], default=250, key="產業鏈區間",
+                             format_func=lambda d: {60: "3 個月", 250: "1 年", 0: "5 年"}[d])
+    天數 = 250 if 天數 is None else 天數
+    try:
+        評分 = 評分資料(_版本)[0]
+    except Exception:
+        評分 = None
+    表 = engine.產業鏈族群表(今日, 評分, 鏈)
+    有等級 = len(表) and 表["等級"].ne("").any()
+    指數, (熱, 現超) = 產業鏈指數資料(_版本, 鏈, "等級" if 有等級 else "環節")
+    if not 指數.empty:
+        顯 = 指數.tail(天數) if 天數 else 指數
+        顯 = 顯 / 顯.iloc[0] * 100
+        圖 = go.Figure()
+        色們 = ["#FF3B5C", "#FFB020", "#8F7CFF", "#00B8D9", "#5BE7A9", "#BDBDBD"]
+        for i, 欄 in enumerate(c for c in 顯.columns if c not in ("全部", "加權指數")):
+            圖.add_trace(go.Scatter(x=顯.index, y=顯[欄], name=欄, line=dict(color=色們[i % len(色們)], width=1.5)))
+        圖.add_trace(go.Scatter(x=顯.index, y=顯["全部"], name="全部（等權）", line=dict(color="#EDEDED", width=2.5)))
+        if "加權指數" in 顯:
+            圖.add_trace(go.Scatter(x=顯.index, y=顯["加權指數"], name="加權指數", line=dict(color=灰, width=1.5, dash="dot")))
+        圖.add_hline(y=100, line=dict(color=灰, width=1, dash="dot"))
+        圖表外觀(圖, 320).update_layout(legend=dict(orientation="h", y=1.12, x=0))
+        st.plotly_chart(圖, width="stretch", config={"displayModeBar": False})
+        末 = 顯.iloc[-1] - 100
+        st.caption(f"起點＝100，每一組等權、每天再平衡（還原權息）。這段期間：全部 {末['全部']:+.1f}%"
+                   + (f"，加權 {末['加權指數']:+.1f}%" if "加權指數" in 末 else "")
+                   + (f"；距 5 年內最高 {(指數['全部'].iloc[-1] / 指數['全部'].max() - 1) * 100:+.1f}%（最高在 {指數['全部'].idxmax():%Y/%m/%d}）" if len(指數) else "") + "。")
+    if len(表):
+        顯表 = 表 if 有等級 else 表.drop(columns=["等級", "依據"])
+        欄 = {c: st.column_config.NumberColumn(format="%+.1f") for c in ("漲跌幅", "20日漲幅", "距52週高", "營收年增率")}
+        欄.update({c: st.column_config.NumberColumn(format="%.1f") for c in ("本益比", "預估本益比", "明年預估本益比", "總分")})
+        欄["收盤"] = st.column_config.NumberColumn(format="%.2f")
+        欄["本益比位階%"] = st.column_config.NumberColumn(format="%.0f", help="目前本益比在這檔過去 5 年的百分位（0＝最便宜）")
+        欄["法人5日買超"] = st.column_config.NumberColumn(format="%,.0f", help="三大法人近 5 日買賣超（張）")
+        欄["依據"] = st.column_config.TextColumn(width="large")
+        表格(顯表.style.map(lambda v: f"color:{漲跌色(v)}", subset=["漲跌幅", "20日漲幅"]), hide_index=True, width="stretch",
+             column_config=欄, height=min(38 + 35 * len(顯表), 620), key=f"產業鏈表{鏈}")
+    if len(熱):
+        with st.expander(f"🔥 追高有用嗎？族群過去 20 日相對加權 vs 之後 20 日（目前 {現超:+.1f}%）"):
+            表格(熱, hide_index=True, width="stretch")
+            st.caption("用這條鏈 5 年的等權指數回測：族群剛大幅領先加權之後，接下來 20 日並沒有比較會贏；"
+                       "落後 10% 以上時之後也多半繼續落後。題材熱度不能單獨當買點，要配合營收與估值。")
+    if 有等級:
+        日 = engine.讀取產業鏈註記()
+        日 = 日[日["chain"] == 鏈]["更新日"].max()
+        st.caption(f"受惠等級（{日} 整理，依公開報導與法說）：A 已出貨＝已對人形機器人客戶出貨（多為小量）；"
+                   "B 送樣驗證＝送樣、打樣或只有展示，還沒有明確營收；C 間接題材＝本業不是機器人，或只是賣設備給零件廠。"
+                   "名單整理自報紙供應鏈圖，興櫃與未上市公司不列。機器人營收占比多數仍低，股價常先反映題材，僅供研究參考。")
+    else:
+        st.caption("產業鏈清單自己整理在 data/supply_chain.csv，可直接在 GitHub 增刪。僅供研究參考。")
+
+
 def 連板與流入區(分類):
     """連續漲停名單與歷史統計、族群連續資金流入天數（短線追強、老二老三補漲用）。"""
     try:
@@ -3217,7 +3288,7 @@ def 籌碼快訊區():
                "常是避險（手上有現股），不一定看空；小台散戶多空比是反向指標。紅＝偏多、綠＝偏空。")
 
 
-首頁區塊 = ["晨報", "指數", "必知", "大盤走勢", "30秒", "市場", "分布", "狀態", "價位", "AI解讀", "焦點", "國際", "總經", "連動", "月曆", "流向", "滑卡", "週報", "權值", "資金", "跌深", "止跌", "護盤", "選擇權", "籌碼", "情緒", "水位", "族群", "行事曆", "事件", "輝達", "延續", "排行"]
+首頁區塊 = ["晨報", "指數", "必知", "大盤走勢", "30秒", "市場", "分布", "狀態", "價位", "AI解讀", "焦點", "國際", "總經", "連動", "月曆", "流向", "滑卡", "週報", "權值", "資金", "跌深", "止跌", "護盤", "選擇權", "籌碼", "情緒", "水位", "族群", "產業鏈", "行事曆", "事件", "輝達", "延續", "排行"]
 
 
 新手區塊 = ["指數", "大盤走勢", "30秒", "市場", "分布", "流向", "狀態", "水位", "AI解讀", "焦點", "排行"]
@@ -3272,7 +3343,7 @@ def _國際():
         st.caption("國際行情暫時無法顯示。")
 區塊函式 = {"指數": 指數卡區, "籌碼": 籌碼快訊區, "必知": 必知區, "分布": 漲跌分布區, "月曆": 漲跌月曆區, "流向": 資金流向區, "滑卡": 滑卡區, "晨報": 晨報區, "週報": 週報區, "30秒": 三十秒卡, "市場": 市場卡片, "狀態": 狀態區, "價位": 關鍵價位區, "AI解讀": AI解讀區, "焦點": 焦點區, "國際": _國際, "總經": 總經區, "連動": 連動區,
          "大盤走勢": 加權圖 if 加權 is not None and len(加權) > 1 else None, "權值": 權值區, "資金": 資金面區, "跌深": 跌深區, "止跌": 止跌訊號區, "護盤": 護盤區, "選擇權": 選擇權區, "事件": 事件區, "輝達": 輝達週區, "延續": 反彈延續區,
-         "情緒": 情緒區, "水位": 資金水位區, "族群": 族群熱力圖, "行事曆": 行事曆區, "排行": 排行區}
+         "情緒": 情緒區, "水位": 資金水位區, "族群": 族群熱力圖, "產業鏈": 產業鏈區, "行事曆": 行事曆區, "排行": 排行區}
 要畫 = [x for x in 顯示 if 區塊函式.get(x)]
 if len(要畫) > 3 and not (手機 and 模式 == "手機"):  # 首頁很長，上方放一排快速跳轉
     st.markdown('<div class="jump">' + "".join(f'<a href="#h-{x}" target="_self">{x}</a>' for x in 要畫)
