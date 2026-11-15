@@ -1487,6 +1487,138 @@ def 即時報價(代號們, 市場對照):
     return pd.DataFrame(結果)
 
 
+def 解析五檔(m):
+    """把證交所 getStockInfo 的一筆 msgArray 轉成五檔報價 dict。
+    a/f＝賣出五檔價／量、b/g＝買進五檔價／量（底線分隔）；量是張。回傳 None 表示格式不對。"""
+    def 拆(字):
+        return [_數(x) for x in str(字 or "").split("_") if x not in ("", "-")]
+    try:
+        賣價, 賣量, 買價, 買量 = 拆(m.get("a")), 拆(m.get("f")), 拆(m.get("b")), 拆(m.get("g"))
+        昨收 = _數(m.get("y"))
+        現價 = _數(m.get("z"))
+        有成交 = pd.notna(現價)
+        if not 有成交:   # 這段時間沒成交，用買賣中間價當參考
+            現價 = (買價[0] + 賣價[0]) / 2 if 買價 and 賣價 else (買價[0] if 買價 else (賣價[0] if 賣價 else np.nan))
+        買 = [(p, v) for p, v in zip(買價, 買量) if pd.notna(p) and p > 0][:5]
+        賣 = [(p, v) for p, v in zip(賣價, 賣量) if pd.notna(p) and p > 0][:5]
+        委買, 委賣 = float(sum(v for _, v in 買 if pd.notna(v))), float(sum(v for _, v in 賣 if pd.notna(v)))
+        return {"代號": m.get("c"), "名稱": m.get("n"), "現價": 現價, "有成交": 有成交, "昨收": 昨收,
+                "漲跌": 現價 - 昨收 if pd.notna(現價) and pd.notna(昨收) else np.nan,
+                "漲跌幅": (現價 / 昨收 - 1) * 100 if pd.notna(現價) and 昨收 else np.nan,
+                "開": _數(m.get("o")), "高": _數(m.get("h")), "低": _數(m.get("l")),
+                "漲停": _數(m.get("u")), "跌停": _數(m.get("w")), "量": _數(m.get("v")), "單量": _數(m.get("tv")),
+                "時間": m.get("t"), "日期": m.get("d"), "買": 買, "賣": 賣, "委買": 委買, "委賣": 委賣,
+                "買盤比": 委買 / (委買 + 委賣) * 100 if 委買 + 委賣 > 0 else np.nan}
+    except Exception:
+        return None
+
+
+def 即時五檔(代號, 市場, 抓=None):
+    """單一個股的盤中五檔（證交所延遲約 5～20 秒）。抓：測試用，函式 (網址) → msgArray 的一筆 dict。"""
+    import requests
+    前綴 = "otc" if 市場 == "上櫃" else "tse"
+    網址 = f"https://mis.twse.com.tw/stock/api/getStockInfo.jsp?json=1&delay=0&ex_ch={前綴}_{代號}.tw"
+    if 抓:
+        m = 抓(網址)
+    else:
+        r = requests.get(網址, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        陣 = r.json().get("msgArray", [])
+        m = 陣[0] if 陣 else None
+    return 解析五檔(m) if m else None
+
+
+def 五檔解讀(五):
+    """五檔的白話一句話（只看掛單，不是買賣建議；掛單隨時會撤，參考性有限）。"""
+    if not 五:
+        return ""
+    句 = []
+    if pd.notna(五.get("漲停")) and pd.notna(五["現價"]) and 五["現價"] >= 五["漲停"]:
+        句.append("目前在漲停價")
+    elif pd.notna(五.get("跌停")) and pd.notna(五["現價"]) and 五["現價"] <= 五["跌停"]:
+        句.append("目前在跌停價")
+    比 = 五.get("買盤比")
+    if pd.notna(比):
+        if 比 >= 65:
+            句.append(f"五檔委買 {五['委買']:,.0f} 張多於委賣 {五['委賣']:,.0f} 張（買盤 {比:.0f}%），下方掛單較厚")
+        elif 比 <= 35:
+            句.append(f"五檔委賣 {五['委賣']:,.0f} 張多於委買 {五['委買']:,.0f} 張（買盤 {比:.0f}%），上方賣壓較重")
+        else:
+            句.append(f"五檔買賣掛單差不多（買盤 {比:.0f}%）")
+    if 五.get("買") and 五.get("賣"):
+        價差 = 五["賣"][0][0] - 五["買"][0][0]
+        if 五["現價"] and 價差 / 五["現價"] > 0.01:
+            句.append(f"買賣價差 {價差:g} 元偏大（流動性較差，市價單容易買貴賣便宜）")
+    return "；".join(句) + "。" if 句 else ""
+
+
+def 解析存摺(來源, 已知代號=None):
+    """把集保 e 存摺（或券商庫存）匯出的 PDF 文字／CSV／Excel 轉成 代號、名稱、股數。
+    來源：字串（PDF 抽出的文字）或 DataFrame。已知代號：有給就只留這些代號，避免把日期、帳號當成股票。
+    文字格式不固定：每一行找「代號 名稱 … 數字」，股數取該行最後一個整數（e 存摺的餘額欄在最右邊），
+    匯入前網站會讓使用者逐筆確認。回傳 DataFrame（代號、名稱、股數），同代號加總。"""
+    已知 = set(map(str, 已知代號)) if 已知代號 is not None else None
+    列們 = []
+    if isinstance(來源, pd.DataFrame):
+        t = 來源.copy()
+        t.columns = [str(c).strip() for c in t.columns]
+        代欄 = next((c for c in t.columns if "代號" in c or "代碼" in c), None)
+        名欄 = next((c for c in t.columns if "名稱" in c), None)
+        候選 = [c for c in t.columns if any(k in c for k in ("餘額", "股數", "庫存", "數量"))]
+        股欄 = next((c for c in 候選 if "餘額" in c), None) or (候選[-1] if 候選 else None)
+        if not 代欄 or not 股欄:
+            return pd.DataFrame(columns=["代號", "名稱", "股數"])
+        for _, x in t.iterrows():
+            代 = str(x[代欄]).strip().split(".")[0]
+            股 = _數(str(x[股欄]).replace(",", ""))
+            if re.fullmatch(r"\d{4,6}[A-Z]?", 代) and pd.notna(股) and 股 > 0:
+                列們.append({"代號": 代, "名稱": str(x[名欄]).strip() if 名欄 else "", "股數": float(股)})
+    else:
+        for 行 in str(來源 or "").splitlines():
+            m = re.search(r"(?<![\d/.-])(\d{4,6}[A-Z]?)\s+([^\s\d][^\s]*)", 行)
+            if not m:
+                continue
+            代 = m.group(1)
+            if 已知 is not None and 代 not in 已知:
+                continue
+            尾 = 行[m.end():]
+            數們 = [s for s in re.findall(r"(?<![\d.])\d{1,3}(?:,\d{3})+(?![\d.])|(?<![\d.,])\d+(?![\d.,])", 尾)]
+            if not 數們:
+                continue
+            股 = float(數們[-1].replace(",", ""))
+            if 股 > 0:
+                列們.append({"代號": 代, "名稱": m.group(2), "股數": 股})
+    t = pd.DataFrame(列們, columns=["代號", "名稱", "股數"])
+    if 已知 is not None:
+        t = t[t["代號"].isin(已知)]
+    if t.empty:
+        return t
+    return t.groupby("代號", as_index=False).agg(名稱=("名稱", "first"), 股數=("股數", "sum"))
+
+
+def 存摺對照(新, 現有, 收盤=None):
+    """e 存摺股數 vs 網站庫存：回傳每檔的 代號、名稱、網站股數、存摺股數、差、建議總成本、狀態。
+    成本：股數相同就沿用；有變動就用原本均價 × 新股數；新股票用最近收盤 × 股數（標「成本請填」）。"""
+    收盤 = 收盤 or {}
+    舊 = 現有.assign(代號=現有["代號"].astype(str)).set_index("代號") if len(現有) else pd.DataFrame(columns=["股數", "總成本"])
+    新 = 新.set_index("代號")
+    列們 = []
+    for 代 in list(dict.fromkeys(list(新.index) + list(舊.index))):
+        舊股 = float(舊.at[代, "股數"]) if 代 in 舊.index else 0.0
+        舊本 = float(舊.at[代, "總成本"]) if 代 in 舊.index else 0.0
+        新股 = float(新.at[代, "股數"]) if 代 in 新.index else 0.0
+        if 新股 == 舊股:
+            本, 狀態 = 舊本, "相同"
+        elif 新股 == 0:
+            本, 狀態 = 0.0, "存摺沒有（會移除）"
+        elif 舊股 > 0:
+            本, 狀態 = 舊本 / 舊股 * 新股, "股數變動（成本依原均價換算）"
+        else:
+            本, 狀態 = float(收盤.get(代, 0) or 0) * 新股, "新股票（成本請填）"
+        列們.append({"代號": 代, "名稱": 新.at[代, "名稱"] if 代 in 新.index else "", "網站股數": 舊股, "存摺股數": 新股,
+                   "差": 新股 - 舊股, "總成本": round(本), "狀態": 狀態})
+    return pd.DataFrame(列們)
+
+
 def 套用即時價(r, 代號, 資料日, 現在=None, 抓報價=None):
     """個股報告用：資料庫最新一天之後有成交（盤中，或收盤後到晚上更新資料庫前），就用證交所即時價
     更新現價、漲跌、本益比、殖利率、淨值比、成交量；法人、融資、營收、均線等還是資料庫最近一天的。

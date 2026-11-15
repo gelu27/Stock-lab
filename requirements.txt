@@ -10,3 +10,4 @@ matplotlib
 pyarrow
 openpyxl
 pypinyin
+pypdf
