@@ -2720,7 +2720,7 @@ def 資金水位區():
         b.markdown(f"**建議持股水位：約 {水位:.0f}%**（分數 0 → 20%，100 → 90%）\n\n" + "\n".join(成分))
     else:  # 自家回測方向相反時，不把它當成加減碼建議（首頁「今天必須知道」也不顯示）
         b.markdown(f"**換算水位：約 {水位:.0f}%（⚠️ 回測未驗證，不當作持股建議）**\n\n" + "\n".join(成分))
-    b.caption("每個指標都換算成「在近一年多裡排第幾」的百分位，再平均。")
+    b.caption("每個指標都換算成「跟當天以前比排第幾」的百分位（只用當時看得到的資料，不偷看未來），再平均。")
     近 = 日.tail(120)
     線 = go.Figure(go.Scatter(x=近["date"], y=近["分數"], mode="lines", line=dict(color="#FFB020", width=2), name="分數"))
     線.add_hline(y=35, line=dict(color=綠, dash="dot", width=1))
