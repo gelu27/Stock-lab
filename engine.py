@@ -1083,6 +1083,93 @@ def 烏賊多方高分重疊(今日, 分, 累計=None, 高分=提醒高分門檻
     return 表.sort_values("總分", ascending=False).reset_index(drop=True)
 
 
+黃金功課榜 = ("強勢股", "三&五日強勢股", "量大股")   # 回測曾漲 20% 機率高的強勢類榜單
+黃金停損 = -8     # 參考停損（%）：回測 20 日內平均最大回檔約 −8%～−12%
+黃金停利 = (15, 20)   # 參考分批停利（%）：20 日內最高漲幅平均 15%～22%，收盤卻只剩 +4%，所以不等 20 日
+黃金風險提示 = "回測：曾漲 ≥ 20% 機率約 5～6 成，但中途平均回檔約 −10%、20 日收盤平均只有 +4%；請嚴守停損、分批停利。"
+
+
+def 黃金組合(今日, 分, 高分=提醒高分門檻):
+    """入選當天總分 ≥ 高分，且同時在強勢類策略（烏賊條件（一）短線活躍小型股、功課的強勢股／三&五日強勢股／量大股）的股票。
+    欄位：代號、名稱、收盤、漲跌幅、總分、較昨日、符合策略、停損價、停利價1、停利價2。"""
+    欄 = ["代號", "名稱", "收盤", "漲跌幅", "總分", "較昨日", "符合策略", "停損價", "停利價1", "停利價2"]
+    命 = {}
+    for 名, 設 in 烏賊條件.items():
+        if "（一）" in 名 and 設["方向"] == "多":
+            for c in 選股(今日, dict(設["條件"], 排除ETF=True))["代號"]:
+                命.setdefault(c, []).append("短線活躍小型股")
+    功課 = 每日功課(今日)
+    for 名 in 黃金功課榜:
+        for c in 功課[名]["代號"]:
+            命.setdefault(c, []).append(名)
+    基 = 今日.drop_duplicates("代號").set_index("代號")
+    列們 = []
+    for c, 策 in 命.items():
+        if c not in 分.index or pd.isna(分.at[c, "總分"]) or 分.at[c, "總分"] < 高分 or c not in 基.index:
+            continue
+        價 = float(基.at[c, "收盤"])
+        列們.append({"代號": c, "名稱": 基.at[c, "名稱"], "收盤": 價, "漲跌幅": 基.at[c, "漲跌幅"], "總分": float(分.at[c, "總分"]),
+                   "較昨日": 分.at[c, "較昨日"] if "較昨日" in 分.columns else np.nan, "符合策略": "、".join(策),
+                   "停損價": round(價 * (1 + 黃金停損 / 100), 2), "停利價1": round(價 * (1 + 黃金停利[0] / 100), 2),
+                   "停利價2": round(價 * (1 + 黃金停利[1] / 100), 2)})
+    表 = pd.DataFrame(列們, columns=欄)
+    return 表.sort_values("總分", ascending=False).reset_index(drop=True)
+
+
+def 黃金實際追蹤(記錄, 指標):
+    """每日記錄（{日期: {代號: [名稱, 入選價, 總分, 策略]}}）→ 每檔第一次入選後到最新收盤的報酬、最高漲幅、最大回檔。
+    記錄是當天推播時真的看到的名單，沒有回補偏誤。回傳 (明細, 彙總 dict)。"""
+    if not 記錄:
+        return pd.DataFrame(), {}
+    價 = 指標.pivot_table(index="date", columns="代號", values="還原價").sort_index()
+    已 = {}
+    列們 = []
+    for 日 in sorted(記錄):
+        d = pd.Timestamp(日)
+        for c, v in 記錄[日].items():
+            if c in 已 or c not in 價.columns or d not in 價.index or pd.isna(價.at[d, c]):
+                continue
+            已[c] = 1
+            後 = 價.loc[價.index > d, c].dropna()
+            起 = 價.at[d, c]
+            列們.append({"入選日": d, "代號": c, "名稱": v[0], "入選價": v[1], "總分": v[2], "符合策略": v[3],
+                       "天數": len(後), "目前報酬%": (後.iloc[-1] / 起 - 1) * 100 if len(後) else np.nan,
+                       "最高漲幅%": (後.max() / 起 - 1) * 100 if len(後) else np.nan,
+                       "最大回檔%": (後.min() / 起 - 1) * 100 if len(後) else np.nan})
+    表 = pd.DataFrame(列們)
+    if 表.empty:
+        return 表, {}
+    有 = 表.dropna(subset=["目前報酬%"])
+    摘 = {"檔數": len(表), "已有後續": len(有), "平均報酬%": 有["目前報酬%"].mean() if len(有) else np.nan,
+         "勝率%": (有["目前報酬%"] > 0).mean() * 100 if len(有) else np.nan}
+    return 表.sort_values("入選日", ascending=False).reset_index(drop=True), 摘
+
+
+def 訊號績效分組(事件, 大盤K線):
+    """追蹤績效事件表依「訊號月份」與「訊號當天加權在季線（60 日均線）上或下」分組，看優勢是否只出現在特定月份或行情。"""
+    if 事件 is None or 事件.empty or "20日報酬%" not in 事件.columns:
+        return pd.DataFrame()
+    K = 大盤K線[["date", "close"]].sort_values("date").copy()
+    K["季線"] = K["close"].rolling(60).mean()
+    行情 = K.set_index("date").apply(lambda r: "加權在季線上" if r["close"] >= r["季線"] else "加權在季線下", axis=1)
+    行情 = 行情.where(K.set_index("date")["季線"].notna())
+    t = 事件.copy()
+    t["月份"] = t["訊號日"].dt.strftime("%Y-%m")
+    t["行情"] = t["訊號日"].map(行情)
+    高 = t["原因"].str.contains("高分")
+    列們 = []
+    for 類, 遮 in (("全部", t.index == t.index), ("高分", 高)):
+        for 鍵 in ("月份", "行情"):
+            for 組, g in t[遮].dropna(subset=[鍵]).groupby(鍵):
+                有 = g.dropna(subset=["20日報酬%"])
+                if len(有) == 0:
+                    continue
+                列們.append({"類型": 類, "分組": 組, "次數": len(有), "20日平均報酬%": 有["20日報酬%"].mean(),
+                           "20日平均超額%": 有["20日超額%"].mean(), "贏大盤%": (有["20日超額%"] > 0).mean() * 100,
+                           "20日最高平均%": 有["20日最高%"].mean() if "20日最高%" in 有 else np.nan})
+    return pd.DataFrame(列們)
+
+
 def 烏賊高分績效(指標, 基本面, 大盤K線, 天數=120, 冷卻=10):
     """逐日重播「烏賊多方 × 高分／分數大增」訊號，追蹤訊號出現後 5／10／20 日報酬與贏大盤多少。
     只用價量型的條件（一）～（四）；條件（五）要當時的財報與月營收，沒有歷史可重播所以略過。
