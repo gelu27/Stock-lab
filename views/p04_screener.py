@@ -736,6 +736,15 @@ with 選股分頁[3], 區塊防護("烏賊策略總覽"):
                卡片("同時符合 2 個以上", f"{len(重複)}", "檔", 青)])
         st.caption("多＝適合找買點（講義：強勢股買拉回、盤整突破）；空＝轉弱、避開或減碼（講義：跌破十日線、弱勢股）。"
                    "資料日期 " + 最新日.strftime("%Y-%m-%d"))
+        try:
+            提 = engine.烏賊多方高分重疊(今日, 評分資料(_版本)[0])
+        except Exception:
+            提 = None
+        if 提 is not None and len(提):
+            st.warning(f"⭐ 特別提醒：{len(提)} 檔同時符合「烏賊多方策略」與「高分（總分 ≥ {engine.提醒高分門檻}）或分數大增（一天 ≥ +{engine.提醒大增門檻} 分）」")
+            點選表(提, 上色(提), "烏賊高分提醒表", column_config={"符合策略": st.column_config.TextColumn(width="large")})
+        else:
+            st.caption("⭐ 今天沒有股票同時符合「烏賊多方策略」與「高分（≥ 80）或分數大增（一天 ≥ +10 分）」。")
         段落("SUMMARY // 各策略符合檔數與過去成績")
         績 = 策略成績()
         if 績 is not None and "策略" in 總表.columns:
