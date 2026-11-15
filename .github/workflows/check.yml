@@ -8,6 +8,9 @@ on:
     branches: [main]   # ai-reports 分支的開放 PR 每次寫入來訪紀錄都會觸發，白跑約 4 分鐘
   workflow_dispatch:
 
+permissions:
+  contents: read   # 只讀程式碼跑檢查，不需要寫入權限
+
 jobs:
   pages:
     runs-on: ubuntu-latest
@@ -60,5 +63,7 @@ jobs:
         run: python tests/test_score80.py
       - name: 回饋循環（錯誤本、券商紀錄、規則體檢、週報自我檢討）
         run: python tests/test_feedback.py
+      - name: 專家評測修正（密碼防猜、漲跌家數一致、持股建議要回測驗證）
+        run: python tests/test_expert_review.py
       - name: LINE 省額度（合併推播、節省模式、回覆不算額度）＋新片提醒
         run: pip install -q pytest && python -m pytest -q tests/test_line_quota.py tests/test_auto_intake.py

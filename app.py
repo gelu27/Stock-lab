@@ -802,12 +802,19 @@ with d.popover("📖 名詞"):
 with b.popover("🔄 更新"):
     st.markdown("**重新載入**：資料庫已經更新、但網站顯示的還是舊資料時按。")
     if st.button("🔄 重新載入網站資料", key="重新載入"):
-        載入.clear()
-        st.cache_data.clear()
-        for k in ("自選股", "到價提醒", "交易日記", "研究筆記"):
-            st.session_state.pop(k, None)
-        engine.釋放記憶體()
-        st.rerun()
+        try:
+            _有密碼 = bool(st.secrets.get("password"))
+        except Exception:
+            _有密碼 = False
+        if _有密碼 and not st.session_state.get("已解鎖"):  # 清全站暫存會讓所有訪客都重等約 20 秒，只給站長按
+            st.warning("重新載入會清掉全站暫存，請先到「02 / 我的股票」輸入密碼解鎖。")
+        else:
+            載入.clear()
+            st.cache_data.clear()
+            for k in ("自選股", "到價提醒", "交易日記", "研究筆記"):
+                st.session_state.pop(k, None)
+            engine.釋放記憶體()
+            st.rerun()
     st.markdown("**重新執行更新**：請 GitHub 立刻再抓一次交易所資料（約 5～15 分鐘），完成後再按上面的重新載入。")
     if st.button("⚡ 重新執行資料更新", key="觸發更新"):
         try:
@@ -858,6 +865,14 @@ def 抓國際():
     return engine.國際行情(), engine.台指期()
 
 
+def 漲跌家數(表=None):
+    """全站統一的漲跌家數：上市櫃普通股（4 碼、不含 0 開頭的 ETF），回傳 (漲, 平, 跌)。
+    以前頁首、指數卡、市場判讀各用不同範圍，同一頁出現三組數字。"""
+    t = 今日 if 表 is None else 表
+    t = t[t["代號"].astype(str).str.fullmatch(r"[1-9]\d{3}") & (t["收盤"] > 0)]
+    return int((t["漲跌"] > 0).sum()), int((t["漲跌"] == 0).sum()), int((t["漲跌"] < 0).sum())
+
+
 def 跑馬燈():
     """頁首一條會捲動的行情：加權、漲跌家數、台指期、美股、匯率。手指按住（滑鼠移上去）會暫停。"""
     項們 = []
@@ -868,7 +883,7 @@ def 跑馬燈():
     if 加權 is not None and len(加權):
         r = 加權.iloc[-1]
         加("加權", r["close"], r["change"], r["change"] / (r["close"] - r["change"]) * 100)
-    上, 下 = int((今日["漲跌"] > 0).sum()), int((今日["漲跌"] < 0).sum())
+    上, _, 下 = 漲跌家數()
     項們.append(f'<span><b>漲跌家數</b><font color="{紅}">▲{上}</font> <font color="{綠}">▼{下}</font></span>')
     項們.append(f'<span><b>成交金額</b>{今日["成交值億"].sum():,.0f} 億</span>')
     try:
@@ -1066,6 +1081,37 @@ def 憑證有效(k):
         return bool(_密碼()) and hmac.compare_digest(簽, 對) and int(到期) > dt.datetime.now().timestamp()
     except Exception:
         return False
+
+
+@st.cache_resource
+def _密碼錯誤紀錄():
+    return {}
+
+
+def 核對密碼(輸入, 上限=5, 鎖秒=600):
+    """比對密碼；同一個來源（IP）10 分鐘內錯 5 次就先鎖住，防止有人一直猜。錯誤訊息直接顯示在輸入框下面。
+    同一個錯誤密碼在重新整理畫面時不會重複計次。"""
+    密碼 = _密碼()
+    try:
+        來源 = (st.context.headers.get("X-Forwarded-For", "").split(",")[0].strip() or st.context.ip_address or "?")
+    except Exception:
+        來源 = "?"
+    紀錄, 現 = _密碼錯誤紀錄(), time.time()
+    次, 起 = 紀錄.get(來源, (0, 現))
+    if 現 - 起 > 鎖秒:
+        次, 起 = 0, 現
+    if 次 >= 上限:
+        st.error(f"密碼錯太多次，請約 {int((鎖秒 - (現 - 起)) // 60) + 1} 分鐘後再試。")
+        return False
+    if 密碼 and hmac.compare_digest(str(輸入).encode(), 密碼.encode()):  # 轉成位元組，輸入中文也不會出錯
+        紀錄.pop(來源, None)
+        return True
+    指紋 = hashlib.sha256(str(輸入).encode()).hexdigest()[:12]
+    if st.session_state.get("_上次錯誤密碼") != 指紋:  # 畫面重跑時同一個錯誤值不重複算
+        st.session_state["_上次錯誤密碼"] = 指紋
+        紀錄[來源] = (次 + 1, 起 if 次 else 現)
+    st.error("密碼不正確")
+    return False
 
 
 if "k" in st.query_params:
@@ -1270,6 +1316,8 @@ def 底部選單():
 
 if 手機:
     底部選單()
+    if 頁面 != 頁面們[0]:  # 手機上其他頁面不放大標題，第一屏直接看到該頁內容
+        st.markdown("<style>.hero { display: none !important; }</style>", unsafe_allow_html=True)
 st.session_state["_網址p"] = 頁面[:2]
 
 
@@ -2198,7 +2246,8 @@ def 執行頁面(索引):
         import traceback
         st.error(f"這一頁有一部分出錯了（{type(e).__name__}），已自動記錄，每天的資料檢查會用 LINE 通知。其他頁面不受影響，"
                  "可以先按上方「🔄 更新 → 重新載入」再試一次。")
-        st.exception(e)
+        if st.session_state.get("已解鎖") or not _密碼():  # 程式細節（檔案路徑、程式碼）只給站長看
+            st.exception(e)
         threading.Thread(target=engine.記錄錯誤, args=(_設定(), 頁面們[索引], e, traceback.format_exc()), daemon=True).start()
 
 

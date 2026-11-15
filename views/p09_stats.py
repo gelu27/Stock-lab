@@ -13,12 +13,10 @@ def AI報告總覽(_權杖):
 if not 可編輯():
     段落("STATS // 使用統計")
     輸入 = st.text_input("使用統計只有站長能看，請輸入密碼", type="password", key="統計解鎖")
-    if 輸入 and hmac.compare_digest(輸入, _密碼()):
+    if 輸入 and 核對密碼(輸入):
         st.session_state["已解鎖"] = True
         st.query_params["k"] = 登入憑證()
         st.rerun()
-    elif 輸入:
-        st.error("密碼不正確")
     st.stop()
 權杖 = str(_設定().get("GITHUB_TOKEN", ""))
 段落("VISITORS // 來客數")
