@@ -19,12 +19,10 @@ def 我的庫存():
     if 密碼 and not st.session_state.get("已解鎖"):
         段落("PORTFOLIO // 我的庫存")
         輸入 = st.text_input("輸入密碼查看庫存", type="password")
-        if 輸入 and hmac.compare_digest(輸入, 密碼):
+        if 輸入 and 核對密碼(輸入):
             st.session_state["已解鎖"] = True
             st.query_params["k"] = 登入憑證()
             st.rerun()
-        elif 輸入:
-            st.error("密碼不正確")
         return
 
     持股, 來源 = 目前持股()

@@ -510,8 +510,7 @@ def 市場每日(版本鍵):
 def 市場卡片():
     輪詢檢查()  # 開盤／收盤時切換自動更新頻率
     段落("MARKET // 市場")
-    上漲 = (今日["漲跌"] > 0).sum()
-    下跌 = (今日["漲跌"] < 0).sum()
+    上漲, _, 下跌 = 漲跌家數()
     卡們 = []
     即 = 大盤即時() if engine.盤中時間() else None
     即時加權 = 即.loc["t00"] if 即 is not None and "t00" in 即.index else None
@@ -2678,6 +2677,16 @@ def 資金水位資料(版本鍵):
     return momentum.資金水位(指標, 加權, vix)
 
 
+def 水位有驗證(回):
+    """建議持股水位要「分數高的時候之後 20 日表現比分數低的時候好」才算有用；回測方向相反或樣本太少就不給持股建議。"""
+    try:
+        r = 回.set_index("分數區間")
+        平, 數 = r["加權之後20日平均%"], r["天數"]
+        return bool(數.iloc[0] >= 20 and 數.iloc[-1] >= 20 and 平.iloc[-1] > 平.iloc[0])
+    except Exception:
+        return False
+
+
 def 資金水位區():
     段落("LEVEL // 市場健康分數與建議持股水位")
     try:
@@ -2703,11 +2712,14 @@ def 資金水位區():
     圖表外觀(圖, 260)
     a.plotly_chart(圖, width="stretch", config={"displayModeBar": False})
     成分 = []
-    for k, 說 in (("站上月線", "站上 20 日線的股票比例 {:.0f}%"), ("騰落10日", "近 10 日騰落（淨上漲家數佔比）{:+.0f}%"),
+    for k, 說 in (("站上月線", "站上 20 日線的股票比例 {:.0f}%"), ("騰落10日", "近 10 日騰落 {:+.0f}（10 天淨上漲家數加總 ÷ 總家數 × 100，平均每天約 {:+.0f}%）"),
                  ("加權對季線%", "加權距 60 日線 {:+.1f}%"), ("VIX", "VIX {:.1f}（越低越好）")):
         if k in 今 and pd.notna(今[k]):
-            成分.append("- " + 說.format(float(今[k])))
-    b.markdown(f"**建議持股水位：約 {水位:.0f}%**（分數 0 → 20%，100 → 90%）\n\n" + "\n".join(成分))
+            成分.append("- " + 說.format(float(今[k]), float(今[k]) / 10))
+    if 水位有驗證(回):
+        b.markdown(f"**建議持股水位：約 {水位:.0f}%**（分數 0 → 20%，100 → 90%）\n\n" + "\n".join(成分))
+    else:  # 自家回測方向相反時，不把它當成加減碼建議（首頁「今天必須知道」也不顯示）
+        b.markdown(f"**換算水位：約 {水位:.0f}%（⚠️ 回測未驗證，不當作持股建議）**\n\n" + "\n".join(成分))
     b.caption("每個指標都換算成「在近一年多裡排第幾」的百分位，再平均。")
     近 = 日.tail(120)
     線 = go.Figure(go.Scatter(x=近["date"], y=近["分數"], mode="lines", line=dict(color="#FFB020", width=2), name="分數"))
@@ -2774,7 +2786,7 @@ def 必知項目():
     """手機模式首頁最上面：今天必須知道的 5～8 件事（規則整理，不用 AI）。回傳 [(圖示, HTML 文字, 是否警示[, 迷你圖 SVG])]。"""
     項 = []
     每日 = 市場每日(_版本)
-    上漲, 下跌 = int((今日["漲跌"] > 0).sum()), int((今日["漲跌"] < 0).sum())
+    上漲, _, 下跌 = 漲跌家數()
     即 = 大盤即時() if engine.盤中時間() else None
     if 即 is not None and "t00" in 即.index:
         r = 即.loc["t00"]
@@ -2798,8 +2810,8 @@ def 必知項目():
         情緒 = None
     判 = engine.市場狀態(加權, 今日, 每日, 情緒, 經濟日程資料(_版本, 7))
     try:
-        日, _ = 資金水位資料(_版本)
-        水位 = None if 日 is None or 日.empty else float(日.iloc[-1]["建議持股%"])
+        日, 回 = 資金水位資料(_版本)
+        水位 = None if 日 is None or 日.empty or not 水位有驗證(回) else float(日.iloc[-1]["建議持股%"])
     except Exception:
         水位 = None
     色 = 紅 if "多" in 判["狀態"] else (綠 if "空" in 判["狀態"] else "#EDEDED")
@@ -3149,8 +3161,7 @@ def 指數卡區():
                    f'<div class="v" style="color:{色}">{單.format(v)}</div>'
                    f'<div class="d" style="color:{色}">{差:+,.2f}（{差 / 前 * 100:+.2f}%）</div>'
                    f'<div class="sp">{迷你線(c.tail(20).tolist(), 寬=220, 高=40)}</div></div>')
-    t = 今日[~今日["代號"].str.startswith("0") & (今日["收盤"] > 0)]
-    漲, 平, 跌 = int((t["漲跌"] > 0).sum()), int((t["漲跌"] == 0).sum()), int((t["漲跌"] < 0).sum())
+    漲, 平, 跌 = 漲跌家數()
     總 = max(漲 + 平 + 跌, 1)
     條 = (f'<div class="card idx"><div class="k">漲跌家數 · 上市櫃</div><div class="adv"><b style="color:{紅}">{漲:,}</b>'
          f'<b style="color:#9A9A9A">{平:,}</b><b style="color:{綠}">{跌:,}</b></div>'

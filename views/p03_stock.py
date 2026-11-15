@@ -1415,7 +1415,7 @@ if 警示表(_版本).get(代號):
 if not 可編輯():
     with st.popover("☆ 加入自選股"):
         輸入 = st.text_input("自選股有密碼保護，請輸入密碼", type="password", key="自選解鎖")
-        if 輸入 and hmac.compare_digest(輸入, _密碼()):
+        if 輸入 and 核對密碼(輸入):
             st.session_state["已解鎖"] = True
             st.query_params["k"] = 登入憑證()
             自選 = 自選股清單()
@@ -1423,8 +1423,6 @@ if not 可編輯():
                 群 = next(iter(自選), "自選股")
                 存自選股({**自選, 群: 自選.get(群, []) + [代號]})
             st.rerun()
-        elif 輸入:
-            st.error("密碼不正確")
 if 可編輯():
     自選 = 自選股清單()
     在 = [g for g, v in 自選.items() if 代號 in v]
