@@ -1135,6 +1135,12 @@ def 烏賊高分績效(指標, 基本面, 大盤K線, 天數=120, 冷卻=10):
                     列[f"{欄}報酬%"] = 報
                     if 日 in 大.index and 日們[j] in 大.index:
                         列[f"{欄}超額%"] = 報 - (大.at[日們[j]] / 大.at[日] - 1) * 100
+            if 代 in 價.columns and pd.notna(價.at[日, 代]):
+                for n in (5, 10, 20):   # 持有期間內（收盤）最高漲幅、最大回檔；沒滿 n 日的先不算
+                    後 = 價[代].iloc[i + 1:i + 1 + n]
+                    if len(後) == n and 後.notna().all():
+                        列[f"{n}日最高%"] = (後.max() / 價.at[日, 代] - 1) * 100
+                        列[f"{n}日回檔%"] = (後.min() / 價.at[日, 代] - 1) * 100
             列們.append(列)
     事件 = pd.DataFrame(列們)
     if 事件.empty:
@@ -1151,6 +1157,10 @@ def 彙總訊號績效(事件):
             continue
         彙.append({"持有": f"{n} 日", "次數": int(r.notna().sum()), "平均報酬%": r.mean(), "勝率%": (r.dropna() > 0).mean() * 100,
                  "平均超額%": x.mean(), "贏大盤%": (x.dropna() > 0).mean() * 100})
+        h, l = 事件.get(f"{n}日最高%"), 事件.get(f"{n}日回檔%")
+        if h is not None and h.notna().any():
+            彙[-1].update({"平均最高漲幅%": h.mean(), "最高漲幅中位%": h.median(), "曾漲10%比例": (h.dropna() >= 10).mean() * 100,
+                         "平均最大回檔%": l.mean()})
     return 事件, pd.DataFrame(彙)
 
 
