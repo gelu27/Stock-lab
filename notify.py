@@ -917,7 +917,8 @@ def 烏賊高分提醒(指標, 分):
         if b is not None:
             補 = 補.join(b, how="outer")
     今 = engine.加預估本益比(engine.加融資佔股本(今.join(補, on="代號")))
-    表 = engine.烏賊多方高分重疊(今, 分)
+    累 = engine.評分累計變化(指標[指標["date"] >= 指標["date"].max() - pd.Timedelta(days=20)], engine.讀取基本面(), engine.讀取加權指數())
+    表 = engine.烏賊多方高分重疊(今, 分, 累)
     if 表.empty:
         return []
     return ["", f"⭐ 烏賊多方策略 × 高分／分數大增（{len(表)} 檔）："] + [

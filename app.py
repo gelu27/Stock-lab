@@ -1626,6 +1626,12 @@ def 評分資料(版本鍵):
                          基本面資料(版本鍵), 加權)
 
 
+@st.cache_resource(max_entries=1, show_spinner="計算評分 3、5 日變化中…")
+def 評分累計資料(版本鍵):
+    return engine.評分累計變化(指標[指標["date"] >= 指標["date"].max() - pd.Timedelta(days=20)],
+                             基本面資料(版本鍵), 加權)
+
+
 # ---------- 順勢做多（RS、均線多頭、VCP 突破、法人連買、交易計畫）：全市場最新一天，所有人共用 ----------
 @st.cache_resource(max_entries=1, show_spinner="計算順勢做多訊號中…")
 def 動能資料(版本鍵):
