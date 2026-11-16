@@ -10661,3 +10661,179 @@ def 代號名稱核對(影片們, 名稱表, 天數=14, 今天=None):
             列們.append({"影片日": 日, "頻道": v.get("頻道", ""), "說法裡的": f"{代} {說}", "代號實際是": f"{代} {實}",
                        "名稱可能是": f"{可能} {名稱表.get(可能, '')}".strip() if 可能 else ""})
     return pd.DataFrame(列們).drop_duplicates() if 列們 else pd.DataFrame()
+
+
+# ---------- 2026-11-16 網紅摘要建議（現增試算、投信作帳、財報壓力測試、ETF 破發、大跌日後、ETF 分割）----------
+def 現增試算(收盤, 舊股數, 認購價, 新股數):
+    """現金增資除權參考價（簡化版）：(收盤×舊股數 ＋ 認購價×新股數) ÷ 總股數；跌停價＝參考價 × 0.9。
+    實際參考價以交易所公告為準（有些會再調整到小數第 2 位）。回傳 dict，資料不足回 None。"""
+    try:
+        收盤, 舊, 認, 新 = float(收盤), float(舊股數), float(認購價), float(新股數)
+    except (TypeError, ValueError):
+        return None
+    if 舊 <= 0 or 新 <= 0 or 收盤 <= 0 or 認 <= 0:
+        return None
+    參 = (收盤 * 舊 + 認 * 新) / (舊 + 新)
+    return {"參考價": round(參, 2), "跌停價": round(參 * 0.9, 2), "除權跌幅%": round((參 / 收盤 - 1) * 100, 2),
+            "稀釋%": round(新 / (舊 + 新) * 100, 2)}
+
+
+def 近期現增(申購, 收盤, 股數, 今日=None, 前後天數=10):
+    """公開承銷的現金增資（ipo.csv 的「增資」）：抽籤日在今天前後 前後天數 天內的，附除權參考價與跌停價試算。
+    收盤、股數是 {代號: 數字}。回傳 DataFrame。"""
+    欄 = ["代號", "名稱", "市場", "抽籤日", "掛牌日", "認購價", "新股張數", "現價", "估參考價", "估跌停價", "估除權跌幅%", "稀釋%"]
+    if 申購 is None or not len(申購):
+        return pd.DataFrame(columns=欄)
+    今 = pd.Timestamp.now().normalize() if 今日 is None else pd.Timestamp(今日)
+    t = 申購[申購["market"].astype(str).str.contains("增資")]
+    t = t[(t["draw_date"] >= 今 - pd.Timedelta(days=前後天數)) & (t["draw_date"] <= 今 + pd.Timedelta(days=前後天數))]
+    列 = []
+    for _, x in t.iterrows():
+        試 = 現增試算(收盤.get(x["code"]), 股數.get(x["code"]), x["price"], x["shares"]) or {}
+        列.append({"代號": x["code"], "名稱": x["name"], "市場": x["market"], "抽籤日": x["draw_date"], "掛牌日": x["list_date"],
+                 "認購價": x["price"], "新股張數": x["shares"] / 1000, "現價": 收盤.get(x["code"]),
+                 "估參考價": 試.get("參考價"), "估跌停價": 試.get("跌停價"), "估除權跌幅%": 試.get("除權跌幅%"), "稀釋%": 試.get("稀釋%")})
+    return pd.DataFrame(列, columns=欄).sort_values("抽籤日", ascending=False, ignore_index=True)
+
+
+def 讀取股數():
+    """{代號: 發行股數}（data/fundamental/capital.csv）。"""
+    f = 資料夾 / "fundamental" / "capital.csv"
+    if not f.exists():
+        return {}
+    t = pd.read_csv(f, dtype={"code": str})
+    return dict(zip(t["code"], t["shares"]))
+
+
+def 投信作帳名單(資料, 股數=None, 天數=30, 買超天數=15, 累計張數=5000, 股本上限億=100, 漲幅上限=30.0, 營收年增=None):
+    """網紅的「投信作帳股」五條件：股本 < 100 億、近 30 個交易日投信買超天數 > 15、累計買超 > 5,000 張、
+    區間漲幅不大（預設 ≤ 30%）、營收年增為正（有資料才用）。
+    資料：long 表（date、code、close、trust 投信買賣超股數、name）。股數 {代號: 發行股數}，股本＝股數×10 元（面額分割者略有誤差）。"""
+    if 資料 is None or not len(資料):
+        return pd.DataFrame()
+    日們 = sorted(資料["date"].unique())[-天數:]
+    t = 資料[資料["date"].isin(日們)].sort_values("date")
+    列 = []
+    for 碼, g in t.groupby("code"):
+        if len(g) < 天數 * 0.8 or g["trust"].isna().all():
+            continue
+        買天 = int((g["trust"] > 0).sum())
+        張 = float(g["trust"].sum() / 1000)
+        c = g["close"].astype(float)
+        if c.iloc[0] <= 0:
+            continue
+        列.append({"代號": 碼, "名稱": g["name"].iloc[-1] if "name" in g else "", "買超天數": 買天, "累計買超張": round(張),
+                 "區間漲幅%": round((c.iloc[-1] / c.iloc[0] - 1) * 100, 1), "收盤": c.iloc[-1]})
+    表 = pd.DataFrame(列)
+    if not len(表):
+        return 表
+    if 股數:
+        表["股本億"] = 表["代號"].map(lambda k: (股數.get(k, np.nan) * 10 / 1e8))
+    if 營收年增 is not None:
+        表["營收年增%"] = 表["代號"].map(營收年增)
+    篩 = (表["買超天數"] > 買超天數) & (表["累計買超張"] > 累計張數) & (表["區間漲幅%"] <= 漲幅上限)
+    if "股本億" in 表:
+        篩 &= 表["股本億"] < 股本上限億
+    if "營收年增%" in 表:
+        篩 &= 表["營收年增%"].fillna(0) > 0
+    return 表[篩].sort_values("累計買超張", ascending=False, ignore_index=True)
+
+
+財報壓力測試股 = [("3231", "緯創"), ("2317", "鴻海"), ("3037", "欣興"), ("2330", "台積電"),
+              ("6515", "穎崴"), ("2449", "京元電子"), ("3017", "奇鋐"), ("2383", "台光電")]  # 一綺 11/15：本土法人「輝達砍單」壓力測試名單
+
+
+def 財報壓力測試(資料, 基準日, 名單=None):
+    """基準日收盤 → 最新收盤的漲跌幅。資料：long 表（date、code、close）。輝達財報前後對答案用。"""
+    名單 = 名單 or 財報壓力測試股
+    if 資料 is None or not len(資料):
+        return pd.DataFrame()
+    基準日 = pd.Timestamp(基準日)
+    列 = []
+    for 碼, 名 in 名單:
+        g = 資料[資料["code"] == 碼].sort_values("date")
+        基 = g[g["date"] <= 基準日]
+        if not len(基) or not len(g):
+            continue
+        b, n = float(基["close"].iloc[-1]), float(g["close"].iloc[-1])
+        列.append({"代號": 碼, "名稱": 名, f"{基['date'].iloc[-1]:%m/%d} 收盤": b, "最新收盤": n,
+                 "漲跌%": round((n / b - 1) * 100, 1), "最新日": g["date"].iloc[-1]})
+    return pd.DataFrame(列)
+
+
+def 讀取Neocloud():
+    """data/neocloud.csv（code, 比例%, 依據, 更新日）：營收來自算力租賃商（CoreWeave 等）的比重，手動維護、要有出處才寫。"""
+    f = 資料夾 / "neocloud.csv"
+    return pd.read_csv(f, dtype={"code": str}) if f.exists() else pd.DataFrame(columns=["code", "比例%", "依據", "更新日"])
+
+
+def ETF破發表(現價, 名稱=None, 發行價=10.0, 資訊=None, 淨值天數=7):
+    """主動式 ETF（代號結尾 A）現價 vs 發行價 10 元（破發＝低於發行價），有近期淨值再加折溢價。
+    現價、名稱是 {代號: 值}；資訊是 data/etf/info.csv（etf、date、nav）。"""
+    列 = []
+    nav = {}
+    if 資訊 is not None and len(資訊):
+        x = 資訊.copy()
+        x["date"] = pd.to_datetime(x["date"], errors="coerce")
+        最新 = x.sort_values("date").groupby("etf").tail(1)
+        nav = {r["etf"]: (r["nav"], r["date"]) for _, r in 最新.iterrows()}
+    for 碼, p in 現價.items():
+        if not str(碼).endswith("A") or pd.isna(p):
+            continue
+        n, nd = nav.get(碼, (np.nan, pd.NaT))
+        新 = pd.notna(nd) and (pd.Timestamp.now() - nd).days <= 淨值天數
+        列.append({"代號": 碼, "名稱": (名稱 or {}).get(碼, ""), "現價": float(p), "較發行價%": round((p / 發行價 - 1) * 100, 1),
+                 "破發": p < 發行價, "淨值": float(n) if 新 else np.nan, "折溢價%": round((p / n - 1) * 100, 2) if 新 and n else np.nan})
+    return pd.DataFrame(列).sort_values("較發行價%", ignore_index=True) if 列 else pd.DataFrame()
+
+
+def 大跌日後回測(K, 跌幅=-5.0, 天數=(1, 5, 20), 間隔天數=5):
+    """單日大跌（預設 ≤ -5%）之後 N 個交易日的報酬，對比所有日子；另算「20 日內是否再創新低」。
+    報酬從大跌日當天收盤算起（盤後才知道，隔天才能動作，實際比這更差一點）。K 需有 date、close。回傳 dict。"""
+    k = K.sort_values("date").reset_index(drop=True)
+    c = k["close"].astype(float)
+    漲跌 = (c / c.shift() - 1) * 100
+    事 = []
+    上次 = None
+    for i in k.index[漲跌 <= 跌幅]:
+        if 上次 is not None and i - 上次 <= 間隔天數:
+            continue
+        上次 = i
+        r = {"日期": k["date"].iloc[i], "當天%": round(float(漲跌.iloc[i]), 2), "收盤": float(c.iloc[i])}
+        for n in 天數:
+            r[f"{n}日%"] = round((c.iloc[i + n] / c.iloc[i] - 1) * 100, 2) if i + n < len(c) else np.nan
+        後 = c.iloc[i + 1:i + 21]
+        r["再破低"] = bool((後 < c.iloc[i]).any()) if len(後) >= 20 else None
+        事.append(r)
+    表 = pd.DataFrame(事)
+    彙 = []
+    for n in 天數:
+        全 = (c.shift(-n) / c - 1).dropna() * 100
+        col = f"{n}日%"
+        v = 表[col].dropna() if len(表) else pd.Series(dtype=float)
+        彙.append({"天數": n, "次數": int(len(v)), "上漲機率%": round(float((v > 0).mean() * 100), 0) if len(v) else np.nan,
+                 "平均%": round(float(v.mean()), 2) if len(v) else np.nan, "一般日上漲機率%": round(float((全 > 0).mean() * 100), 0),
+                 "一般日平均%": round(float(全.mean()), 2)})
+    有 = 表["再破低"].dropna() if len(表) else pd.Series(dtype=bool)
+    return {"事件": 表, "彙總": pd.DataFrame(彙), "再破低%": round(float(有.mean() * 100), 0) if len(有) else np.nan, "再破低樣本": int(len(有))}
+
+
+def 讀取ETF分割():
+    """data/etf_split.csv（code, date 分割後恢復交易日, 倍數, 備註）：ETF 分割（1 拆 N）手動維護。"""
+    f = 資料夾 / "etf_split.csv"
+    return pd.read_csv(f, dtype={"code": str}, parse_dates=["date"]) if f.exists() else pd.DataFrame(columns=["code", "date", "倍數", "備註"])
+
+
+def ETF分割提示(今日=None, 前後天數=5, 表=None):
+    """恢復交易日在今天前後 N 天的 ETF 分割：價格會「看起來」大跌（1 拆 5 ＝ −80%），不是真的虧。回傳提示字串清單。"""
+    表 = 讀取ETF分割() if 表 is None else 表
+    今 = pd.Timestamp.now().normalize() if 今日 is None else pd.Timestamp(今日)
+    句 = []
+    for _, r in 表.iterrows():
+        差 = (r["date"] - 今).days
+        if -前後天數 <= 差 <= 前後天數:
+            倍 = float(r["倍數"])
+            狀 = "今天" if 差 == 0 else (f"{差} 天後" if 差 > 0 else f"{-差} 天前")
+            句.append(f"{r['code']} 分割（1 拆 {倍:g}）{r['date']:%m/%d} 恢復交易（{狀}）：股價會變成原本的 1/{倍:g}"
+                    f"（約 −{(1 - 1 / 倍) * 100:.0f}%），持有張數同步 ×{倍:g}、總市值不變，不是下跌。")
+    return 句

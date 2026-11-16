@@ -504,6 +504,19 @@ def 財報資料(代號, 版本鍵):
     return None if t is None or not len(t) else t.sort_values("quarter").reset_index(drop=True)
 
 
+def _現增註(代號, x):
+    """現金增資事件加註：以最新收盤估除權參考價與跌停價（簡化試算）。"""
+    if "增資" not in str(x["market"]):
+        return ""
+    try:
+        現 = 今日.set_index("代號")["收盤"].get(代號)
+        試 = engine.現增試算(現, engine.讀取股數().get(代號), x["price"], x["shares"])
+    except Exception:
+        return ""
+    return (f"；以現價 {現:g} 試算：除權參考價約 {試['參考價']:g}（{試['除權跌幅%']:+.1f}%）、跌停價約 {試['跌停價']:g}，稀釋 {試['稀釋%']:.1f}%"
+            if 試 else "")
+
+
 def 個股事件(代號):
     """這檔近一年的公司事件：庫藏股、可轉債、公開申購（初上市櫃、現金增資）。回傳 DataFrame（日期、事件、內容）。"""
     列們 = []
@@ -528,7 +541,8 @@ def 個股事件(代號):
             列們.append({"日期": x["draw_date"], "事件": "🎫 " + ("現金增資" if "增資" in str(x["market"]) else "公開申購"),
                         "內容": f"{x['market']}，承銷價 {x['price']:g} 元、{x['shares'] / 1000:,.0f} 張，"
                                f"申購 {x['start']:%m/%d}～{x['end']:%m/%d}，抽籤 {x['draw_date']:%m/%d}"
-                               + (f"，中籤率 {x['win_rate']:g}%" if pd.notna(x["win_rate"]) and x["win_rate"] else "")})
+                               + (f"，中籤率 {x['win_rate']:g}%" if pd.notna(x["win_rate"]) and x["win_rate"] else "")
+                               + _現增註(代號, x)})
     轉 = 讀檔("讀取內部人轉讓", _版本)
     if 轉 is not None:
         for _, x in 轉[轉["code"] == 代號].iterrows():
@@ -1865,6 +1879,9 @@ with 分頁[2], 區塊防護("基本面"):
                        "季增率容易被單筆大額預付款影響，看年增率比較穩。資料：公開資訊觀測站個別資產負債表（流動＋非流動），"
                        "較早的季度用 FinMind 補（只有流動部分）。")
 
+        for 句 in engine.ETF分割提示():
+            if 句.startswith(str(代號) + " "):
+                st.warning("📌 " + 句)
         事件 = 個股事件(代號)
         if 事件 is not None and len(事件):
             段落("EVENTS // 公司事件：庫藏股、可轉債、現金增資")

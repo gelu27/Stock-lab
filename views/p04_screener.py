@@ -741,11 +741,40 @@ def 黃金組合區():
 
 with 區塊防護("黃金組合"):
     黃金組合區()
-選股分頁 = st.tabs(["🚀 順勢做多", "條件選股", "烏賊每日功課", "烏賊策略總覽", "🏆 策略排行榜", "券商報告", "網紅說法", "📝 研究筆記", "🧲 三條件抄底", "📐 預估 EPS", "⭐ 關注清單", "📈 營收動能"],
+@st.cache_data(ttl=3600, show_spinner="篩選投信作帳股中…", max_entries=4)
+def 投信作帳資料(版本鍵, 買超天數, 累計張數, 漲幅上限):
+    表 = 指標[指標["date"] >= 指標["date"].max() - pd.Timedelta(days=60)][["date", "code", "名稱", "收盤", "trust"]]
+    表 = 表.rename(columns={"名稱": "name", "收盤": "close"})
+    營收 = pd.read_csv(engine.資料夾 / "fundamental" / "revenue.csv", dtype={"code": str})
+    年增 = dict(zip(營收["code"], 營收["rev_yoy"]))
+    return engine.投信作帳名單(表, engine.讀取股數(), 買超天數=買超天數, 累計張數=累計張數, 漲幅上限=漲幅上限, 營收年增=年增.get)
+
+
+def 投信作帳區():
+    段落("TRUST // 投信作帳股：近 30 個交易日投信買超天數多、累計買超多、股本小、還沒大漲")
+    a, b, c = st.columns(3)
+    天 = a.slider("買超天數（30 天內，大於）", 10, 25, 15, key="作帳天數")
+    張 = b.slider("累計買超張數（大於）", 1000, 20000, 5000, 500, key="作帳張數")
+    漲 = c.slider("區間漲幅上限 %", 5, 80, 30, 5, key="作帳漲幅")
+    表 = 投信作帳資料(_版本, 天, 張, 漲)
+    if not len(表):
+        st.info("目前沒有符合的股票，可以放寬上面的條件。")
+    else:
+        表格(表, hide_index=True, width="stretch", column_config={
+            "累計買超張": st.column_config.NumberColumn(format="%d"), "區間漲幅%": st.column_config.NumberColumn(format="%+.1f"),
+            "股本億": st.column_config.NumberColumn(format="%.1f"), "營收年增%": st.column_config.NumberColumn(format="%+.1f")})
+    st.caption("條件來自網紅整理的投信作帳選股法：股本小於 100 億、30 天內投信買超天數大於 15、累計買超大於 5,000 張、區間漲幅不太大、營收年增為正。"
+               "股本用「發行股數 × 10 元」估算。投信買超不等於會漲（第 3 季 ETF 申購也會造成被動買超），僅供研究參考，不構成投資建議。")
+
+
+選股分頁 = st.tabs(["🚀 順勢做多", "條件選股", "烏賊每日功課", "烏賊策略總覽", "🏆 策略排行榜", "券商報告", "網紅說法", "📝 研究筆記", "🧲 三條件抄底", "📐 預估 EPS", "⭐ 關注清單", "📈 營收動能", "📋 投信作帳"],
                    key="選股分頁", on_change="rerun")
 with 選股分頁[0], 區塊防護("順勢做多"):
     if 選股分頁[0].open:
         順勢做多區()
+with 選股分頁[12], 區塊防護("投信作帳"):
+    if 選股分頁[12].open:
+        投信作帳區()
 with 選股分頁[11], 區塊防護("營收動能"):
     if 選股分頁[11].open:
         營收動能區()

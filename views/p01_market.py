@@ -387,6 +387,15 @@ def 產業鏈區():
     except Exception:
         報告們 = None
     表 = engine.產業鏈族群表(今日, 評分, 鏈, 報告們)
+    try:
+        算力 = engine.讀取Neocloud()
+        命中 = 算力[算力["code"].isin(表["代號"])] if len(算力) and "代號" in 表 else 算力.iloc[0:0]
+        if len(命中):
+            st.warning("⚠️ 算力租賃商（Neocloud，例如 CoreWeave）營收占比高的公司：" + "；".join(
+                f"{r['code']} {市場名稱.get(r['code'], '')} 約 {r['比例%']:g}%（{r['依據']}）" for _, r in 命中.iterrows())
+                + "。輝達若收緊融資生態圈，這類客戶訂單風險較高。")
+    except Exception:
+        pass
     有等級 = len(表) and 表["等級"].ne("").any()
     指數, (熱, 現超) = 產業鏈指數資料(_版本, 鏈, "等級" if 有等級 else "環節")
     if not 指數.empty:
@@ -748,6 +757,7 @@ def 資金面區():
     融資洗盤區(洗)
     融資減幅比區(洗)
     恐慌日區(洗)
+    網紅1116區()
     正2融資區(每日, 洗)
     日 = 每日.index.strftime("%m/%d")
     圖 = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.06,
@@ -893,6 +903,48 @@ def 融資洗盤區(洗):
                    f"資料 {洗.get('起')}～{洗.get('迄')}，最大單日減 {洗.get('最大單日減%')}%；同一段 14 天內只算第一次。"
                    "網紅常說「融資單日大減 200 億以上才是洗盤」，但 5 年內只有 2 天達到，所以改用百分比。"
                    "這 5 年大多是多頭，結果偏樂觀，只是參考。")
+
+
+def 網紅1116區():
+    """2026-11-16 網紅摘要建議：ETF 分割提示、大跌日後回測、輝達財報壓力測試、近期現增試算。"""
+    for 句 in engine.ETF分割提示():
+        st.warning("📌 " + 句)
+    with st.expander("📉 單日大跌 5% 之後：大盤怎麼走？（網紅常說「11 月下旬 V 轉」，歷史怎麼說）"):
+        try:
+            K = engine.讀取長期指數(指數K線("TAIEX", _版本))
+            驗 = engine.大跌日後回測(K)
+        except Exception:
+            驗 = None
+        if not 驗 or not len(驗["事件"]):
+            st.caption("資料不足。")
+        else:
+            表格(驗["彙總"], hide_index=True, width="stretch",
+                 column_config={c: st.column_config.NumberColumn(format="%+.2f") for c in ("平均%", "一般日平均%")})
+            st.caption(f"2000 年以來單日跌 ≥ 5% 共 {len(驗['事件'])} 次（相隔 5 天內只算一次），報酬從大跌日收盤算起。"
+                       f"大跌後 20 天內又跌破那天收盤價的比例：{驗['再破低%']:.0f}%（{驗['再破低樣本']} 次）。"
+                       "樣本少、多半集中在少數幾年（2008、2020…），只能當參考，不是進場訊號。")
+            表格(驗["事件"].assign(日期=驗["事件"]["日期"].dt.strftime("%Y/%m/%d")).iloc[::-1], hide_index=True, width="stretch",
+                 column_config={c: st.column_config.NumberColumn(format="%+.2f") for c in ("當天%", "1日%", "5日%", "20日%")})
+    with st.expander("🟢 輝達財報對答案：本土法人「砍單壓力測試」8 檔，從 11/13 收盤到現在"):
+        資 = 指標[["date", "代號", "收盤"]].rename(columns={"代號": "code", "收盤": "close"})
+        壓 = engine.財報壓力測試(資, "2026-11-13")
+        if len(壓):
+            表格(壓.drop(columns=["最新日"]), hide_index=True, width="stretch",
+                 column_config={"漲跌%": st.column_config.NumberColumn(format="%+.1f")})
+            st.caption("財報在美東 11/17 盤後（台灣 11/18 清晨）。名單來自網紅轉述的本土法人報告：若輝達砍單，這 8 檔最容易受影響。"
+                       "財報後看這張表，就知道市場是「利空出盡」還是「真的砍單」。條件：營收低於預期、下修新加坡出貨 → 偏空；"
+                       "財務長接任後沒改融資政策 → 風險降低。")
+    with st.expander("🧾 近期現金增資：除權參考價與跌停價試算（公開承銷的）"):
+        申 = 讀檔("讀取新股申購", _版本)
+        現 = dict(zip(今日["代號"], 今日["收盤"]))
+        增 = engine.近期現增(申, 現, engine.讀取股數())
+        if not len(增):
+            st.caption("最近兩週沒有公開承銷的現金增資。")
+        else:
+            表格(增.assign(抽籤日=增["抽籤日"].dt.strftime("%m/%d"), 掛牌日=增["掛牌日"].dt.strftime("%m/%d")), hide_index=True, width="stretch")
+            st.caption("參考價＝(現價×原股數＋認購價×新股數)÷總股數，跌停價＝參考價×0.9，只是試算；實際以交易所公告為準。"
+                       "現增除權時，股價看起來大跌但多數是參考價往下調整（例如德宏 11/16 跌 12.6% 就是這樣），別被數字嚇到。"
+                       "私募、員工認股不在這張表。")
 
 
 def 恐慌日區(洗):
