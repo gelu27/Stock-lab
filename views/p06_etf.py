@@ -524,6 +524,20 @@ with ETF頁[7]:
     最新日 = 寬績.index.max()
     名 = dict(zip(今日["代號"], 今日["名稱"]))
     數 = lambda f: st.column_config.NumberColumn(format=f)
+    with st.expander("🚨 主動式 ETF 破發監控：現價 vs 發行價 10 元（含折溢價）"):
+        try:
+            資訊 = pd.read_csv(engine.資料夾 / "etf" / "info.csv")
+        except Exception:
+            資訊 = None
+        破 = engine.ETF破發表(dict(zip(今日["代號"], 今日["收盤"])), 名, 資訊=資訊)
+        if not len(破):
+            st.caption("沒有主動式 ETF 現價資料。")
+        else:
+            表格(破.assign(破發=破["破發"].map({True: "破發", False: ""})), hide_index=True, width="stretch",
+                 column_config={"較發行價%": 數("%+.1f"), "折溢價%": 數("%+.2f"), "現價": 數("%.2f"), "淨值": 數("%.2f")})
+            st.caption(f"共 {len(破)} 檔主動式 ETF，{int(破['破發'].sum())} 檔現價低於發行價 10 元。"
+                       "淨值只有官網資料在近 7 天內才顯示，否則留白。破發是「買在發行價的人帳面虧損」，不等於基金經理人績效差："
+                       "績效要看上面的體檢表。")
     段落("HEALTH // 主動式 ETF 績效體檢：有沒有真的贏過 0050")
     選期, 選基 = st.columns(2)
     期間 = 選期.segmented_control("期間", ["今年以來", "近 3 個月", "近 6 個月", "上市以來"], default="今年以來",
@@ -655,6 +669,21 @@ with ETF頁[7]:
     st.caption("2026-11-08 新增。指標說明見上方 ℹ️；僅供研究參考，不構成投資建議。")
 
 
+def _評分表():
+    try:
+        return 評分資料(_版本)[0]
+    except Exception:
+        return pd.DataFrame()
+
+
+def _評分總分():
+    return _評分表().get("總分", pd.Series(dtype=float)).to_dict()
+
+
+def _評分變化():
+    return _評分表().get("較昨日", pd.Series(dtype=float)).to_dict()
+
+
 @st.cache_data(max_entries=2, ttl=43200, show_spinner="計算明日續買預測中…")
 def 續買資料(資料版本, ETF版本鍵):
     _, _, 變 = ETF資料(ETF版本鍵)
@@ -687,9 +716,9 @@ with ETF頁[8]:
     if len(預):
         表格(pd.DataFrame({"代號": 預["code"], "名稱": 預["code"].map(名).fillna(""), "續買分數": 預["續買分數"],
                            "今日加碼": 預["買檔"].astype(int), "減碼": 預["賣檔"].astype(int), "連買天數": 預["連買天數"].astype(int),
-                           "扣申贖(億)": 預["主動"] / 1e8, "含申贖(億)": 預["含申贖"] / 1e8, "理由": 預["理由"], "加碼的 ETF": 預["買進ETF"]}),
+                           "評分": 預["code"].map(_評分總分()), "較昨日": 預["code"].map(_評分變化()), "扣申贖(億)": 預["主動"] / 1e8, "含申贖(億)": 預["含申贖"] / 1e8, "理由": 預["理由"], "加碼的 ETF": 預["買進ETF"]}),
              hide_index=True, width="stretch", height=min(35 * (len(預) + 1) + 3, 740),
-             column_config={"扣申贖(億)": 數("%+.2f"), "含申贖(億)": 數("%+.2f"), "續買分數": 數("%.1f")})
+             column_config={"扣申贖(億)": 數("%+.2f"), "含申贖(億)": 數("%+.2f"), "續買分數": 數("%.1f"), "評分": 數("%.0f"), "較昨日": 數("%+.0f")})
         st.caption("續買分數＝今天加碼檔數 × 2 ＋ 前一天加碼檔數 ＋ 前兩天 × 0.5 − 今天減碼檔數 ＋（扣申贖淨買就 +1）。"
                    "加碼都已扣掉申購造成的等比例買進。這是規則版、不用 AI 也不花錢；試過只看今天、看近 3 天合計，命中率都差不多（24～26%）。")
     if len(每天):
