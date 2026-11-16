@@ -784,7 +784,9 @@ def 個股券商報告(代號, 收盤):
     表格(表.drop(columns=["代號", "名稱", "現價"]), hide_index=True, width="stretch",
                  column_config={"日期": st.column_config.DateColumn(format="YYYY-MM-DD"),
                                 "潛在空間%": st.column_config.NumberColumn(format="%+.1f%%")})
-    st.caption("標籤：「一次性」＝報告提到業外、處分、回沖等不會重複的獲利；「估 2027」＝用哪一年 EPS 估值；"
+    st.caption("標籤：「一次性」＝報告提到業外、處分、回沖、存貨跌價等不會重複的損益；「估 2027」＝用哪一年 EPS 估值；"
+               "「營收比評價」＝虧損公司改用每股營收 × 倍數（本益比沒意義時）；「淨值比評價」＝用每股淨值 × 倍數；"
+               "「財報優於／低於預期」＝報告理由裡的對答案；「升評／降評」＝評等跟前次不同；"
                "「追價上修」＝前次目標價已經低於報告前股價才上修，不當成新的看多訊號。")
     拆 = engine.目標價拆解(報告們)
     if len(拆):
@@ -2123,9 +2125,18 @@ with 分頁[4], 區塊防護("AI 分析"):
                     f"- {x.get('日期')} {x.get('券商')} {x.get('評等')}，目標價 {x.get('目標價')}（前次 {x.get('前次目標價')}），"
                     f"EPS 今年 {x.get('EPS今年')}／明年 {x.get('EPS明年')}，{x.get('評價方法') or ''}；{x.get('理由') or ''}"
                     + (f"〔{engine.報告標籤(x)}〕" if engine.報告標籤(x) else "") for x in 券們)
+            try:
+                風 = engine.估值風向(券商報告清單(st.session_state.get("_券商版本", 0)))
+                if 風 and (風["降倍數"] + 風["升倍數"]) >= 5:
+                    摘要 += "\n- 券商估值風向（全市場，規則 T）：" + 風["文字"]
+            except Exception:
+                pass
             全券 = [x for x in 券商報告清單(st.session_state.get("_券商版本", 0)) if str(x.get("代號")) == 代號]
             if 全券:
                 摘要 += "\n- 券商共識：" + engine.共識文字(engine.券商共識(全券, float(r["收盤"])))
+                拆字 = engine.拆解文字(全券)
+                if 拆字:
+                    摘要 += "\n- 目標價拆解（規則 R）：" + 拆字
                 集 = [x for x in engine.集體升降評(全券) if x[0] == 代號]
                 if 集:
                     摘要 += "\n- 近 3 天集體調整：" + "；".join(f"{家} 家{方}目標價（{名}）" for _, _, 方, 家, 名 in 集)
