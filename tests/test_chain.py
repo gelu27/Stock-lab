@@ -52,7 +52,21 @@ def main():
     assert list(t["代號"]) == ["2049", "1536"] or set(t["代號"]) == {"2049", "1536"}, t
     r = t.set_index("代號")
     assert r.loc["2049", "總分"] == 70 and pd.isna(r.loc["1536", "本益比"]) and r.loc["1536", "等級"] == "A 已出貨"
-    print("✅ 產業鏈現況表正常")
+    assert "合約負債億" in t.columns and "能見度月" in t.columns, t.columns
+    t2 = engine.產業鏈族群表(pd.DataFrame({"代號": ["6285", "3491"], "名稱": ["啟碁", "昇達科"], "收盤": [1.0, 1.0]}), None, "低軌衛星").set_index("代號")
+    if len(engine.讀取合約負債()):
+        assert pd.notna(t2.loc["6285", "合約負債億"]) and t2.loc["3491", "合約負債季"].endswith("未列報"), t2
+    報 = [{"代號": "6285", "名稱": "啟碁", "券商": "甲", "日期": f"{pd.Timestamp.now():%Y-%m-%d}", "看法": "看多", "目標價": 250},
+         {"代號": "6285", "名稱": "啟碁", "券商": "乙", "日期": f"{pd.Timestamp.now():%Y-%m-%d}", "看法": "中性", "目標價": 200}]
+    t3 = engine.產業鏈族群表(pd.DataFrame({"代號": ["6285"], "名稱": ["啟碁"], "收盤": [200.0]}),
+                        pd.DataFrame({"總分": [53.0], "較昨日": [1.5]}, index=["6285"]), "低軌衛星", 報).iloc[0]
+    assert t3["券商評等"] == "2 家：多 1／中 1／空 0" and t3["目標價中位數"] == 225 and abs(t3["目標價空間%"] - 12.5) < 0.01, t3
+    assert t3["較昨日"] == 1.5 and "庫藏股" in t3.index
+    庫 = pd.DataFrame({"code": ["9999"], "start": [pd.Timestamp("2026-11-01")], "end": [pd.Timestamp("2026-12-31")],
+                      "done": ["N"], "pct_done": [30.0]})
+    assert engine.庫藏股狀態(庫, "9999", "2026-11-16") == "執行中 11/01～12/31，已買 30%"
+    assert engine.庫藏股狀態(庫, "9999", "2026-10-16") == "將於 11/01 開始" and engine.庫藏股狀態(庫, "1111") == ""
+    print("✅ 產業鏈現況表正常（含合約負債、庫藏股、券商評等、較昨日）")
 
 
 if __name__ == "__main__":

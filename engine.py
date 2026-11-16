@@ -5596,9 +5596,27 @@ def 產業鏈位置(代號, 名稱表=None):
     return "\n".join(行)
 
 
-def 產業鏈族群表(今日, 評分=None, 鏈="人形機器人"):
-    """某條產業鏈每一檔的現況：環節、等級、漲跌、評分、本益比位階、預估本益比、營收年增、法人。
-    今日：app 的 今日資料（要有 收盤、20日漲幅、本益比…）；評分：每日評分 的表（以代號為索引）。"""
+def 庫藏股狀態(庫, 代號, 今天=None):
+    """庫藏股一句話：執行中（期間、已買幾 %）或近 90 天內結束（買了幾 %）。沒有回傳空字串。"""
+    if 庫 is None or 庫.empty:
+        return ""
+    今天 = pd.Timestamp(今天 or pd.Timestamp.now().normalize())
+    t = 庫[(庫["code"] == str(代號)) & (庫["end"] >= 今天 - pd.Timedelta(days=90))].sort_values("start")
+    if t.empty:
+        return ""
+    r = t.iloc[-1]
+    已 = f"，已買 {r['pct_done']:.0f}%" if pd.notna(r.get("pct_done")) else ""
+    if r["start"] <= 今天 <= r["end"] and str(r.get("done")) != "Y":
+        return f"執行中 {r['start']:%m/%d}～{r['end']:%m/%d}{已}"
+    if r["start"] > 今天:
+        return f"將於 {r['start']:%m/%d} 開始"
+    return f"{r['end']:%m/%d} 結束{已}"
+
+
+def 產業鏈族群表(今日, 評分=None, 鏈="人形機器人", 報告們=None):
+    """某條產業鏈每一檔的現況：環節、等級、漲跌、評分、本益比位階、預估本益比、營收年增、合約負債、庫藏股、券商評等、法人。
+    今日：app 的 今日資料（要有 收盤、20日漲幅、本益比…）；評分：每日評分 的表（以代號為索引，可有 較昨日）；
+    報告們：券商報告清單（讀取券商報告 的結果），沒有就不顯示券商評等。"""
     import glance
     t = 讀取產業鏈()
     t = t[t["chain"] == 鏈].drop_duplicates("code")
@@ -5608,11 +5626,33 @@ def 產業鏈族群表(今日, 評分=None, 鏈="人形機器人"):
     註 = 註[註["chain"] == 鏈].drop_duplicates("code").set_index("code")
     今 = 今日.drop_duplicates("代號").set_index("代號")
     帶 = glance.讀本益比位階()
+    try:   # 合約負債（預收款）：只用最近兩季內的資料，太舊的當沒有
+        約 = 讀取合約負債()
+        約 = 約[約["code"].isin(set(t["code"]))]
+        if len(約):
+            新季 = 約["quarter"].max()
+            舊限 = str(pd.Period(新季, "Q") - 1)
+            約 = 約[約["quarter"] >= 舊限].groupby("code").tail(1).set_index("code")
+    except Exception:
+        約 = pd.DataFrame()
+    try:
+        庫 = 讀取庫藏股()
+    except Exception:
+        庫 = None
+    依代號 = {}
+    for x in 報告們 or []:
+        依代號.setdefault(str(x.get("代號")), []).append(x)
     列們 = []
     for _, r in t.iterrows():
         c = r["code"]
         if c not in 今.index:
             continue
+        try:
+            共 = 券商共識(依代號.get(c), float(今.loc[c, "收盤"])) if 依代號.get(c) else None
+        except Exception:
+            共 = None
+        j = 約.loc[c] if c in 約.index else None
+        jg = lambda k: j[k] if j is not None and k in j.index and pd.notna(j[k]) else np.nan
         x = 今.loc[c]
         g = lambda k: x[k] if k in x.index else np.nan
         位 = glance.位階百分位(g("本益比"), 帶.loc[c] if c in 帶.index else None)
@@ -5620,10 +5660,19 @@ def 產業鏈族群表(今日, 評分=None, 鏈="人形機器人"):
                    "等級": 註.loc[c, "等級"] if c in 註.index else "",
                    "收盤": g("收盤"), "漲跌幅": g("漲跌幅"), "20日漲幅": g("20日漲幅"), "距52週高": g("距52週高點"),
                    "總分": 評分["總分"].get(c, np.nan) if 評分 is not None else np.nan,
+                   "較昨日": 評分["較昨日"].get(c, np.nan) if 評分 is not None and "較昨日" in 評分 else np.nan,
                    "本益比": g("本益比") if g("本益比") and g("本益比") > 0 else np.nan,
                    "本益比位階%": round(位, 0) if pd.notna(位) else np.nan, "估值": glance.估值標籤(位),
                    "預估本益比": g("預估本益比"), "明年預估本益比": g("明年預估本益比"),
-                   "營收年增率": g("營收年增率"), "法人5日買超": g("法人5日買超"),
+                   "營收年增率": g("營收年增率"),
+                   "合約負債億": round(jg("合約負債") / 1e5, 1) if pd.notna(jg("合約負債")) else np.nan,
+                   "合約負債年增": jg("合約負債年增"), "能見度月": jg("能見度月"),
+                   "合約負債季": "" if j is None else (j["quarter"] if pd.notna(jg("合約負債")) else f"{j['quarter']} 未列報"),
+                   "庫藏股": 庫藏股狀態(庫, c),
+                   "券商評等": (f"{共['家數']} 家：多 {共['看多']}／中 {共['中性']}／空 {共['看空']}" if 共 else ""),
+                   "目標價中位數": 共["中位數"] if 共 else np.nan,
+                   "目標價空間%": 共.get("中位數空間%", np.nan) if 共 else np.nan,
+                   "法人5日買超": g("法人5日買超"),
                    "依據": 註.loc[c, "依據"] if c in 註.index else ""})
     return pd.DataFrame(列們)
 

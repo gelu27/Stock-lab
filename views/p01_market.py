@@ -382,7 +382,11 @@ def 產業鏈區():
         評分 = 評分資料(_版本)[0]
     except Exception:
         評分 = None
-    表 = engine.產業鏈族群表(今日, 評分, 鏈)
+    try:
+        報告們 = 券商報告清單(st.session_state.get("_券商版本", 0))
+    except Exception:
+        報告們 = None
+    表 = engine.產業鏈族群表(今日, 評分, 鏈, 報告們)
     有等級 = len(表) and 表["等級"].ne("").any()
     指數, (熱, 現超) = 產業鏈指數資料(_版本, 鏈, "等級" if 有等級 else "環節")
     if not 指數.empty:
@@ -409,8 +413,19 @@ def 產業鏈區():
         欄["收盤"] = st.column_config.NumberColumn(format="%.2f")
         欄["本益比位階%"] = st.column_config.NumberColumn(format="%.0f", help="目前本益比在這檔過去 5 年的百分位（0＝最便宜）")
         欄["法人5日買超"] = st.column_config.NumberColumn(format="%,.0f", help="三大法人近 5 日買賣超（張）")
+        欄["合約負債億"] = st.column_config.NumberColumn("合約負債(億)", format="%,.1f",
+                                                   help="最新一季合約負債（預收款：已收錢、還沒交貨），交貨後才變營收。空白＝財報沒有單獨列這行")
+        欄["合約負債年增"] = st.column_config.NumberColumn("合約負債年增%", format="%+.0f",
+                                                    help="跟去年同季比。金額太小（雙方都低於 1 億）不算，避免小數字誇大")
+        欄["能見度月"] = st.column_config.NumberColumn(format="%.1f", help="合約負債 ÷ 近四季營收 × 12，約等於手上有幾個月營收的預收款")
+        欄["合約負債季"] = st.column_config.TextColumn("合約負債季別", width="medium", help="「未列報」＝財報沒有單獨列合約負債，不是 0")
+        欄["較昨日"] = st.column_config.NumberColumn(format="%+.1f", help="每日評分總分跟前一交易日比")
+        欄["庫藏股"] = st.column_config.TextColumn(width="medium", help="執行中或近 90 天內結束的庫藏股（買回期間、已買比例）")
+        欄["券商評等"] = st.column_config.TextColumn(width="medium", help="近半年各券商最新一份報告的看法（多＝買進／增加持股，中＝中立，空＝減碼）")
+        欄["目標價中位數"] = st.column_config.NumberColumn(format="%,.0f")
+        欄["目標價空間%"] = st.column_config.NumberColumn(format="%+.1f", help="目標價中位數比現價高幾 %")
         欄["依據"] = st.column_config.TextColumn(width="large")
-        表格(顯表.style.map(lambda v: f"color:{漲跌色(v)}", subset=["漲跌幅", "20日漲幅"]), hide_index=True, width="stretch",
+        表格(顯表.style.map(lambda v: f"color:{漲跌色(v)}", subset=[c for c in ("漲跌幅", "20日漲幅", "較昨日") if c in 顯表]), hide_index=True, width="stretch",
              column_config=欄, height=min(38 + 35 * len(顯表), 620), key=f"產業鏈表{鏈}")
     if len(熱):
         with st.expander(f"🔥 追高有用嗎？族群過去 20 日相對加權 vs 之後 20 日（目前 {現超:+.1f}%）"):
