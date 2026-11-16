@@ -5545,6 +5545,7 @@ def 讀取產業鏈():
 
 賺錢順序鏈 = {"玻璃基板"}   # Vic：設備與檢測 → 代工與材料 → 基板廠
 部位鏈 = {"人形機器人"}   # 依身體部位分，不是上下游
+並行鏈 = {"低軌衛星": "上游材料與晶片同時供應太空段（衛星本體）和地面段（使用者終端設備），兩段是並行的，最後賣給衛星營運商"}
 
 
 def 讀取產業鏈註記():
@@ -5565,13 +5566,18 @@ def 產業鏈位置(代號, 名稱表=None):
         鏈 = t[t["chain"] == r["chain"]]
         同 = 鏈[(鏈["group"] == r["group"]) & (鏈["code"] != r["code"])]["code"]
         段們 = sorted(x for x in 鏈["stage"].unique() if "支援" not in x)   # 製程支援（設備、耗材）服務各段，不算上下游
+        註 = 讀取產業鏈註記()
+        註 = 註[(註["chain"] == r["chain"]) & (註["code"] == str(代號))]
+        等級句 = f"；受惠等級：{註.iloc[0]['等級']}（{註.iloc[0]['依據']}，{註.iloc[0]['更新日']} 整理）" if len(註) else ""
         if r["chain"] in 部位鏈:
-            註 = 讀取產業鏈註記()
-            註 = 註[(註["chain"] == r["chain"]) & (註["code"] == str(代號))]
             行.append(f"{r['chain']} 供應鏈：{r['stage'][3:]}／{r['group']}"
                      + (f"；同組：{'、'.join(名(c) for c in 同)}" if len(同) else "")
-                     + (f"；受惠等級：{註.iloc[0]['等級']}（{註.iloc[0]['依據']}，{註.iloc[0]['更新日']} 整理）" if len(註) else "")
-                     + "；這條鏈依身體部位分類，不是上下游")
+                     + 等級句 + "；這條鏈依身體部位分類，不是上下游")
+            continue
+        if r["chain"] in 並行鏈:
+            行.append(f"{r['chain']} 產業鏈：{r['stage']}／{r['group']}"
+                     + (f"；同組：{'、'.join(名(c) for c in 同)}" if len(同) else "")
+                     + 等級句 + f"；{並行鏈[r['chain']]}")
             continue
         if r["chain"] in 賺錢順序鏈:   # 新技術的鏈依建廠順序排，不是上下游
             行.append(f"{r['chain']} 產業鏈：{r['stage']}／{r['group']}"
@@ -5586,7 +5592,7 @@ def 產業鏈位置(代號, 名稱表=None):
             上, 下 = None, None
         行.append(f"{r['chain']} 產業鏈：{r['stage']}／{r['group']}"
                  + (f"；同組：{'、'.join(名(c) for c in 同)}" if len(同) else "")
-                 + (f"；上游環節：{上}" if 上 else "") + (f"；下游環節：{下}" if 下 else ""))
+                 + (f"；上游環節：{上}" if 上 else "") + (f"；下游環節：{下}" if 下 else "") + 等級句)
     return "\n".join(行)
 
 

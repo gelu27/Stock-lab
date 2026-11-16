@@ -22,6 +22,17 @@ def main():
     assert "人形機器人 供應鏈" in 文 and "受惠等級：A 已出貨" in 文 and "上游環節" not in 文.split("人形機器人")[1], 文
     print("✅ 人形機器人名單、受惠等級、個股產業鏈文字正常")
 
+    衛 = 鏈[鏈["chain"] == "低軌衛星"]
+    assert len(衛) >= 20 and 衛["code"].is_unique, "低軌衛星鏈每檔只放一個主要環節"
+    assert set(衛["code"]) == set(註[註["chain"] == "低軌衛星"]["code"]), "低軌衛星產業鏈與受惠等級名單要一致"
+    assert set(衛["code"]) == set(概[概["concept"] == "低軌衛星"]["code"]), "概念股低軌衛星要跟產業鏈同一份名單"
+    assert "2314" not in set(衛["code"]), "台揚 12/21 終止上市，不列入"
+    文 = engine.產業鏈位置("3491", {"3491": "昇達科"})
+    assert "低軌衛星 產業鏈" in 文 and "受惠等級：A 已出貨" in 文 and "下游環節" not in 文 and "並行" in 文, 文
+    文 = engine.產業鏈位置("2412", {"2412": "中華電"})
+    assert "受惠等級：C 間接題材" in 文, 文
+    print("✅ 低軌衛星名單、受惠等級、個股產業鏈文字正常")
+
     # 指數：兩檔每天各漲 1%、加權每天漲 0.5% → 全部指數每天 ×1.01
     日 = pd.bdate_range("2024-01-01", periods=300)
     碼們 = 人["code"].tolist()[:2]
