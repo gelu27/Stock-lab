@@ -408,6 +408,14 @@ def 個股價位區(代號):
                     f'<div class="s">{紀["說明"]}</div></div>', unsafe_allow_html=True)
         with st.expander("🧪 這套紀律在這檔有用嗎？（5 年回測）"):
             停損紀律回測表(代號)
+    try:
+        if 代號 in (engine.讀取0050成分() or []) and len(K) >= 120:
+            距 = (float(K["close"].iloc[-1]) / float(K["close"].tail(250).max()) - 1) * 100
+            if 距 <= -20:
+                st.markdown(f'<div class="lamp y" style="margin:6px 0"><div class="t"><i>🧺</i>權值股越跌越買要小心：離一年高點 {距:.0f}%</div>'
+                            f'<div class="s">{engine.分倉回測摘要["長線個股"]}</div></div>', unsafe_allow_html=True)
+    except Exception:
+        pass
     貴 = engine.買貴檢查(歷史)
     if 貴:
         燈 = "r" if 貴["跌幅%"] <= -30 else ("y" if 貴["跌幅%"] <= -10 else "g")
