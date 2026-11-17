@@ -50,6 +50,10 @@ def 我的庫存():
             風險體檢區(持股)
         except Exception as e:
             st.caption(f"庫存體檢暫時算不出來（{type(e).__name__}）")
+        try:
+            分倉區(持股)
+        except Exception as e:
+            st.caption(f"長中短分倉暫時算不出來（{type(e).__name__}）")
     交易日記區()
     if 密碼:
         a, b = st.columns([4, 1])
@@ -290,6 +294,88 @@ def 風險體檢區(持股):
             f"{市場名稱.get(a, a)}－{市場名稱.get(b, b)} {v:.2f}" for a, b, v in r["相關"]))
     st.caption(f"用近 {r['天數']} 個交易日的每日漲跌計算。Beta＝個股跟加權指數一起動的程度（1＝跟大盤一樣，1.5＝大盤跌 1% 它平均跌 1.5%）；"
                "「大盤跌 10%」是用 Beta 推算的平均情況，實際可能更多或更少。")
+
+
+def 分倉區(持股):
+    """2026-11-17 網路心法「長線越跌越買、波段停損＋水位、短線只用賺來的錢」：把庫存分三倉，看比例、額度與每檔紀律。
+    分倉與目標比例存在交易日記同一個檔（有密碼時加密）。"""
+    段落("BUCKETS // 長中短分倉：長線越跌越買、波段守停損、短線只用賺來的錢")
+    日記 = 交易日記()
+    設 = dict(日記.get("分倉") or {})
+    分倉表 = dict(設.get("每檔") or {})
+    目標 = {"長線": 50, "波段": 30, "短線": 5, "現金": 15, **(設.get("目標") or {})}
+    現價 = dict(zip(今日["代號"].astype(str), 今日["收盤"].astype(float)))
+    庫 = 持股.assign(代號=持股["代號"].astype(str).str.strip())
+    try:
+        _, _, 摘 = engine.交易日記統計(日記.get("交易") or [], 現價)
+        已實現 = float(摘.get("已實現損益") or 0) if 摘 else 0.0
+    except Exception:
+        已實現 = 0.0
+    已實現 = float(設.get("已實現獲利手填") or 0) or 已實現
+    大型 = engine.讀取0050成分() or []
+    明細, 各倉, 總 = portfolio.分倉配置(庫, 現價, 分倉表, 現金=float(日記.get("現金") or 0), 目標=目標, 已實現獲利=已實現, 大型股=大型)
+    if 總 is None:
+        st.caption("沒有可計算的持股。")
+        return
+    K = 指數K線("TAIEX", _版本)
+    階 = engine.分倉加碼階梯(engine.讀取長期指數(K))
+    燈 = engine.波段新倉燈(K)
+    卡們 = []
+    for _, r in 各倉.iterrows():
+        差 = r["差距%"]
+        卡們.append(卡片(r["分倉"], f"{r['目前%']:.0f}%", f"目標 {r['目標%']:.0f}%（{'多' if 差 > 0 else '少'} {abs(差):.0f} 點）" if abs(差) >= 1 else f"目標 {r['目標%']:.0f}%，剛好",
+                       紅 if 差 > 5 else (綠 if 差 < -5 else "#EDEDED")))
+    卡片格(卡們)
+    卡片格([
+        卡片("長線：加碼階梯", f"第 {階['階']} / {階['階數']} 階" if 階 else "—",
+             (f"加權離一年高點 {階['距高%']:+.1f}%" + (f"，下一階 {階['下一階']}% ≈ {階['下一階點位']:,}" if 階['下一階'] else "")) if 階 else "", 青),
+        卡片("波段：新倉燈", f"{燈['燈']}" if 燈 else "—", 燈["說明"] if 燈 else "", "#EDEDED"),
+        卡片("短線：可用額度", f"{總['短線額度']:,.0f}", f"短線市值 {總['短線市值']:,.0f}" + (f"，超出 {總['短線超出']:,.0f}" if 總["短線超出"] > 0 else ""),
+             紅 if 總["短線超出"] > 0 else "#EDEDED"),
+    ])
+    if 總["短線超出"] > 0:
+        st.warning(f"⚠️ 短線倉 {總['短線市值']:,.0f} 元，超過「賺來的錢」{總['短線額度']:,.0f} 元：照心法，超出的部分等於拿本金在投機。")
+    if (各倉["分倉"] == "現金").any() and float(日記.get("現金") or 0) <= 0:
+        st.caption("還沒填現金：到上面「🛑 停損全觸發試算、單檔占比、現金水位」填一次，現金比例才會準。")
+    try:
+        停表 = engine.停損目標檢查(日記.get("交易") or [], 庫, 現價)
+        停損表 = {} if 停表.empty else {k: v for k, v in zip(停表["代號"], 停表["停損"]) if pd.notna(v)}
+    except Exception:
+        停損表 = {}
+    近 = 指標[指標["代號"].isin(明細["代號"]) & (指標["date"] >= 指標["date"].max() - pd.Timedelta(days=400))]
+    線們 = {c: g.sort_values("date")["收盤"].astype(float).reset_index(drop=True) for c, g in 近.groupby("代號")}
+    紀 = portfolio.分倉紀律(明細, 線們, 燈, 停損表)
+    表 = 明細.merge(紀, on="代號", how="left")
+    表["名稱"] = 表["代號"].map(市場名稱).fillna(表["代號"])
+    表["占比%"] = 表["市值"] / 總["總資產"] * 100
+    表 = 表.sort_values(["分倉", "市值"], ascending=[True, False])
+    表格(表[["分倉", "名稱", "占比%", "報酬%", "紀律", "設定", "代號"]].style.format({"占比%": "{:.1f}", "報酬%": "{:+.1f}"}, na_rep="—"),
+         hide_index=True, width="stretch")
+    with st.expander("⚙️ 設定每檔分倉、目標比例、短線額度"):
+        with st.form("分倉設定"):
+            st.caption("沒設定的先猜：ETF 與 0050 成分股＝長線，其他＝波段。")
+            編 = st.data_editor(表[["代號", "名稱", "分倉"]].reset_index(drop=True), hide_index=True, width="stretch", key="分倉編輯",
+                               column_config={"分倉": st.column_config.SelectboxColumn(options=list(portfolio.分倉名), required=True),
+                                              "代號": st.column_config.TextColumn(disabled=True), "名稱": st.column_config.TextColumn(disabled=True)})
+            a, b, c, d = st.columns(4)
+            新目標 = {"長線": a.number_input("長線目標 %", 0, 100, int(目標["長線"]), 5), "波段": b.number_input("波段目標 %", 0, 100, int(目標["波段"]), 5),
+                     "短線": c.number_input("短線目標 %", 0, 100, int(目標["短線"]), 1), "現金": d.number_input("現金目標 %", 0, 100, int(目標["現金"]), 5)}
+            手填 = st.number_input("短線額度（元，0＝用交易日記的已實現損益）", min_value=0.0, value=float(設.get("已實現獲利手填") or 0), step=10000.0)
+            if st.form_submit_button("💾 儲存分倉設定"):
+                if sum(新目標.values()) != 100:
+                    st.warning(f"目標比例加起來是 {sum(新目標.values())}%，要等於 100%。")
+                else:
+                    存交易日記({**日記, "分倉": {"每檔": dict(zip(編["代號"].astype(str), 編["分倉"])), "目標": 新目標, "已實現獲利手填": float(手填)}})
+                    st.rerun()
+    if 階 is not None:
+        with st.expander("📊 長線：大盤離高點跌多少之後，歷史上表現如何（2000 年以來）"):
+            表格(階["統計"], hide_index=True, width="stretch")
+            st.caption(f"第一次跌破 −20% 的 {階['跌20次數']} 次裡，之後一年內再往下跌的中位數 {階['跌20後再跌中位數%']}%、最差 {階['跌20後再跌最差%']}%："
+                       "所以越跌越買要分批（例如 −10%、−20%、−30% 各用一份），不要一次用完。價格指數不含股利。")
+    with st.expander("🧪 這套分倉心法的回測重點"):
+        for k in ("長線", "長線個股", "水位", "波段", "短線"):
+            st.markdown(f"- **{k}**：{engine.分倉回測摘要[k]}")
+        st.caption("加權 2000～2026、個股 2021-11～2026-11（偏多頭期）。已扣手續費與證交稅；停損用收盤價判斷，跳空會賠更多。只是統計，不是買賣建議。")
 
 
 交易欄 = ["日期", "代號", "買賣", "股數", "價格", "手續費", "稅", "停損", "目標", "理由"]
