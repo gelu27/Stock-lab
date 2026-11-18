@@ -1285,10 +1285,13 @@ def 關鍵價位區():
         st.info(f"{選}的開高低資料下次更新後就會出現。")
         return
     K, sr, 區們, 解, 黑, 量價 = 結果
-    價位卡片(sr, 解, float(K["close"].iloc[-2]))
-    跌破站回條(指數跌破站回(代號, _版本))
+    with 區塊防護("價位:卡片"):
+        價位卡片(sr, 解, float(K["close"].iloc[-2]))
+    with 區塊防護("價位:跌破站回"):
+        跌破站回條(指數跌破站回(代號, _版本))
     st.markdown(f'<div class="verdict">{解["文字"]}</div>', unsafe_allow_html=True)
-    量價條(量價)
+    with 區塊防護("價位:量價"):
+        量價條(量價)
     try:
         項們, 總結 = engine.三條件燈號(指數K線("TAIEX", _版本), 指數K線("TPEX", _版本), 讀檔("讀取美股", _版本))
     except Exception:
@@ -1297,15 +1300,21 @@ def 關鍵價位區():
         st.markdown(f"**本週觀察三條件**：{總結}")
         st.markdown(燈號卡(項們), unsafe_allow_html=True)
     if 黑:
-        st.markdown(黑K卡(黑), unsafe_allow_html=True)
-    波段區(K, sr)
-    年線反彈區(K, 是大盤=True)
-    季節區(K, 選)
-    K棒解讀區(K, None, f"{'加權' if 代號 == 'TAIEX' else '櫃買'}今天的 K 棒怎麼看", 是大盤=True)
-    技術 = 指數技術觀察(代號, _版本)
-    if 技術:
-        st.markdown("**分析師常用條件**：週線、KD、扣抵值、爆量 K 棒")
-        st.markdown(燈號卡(技術), unsafe_allow_html=True)
+        with 區塊防護("價位:黑K"):
+            st.markdown(黑K卡(黑), unsafe_allow_html=True)
+    with 區塊防護("價位:波段"):
+        波段區(K, sr)
+    with 區塊防護("價位:年線反彈"):
+        年線反彈區(K, 是大盤=True)
+    with 區塊防護("價位:季節"):
+        季節區(K, 選)
+    with 區塊防護("價位:K棒解讀"):
+        K棒解讀區(K, None, f"{'加權' if 代號 == 'TAIEX' else '櫃買'}今天的 K 棒怎麼看", 是大盤=True)
+    with 區塊防護("價位:技術觀察"):
+        技術 = 指數技術觀察(代號, _版本)
+        if 技術:
+            st.markdown("**分析師常用條件**：週線、KD、扣抵值、爆量 K 棒")
+            st.markdown(燈號卡(技術), unsafe_allow_html=True)
     止 = engine.止跌三階段(K)
     if 止:
         st.markdown(f"**止跌三階段** {可信度('止跌三階段')}：目前到第 {止['已到']} 階段" + ("，三個都成立 ✅" if 止["已到"] == 3 else ""))
@@ -1319,10 +1328,10 @@ def 關鍵價位區():
                        "。只有 5 日明顯比一般日子好，20、60 日的上漲機率反而比一般日子低，2022 空頭時常常止跌後又破底。"
                        "評論者也說前兩階段就會小量試單，不是一次買滿。")
     if 代號 == "TAIEX":
-        殺估值區()
-        光通訊區()
-        估值週線區(K)
-        預估估值區(K)
+        for 名, 函 in (("殺估值", lambda: 殺估值區()), ("光通訊", lambda: 光通訊區()),
+                      ("估值週線", lambda: 估值週線區(K)), ("預估估值", lambda: 預估估值區(K))):
+            with 區塊防護("價位:" + 名):
+                函()
     天數 = st.segmented_control("圖表區間", [20, 60, 120, 250], default=120,
                               format_func=lambda d: {20: "1 個月", 60: "3 個月", 120: "半年", 250: "1 年"}[d],
                               key="價位區間", label_visibility="collapsed") or 120
