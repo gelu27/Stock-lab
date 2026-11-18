@@ -3113,11 +3113,20 @@ def 集保歷史(代號, 週數=26):
     import re
     from concurrent.futures import ThreadPoolExecutor
     import requests
+    import time as _t
 
+    global _集保失敗時間
+    if _t.time() - _集保失敗時間 < 600:   # 剛剛才連不上，別再等一輪（LINE 查詢會連續用到兩次）
+        return None
     網址 = "https://www.tdcc.com.tw/portal/zh/smWeb/qryStock"
     標頭 = {"User-Agent": "Mozilla/5.0"}
+    截止 = _t.time() + 45   # 整體最多等 45 秒，集保網站太慢就放棄，不讓 LINE 回覆被拖幾分鐘
     with requests.Session() as s:
-        頁 = s.get(網址, headers=標頭, timeout=20).text
+        try:
+            頁 = s.get(網址, headers=標頭, timeout=8).text
+        except requests.RequestException:
+            _集保失敗時間 = _t.time()
+            raise
         日期們 = re.findall(r'<option[^>]*value="(\d{8})"', 頁)[:週數]
         權杖 = re.search(r'name="SYNCHRONIZER_TOKEN"[^>]*value="([^"]+)"', 頁)
         if not 日期們 or not 權杖:
@@ -3128,9 +3137,11 @@ def 集保歷史(代號, 週數=26):
         with requests.Session() as s2:
             s2.cookies.update(cookie)
             # 每次查詢都要新的權杖，所以先重新開一次查詢頁
-            頁2 = s2.get(網址, headers=標頭, timeout=20).text
+            if _t.time() > 截止:
+                return None
+            頁2 = s2.get(網址, headers=標頭, timeout=8).text
             t = re.search(r'name="SYNCHRONIZER_TOKEN"[^>]*value="([^"]+)"', 頁2)
-            r = s2.post(網址, headers=標頭, timeout=20, data={
+            r = s2.post(網址, headers=標頭, timeout=8, data={
                 "SYNCHRONIZER_TOKEN": t.group(1) if t else "", "SYNCHRONIZER_URI": "/portal/zh/smWeb/qryStock",
                 "method": "submit", "firDate": 日期們[0], "scaDate": 日, "sqlMethod": "StockNo",
                 "stockNo": 代號, "stockName": ""})
@@ -3143,9 +3154,20 @@ def 集保歷史(代號, 週數=26):
                 "retail": sum(級[k][1] for k in range(1, 9) if k in 級),
                 "holders": sum(級[k][0] for k in range(1, 16) if k in 級)}
 
+    def 安全查(日):
+        try:
+            return 查(日)
+        except Exception:
+            return None
+
     with ThreadPoolExecutor(6) as 工人:
-        結果 = [x for x in 工人.map(查, 日期們) if x]
+        結果 = [x for x in 工人.map(安全查, 日期們) if x]
+    if not 結果:
+        _集保失敗時間 = _t.time()
     return pd.DataFrame(結果).sort_values("date", ignore_index=True) if 結果 else None
+
+
+_集保失敗時間 = 0.0
 
 
 def 內部人歷史(代號, 月數=7):
