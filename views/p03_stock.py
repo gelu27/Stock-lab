@@ -200,6 +200,12 @@ def 做PDF(代號, r, 建議, 內文, 時間):
         except Exception:
             pass
     try:
+        報告們 = [x for x in 券商報告清單(st.session_state.get("_券商版本", 0)) if str(x.get("代號")) == str(代號)]
+        資料["券商目標"] = [{"日期": x.get("日期"), "目標價": engine._數(x.get("目標價")), "看法": x.get("看法")} for x in 報告們]
+        資料["券商共識"] = engine.券商共識(報告們, r["收盤"])
+    except Exception:
+        pass
+    try:
         h, 週轉, 大 = 變化資料(代號, 126)
         資料["變化"] = {"歷史": h, "週轉": 週轉, "大戶": 大, "解讀": engine.變化解讀(h, 週轉, 大)}
     except Exception:
