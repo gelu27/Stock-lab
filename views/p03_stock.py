@@ -416,6 +416,14 @@ def 個股價位區(代號):
                             f'<div class="s">{engine.分倉回測摘要["長線個股"]}</div></div>', unsafe_allow_html=True)
     except Exception:
         pass
+    try:
+        if len(K) >= 120:
+            距 = (float(K["close"].iloc[-1]) / float(K["close"].tail(250).max()) - 1) * 100
+            if 距 <= -50:
+                st.markdown(f'<div class="lamp y" style="margin:6px 0"><div class="t"><i>🕳️</i>已經跌掉一半（離一年高點 {距:.0f}%）：現在砍還是抱？</div>'
+                            f'<div class="s">{engine.分倉回測摘要["地心停損"]} 先看月營收是不是已經轉成年減。</div></div>', unsafe_allow_html=True)
+    except Exception:
+        pass
     貴 = engine.買貴檢查(歷史)
     if 貴:
         燈 = "r" if 貴["跌幅%"] <= -30 else ("y" if 貴["跌幅%"] <= -10 else "g")
