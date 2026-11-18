@@ -200,6 +200,12 @@ def 做PDF(代號, r, 建議, 內文, 時間):
         except Exception:
             pass
     try:
+        報告們 = [x for x in 券商報告清單(st.session_state.get("_券商版本", 0)) if str(x.get("代號")) == str(代號)]
+        資料["券商目標"] = [{"日期": x.get("日期"), "目標價": engine._數(x.get("目標價")), "看法": x.get("看法")} for x in 報告們]
+        資料["券商共識"] = engine.券商共識(報告們, r["收盤"])
+    except Exception:
+        pass
+    try:
         h, 週轉, 大 = 變化資料(代號, 126)
         資料["變化"] = {"歷史": h, "週轉": 週轉, "大戶": 大, "解讀": engine.變化解讀(h, 週轉, 大)}
     except Exception:
@@ -787,6 +793,31 @@ def 個股網紅說法(代號):
     st.caption("紅色＝看多、綠色＝看空（跟台股漲跌顏色一樣）。🚩＝那支影片有紅旗，見 04 選股 → 網紅說法。")
 
 
+def 目標價時間軸(報告們, 代號):
+    """股價線疊上每份券商報告的目標價（紅＝看多、灰＝中性、綠＝看空），看目標價跟股價的落差與歷次調整。"""
+    點 = [(pd.to_datetime(x.get("日期"), errors="coerce"), engine._數(x.get("目標價")), x) for x in 報告們]
+    點 = [(d, p, x) for d, p, x in 點 if pd.notna(d) and not np.isnan(p)]
+    價 = 個股價格(代號)
+    if len(點) < 2 or 價 is None:
+        return
+    起 = min(d for d, _, _ in 點) - pd.Timedelta(days=30)
+    線 = 價[價["date"] >= 起]
+    if len(線) < 5:
+        return
+    圖 = go.Figure(go.Scatter(x=線["date"], y=線["收盤"], name="收盤價", mode="lines", line=dict(color="#9AA7B5", width=1.6)))
+    for 看, 色 in (("看多", "#FF4D4F"), ("中性", "#C9CED6"), ("看空", "#2BBF6A")):
+        組 = [(d, p, x) for d, p, x in 點 if (x.get("看法") or "中性") == 看]
+        if 組:
+            圖.add_trace(go.Scatter(
+                x=[d for d, _, _ in 組], y=[p for _, p, _ in 組], mode="markers", name=f"目標價（{看}）",
+                marker=dict(color=色, size=10, line=dict(color="#FFFFFF", width=0.8)),
+                text=[f"{x.get('券商')}・{x.get('評等')}" for _, _, x in 組],
+                hovertemplate="%{x|%Y-%m-%d} %{text}<br>目標價 %{y:,.1f}<extra></extra>"))
+    st.markdown("**目標價時間軸（股價線＋每份報告的目標價）**")
+    st.plotly_chart(圖表外觀(圖, 300), width="stretch", config={"displayModeBar": False})
+    st.caption("點越集中、離股價線越遠，代表券商看法一致、上檔空間大；點散得很開代表分歧。每個點是一份報告。")
+
+
 def 個股券商報告(代號, 收盤):
     """03 個股 AI 分頁：這檔的券商報告、共識面板、目標價拆解、EPS 共識走勢、白話翻譯與交叉驗證。"""
     報告們 = [x for x in 券商報告清單(st.session_state.get("_券商版本", 0)) if str(x.get("代號")) == str(代號)]
@@ -810,6 +841,7 @@ def 個股券商報告(代號, 收盤):
     集 = [x for x in engine.集體升降評(報告們) if x[0] == str(代號)]
     for _, _, 方向, 家, 名們 in 集:
         (st.success if 方向 == "上修" else st.warning)(f"📣 近 3 天 {家} 家券商同時{方向}目標價：{名們}")
+    目標價時間軸(報告們, 代號)
     表 = engine.加潛在空間(表, {str(代號): 收盤})
     表格(表.drop(columns=["代號", "名稱", "現價"]), hide_index=True, width="stretch",
                  column_config={"日期": st.column_config.DateColumn(format="YYYY-MM-DD"),

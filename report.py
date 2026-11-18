@@ -236,6 +236,40 @@ def 變化圖(變化, 寬=9.2, 高=4.8):
     return _存圖(plt, 圖)
 
 
+def 目標價時間軸圖(歷史, 點, 寬=9.2, 高=4.2):
+    """股價線疊上每份券商報告的目標價（紅＝看多、灰＝中性、綠＝看空）。點：[{日期, 目標價, 看法}]。"""
+    點 = [(pd.to_datetime(x.get("日期"), errors="coerce"), x.get("目標價"), x.get("看法") or "中性") for x in (點 or [])]
+    點 = [(d, float(v), k) for d, v, k in 點 if pd.notna(d) and isinstance(v, (int, float)) and not pd.isna(v)]
+    if len(點) < 2 or 歷史 is None or len(歷史) < 5:
+        return None
+    起 = min(d for d, _, _ in 點) - pd.Timedelta(days=30)
+    h = 歷史[歷史["date"] >= 起]
+    if len(h) < 5:
+        return None
+    plt = _畫布()
+    圖, 軸 = plt.subplots(figsize=(寬, 高))
+    軸.plot(h["date"], h["收盤"], color=青, linewidth=1.3, label="收盤價")
+    for 看, 色 in (("看多", 紅), ("中性", "#C9CED6"), ("看空", 綠)):
+        組 = [(d, v) for d, v, k in 點 if k == 看]
+        if 組:
+            軸.scatter([d for d, _ in 組], [v for _, v in 組], s=34, color=色, edgecolors="#FFFFFF", linewidths=0.5,
+                       label=f"目標價（{看}）", zorder=3)
+    軸.legend(loc="upper left", frameon=False, ncol=4, fontsize=8)
+    軸.tick_params(labelsize=7)
+    軸.xaxis.set_major_formatter(__import__("matplotlib.dates", fromlist=["DateFormatter"]).DateFormatter("%y/%m"))
+    return _存圖(plt, 圖)
+
+
+def 目標價時間軸解讀(點, 共, 收盤):
+    點 = [x for x in (點 or []) if isinstance(x.get("目標價"), (int, float)) and not pd.isna(x.get("目標價"))]
+    說明 = [f"**報告數**：共 {len(點)} 份有目標價的報告，每個點是一份。"]
+    if 共 and 共.get("目標價數"):
+        說明.append(f"**共識**：每家最新目標價中位數 {共['中位數']:,.0f}，距現價 {共['中位數空間%']:+.1f}%；"
+                  f"區間 {共['最低']:,.0f} ~ {共['最高']:,.0f}。")
+    說明.append("**怎麼看**：點集中、離股價線遠＝看法一致且空間大；點散開＝券商分歧。")
+    return ("券商目標價時間軸", 說明)
+
+
 # ---------- 白話解讀 ----------
 def _數(v, f="{:,.2f}"):
     return "—" if v is None or pd.isna(v) else f.format(v)
@@ -606,6 +640,12 @@ def 產生PDF(代號, 名稱, 資料):
                  價(值) if isinstance(值, (int, float)) else "—",
                  f"距現價 {空間:+.1f}%" if pd.notna(空間) else "", 色)
         pdf.set_y(y0 + 28)
+
+    # 券商目標價時間軸
+    圖檔 = 目標價時間軸圖(資料.get("歷史"), 資料.get("券商目標"))
+    if 圖檔 is not None:
+        標, 點們 = 目標價時間軸解讀(資料.get("券商目標"), 資料.get("券商共識"), 資料.get("收盤"))
+        左圖右文("Broker Targets", "券商目標價時間軸", 圖檔, (標, 點們), 75)
 
     # 市場預估 EPS 共識（全市場預估 A、B 中位數）
     預 = 資料.get("預估") or {}
