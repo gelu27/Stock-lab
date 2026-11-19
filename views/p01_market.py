@@ -2718,6 +2718,40 @@ def 護盤區():
             st.caption("報酬從決議日收盤算（多半是盤後決議，隔天才可能進場）。網站加權資料從 2021-11 開始，更早的只列事件；"
                        "投入、獲利是媒體整理，口徑不一。新的護盤在 GitHub 的 data/stabilization_fund.csv 加一列就會出現。"
                        "國安基金沒有法定進場點位，「跌到十年線才護盤」只是市場說法。")
+    護盤跟買區()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def 護盤跟買資料(版本鍵):
+    import lab1118
+    d = engine.讀取資料庫(代號=list(lab1118.護盤標的), 起日=pd.Timestamp("2022-06-01"))
+    K = engine.讀取長期指數(指數K線("TAIEX", 版本鍵))
+    if d is None or K is None:
+        return pd.DataFrame(), pd.DataFrame()
+    表 = lab1118.護盤跟買(d.pivot(index="date", columns="code", values="close"), K.set_index("date")["close"], engine.讀取國安基金())
+    return 表, lab1118.護盤跟買勝率(表)
+
+
+def 護盤跟買區():
+    """2026-11-18 網紅說法「跟著國安基金買，勝率 100%」：用網站資料自己驗證。"""
+    with st.expander("🎯 跟著國安基金買哪些標的？（驗證「跟買必賺」）"):
+        try:
+            表, 勝 = 護盤跟買資料(_版本)
+        except Exception as e:
+            st.caption(f"暫時算不出來：{type(e).__name__}")
+            return
+        if 表.empty:
+            st.caption("沒有可計算的護盤資料。")
+            return
+        st.markdown("從每次護盤決議日收盤算起，權值股 20／60／120 日報酬，對照同期加權指數（%）。")
+        表格(表, hide_index=True, width="stretch",
+             column_config={c: st.column_config.NumberColumn(format="%+.1f") for c in 表.columns if c.endswith("%")})
+        if len(勝):
+            st.markdown("**已完成期間裡各標的的成績**")
+            表格(勝, hide_index=True, width="stretch")
+        st.caption("網站價格資料從 2021-11 起，只能驗證 2022-07、2025-04 兩次，加上本次（11/6）至今，樣本很少。"
+                   "兩次裡台達電全部上漲、台積電偏強，但廣達、台積電在 2022 年 60 日又回到虧損，"
+                   "本次廣達、鴻海也落後大盤。說「勝率 100%」是樣本太少；「跟國安買」不是保證獲利。")
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
