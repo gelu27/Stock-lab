@@ -1519,6 +1519,12 @@ if 概念們:
 鏈 = engine.產業鏈位置(代號, dict(zip(今日["代號"], 今日["名稱"])))
 if 鏈:
     st.caption("🔗 " + 鏈.replace("\n", "　｜　"))
+try:
+    import lab1118
+    for 行 in lab1118.風險標記文字(代號):
+        st.caption(行)
+except Exception:
+    pass
 if 警示表(_版本).get(代號):
     st.warning("⚠️ " + 警示表(_版本)[代號] + "　（處置股要先付款／交券才能下單，注意股代表近期交易異常）")
 if not 可編輯():

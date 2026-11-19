@@ -782,11 +782,73 @@ def 投信作帳區():
                "股本用「發行股數 × 10 元」估算。投信買超不等於會漲（第 3 季 ETF 申購也會造成被動買超），僅供研究參考，不構成投資建議。")
 
 
-選股分頁 = st.tabs(["🚀 順勢做多", "條件選股", "烏賊每日功課", "烏賊策略總覽", "🏆 策略排行榜", "券商報告", "網紅說法", "📝 研究筆記", "🧲 三條件抄底", "📐 預估 EPS", "⭐ 關注清單", "📈 營收動能", "📋 投信作帳"],
+@st.cache_data(ttl=6 * 3600, show_spinner="計算位階與籌碼警示…")
+def 位階警示資料(版本鍵):
+    import lab1118
+    return lab1118.跌破20週線(指標), lab1118.今日底高(指標), lab1118.讀集保近六週()
+
+
+def 位階與籌碼警示區():
+    """2026-11-18 網紅摘要：權值股跌破 20 週線、投信連賣＋散戶持股上升、底高訊號、風險標記。"""
+    import lab1118
+    段落("WATCH // 位階與籌碼警示")
+    破, 底, 集 = 位階警示資料(_版本)
+    st.markdown("**① 權值股跌破 20 週線**（成交值前 150 名，週收盤低於 20 週均線）")
+    if 破.empty:
+        st.caption("目前沒有權值股的週收盤在 20 週線以下。")
+    else:
+        剛 = int((破["狀態"] == "本週剛跌破").sum())
+        卡片格([卡片("跌破 20 週線", f"{len(破)}", "檔（權值前 150 名）", 綠), 卡片("本週剛跌破", f"{剛}", "上週收盤還在線上", 綠)])
+        表格(破, hide_index=True, width="stretch",
+             column_config={"收盤": st.column_config.NumberColumn(format="%.2f"), "距20週線%": st.column_config.NumberColumn(format="%+.1f"),
+                            "外資5日買賣超(張)": st.column_config.NumberColumn(format="%+,.0f")})
+        st.caption("宏爺／老王的說法：跌破 20 週線是中期轉弱，要站回才轉強。這是位階提醒，不是賣出訊號；"
+                   "外資 5 日買賣超可以看跌破時外資還在不在賣。")
+    st.markdown("**② 投信連賣＋散戶持股上升**（籌碼從法人移到散戶手上）")
+    下限 = st.segmented_control("投信連賣至少幾天", [3, 5, 7, 10], default=5, key="投信連賣下限", format_func=lambda v: f"{v} 天") or 5
+    投 = lab1118.投信連賣散戶升(指標, 集, 連賣下限=下限)
+    if 投.empty:
+        st.caption(f"目前沒有股票「投信連賣 ≥ {下限} 天，且 50 張以下散戶持股比上次增加」。")
+    else:
+        表格(投, hide_index=True, width="stretch",
+             column_config={"投信累計賣超張": st.column_config.NumberColumn(format="%,.0f"), "漲跌幅": st.column_config.NumberColumn(format="%+.2f"),
+                            "20日漲幅": st.column_config.NumberColumn(format="%+.1f"), "散戶持股%": st.column_config.NumberColumn(format="%.1f"),
+                            "散戶持股變化(個百分點)": st.column_config.NumberColumn(format="%+.2f")})
+    st.caption("集保每週公布一次，散戶＝持股 50 張以下；變化對照約 4 週前（資料不足時用最早一筆）。網站只存近一年資料，"
+               "這個訊號還沒有回測，先當觀察用。")
+    st.markdown("**③ 底高訊號**（跌深後，新的波段低點比前一個低點高）")
+    if 底.empty:
+        st.caption("近 5 個交易日沒有剛確認底高的股票。")
+    else:
+        表格(底, hide_index=True, width="stretch", column_config={"收盤": st.column_config.NumberColumn(format="%.2f")})
+    測 = lab1118.讀底高回測()
+    if 測:
+        列 = [{"持有": k, "樣本": v["樣本"], "平均報酬%": v["平均報酬%"], "平均超額%（扣大盤）": v["平均超額%"],
+              "勝率%": v["勝率%"], "全部日子平均超額%": v["全部日子平均超額%"]} for k, v in 測.items() if isinstance(v, dict)]
+        with st.expander(f"📊 回測：底高訊號有用嗎？（{測.get('資料區間', '')}，{測.get('事件數', 0):,} 次訊號）"):
+            表格(pd.DataFrame(列), hide_index=True, width="stretch")
+            st.caption("定義：前一個波段低點比之前 120 日高點低 15% 以上，之後 60 天內出現更高的波段低點（左右各 3 天確認）。"
+                       "結果：訊號之後的超額報酬跟「所有股票所有日子」差不多（20 日 −1.2% 對 −0.9%，60 日 −3.8% 對 −3.1%），"
+                       "沒有比較好。所以底高只能當「先試一小部分」的紀律，不是買進訊號。")
+    st.markdown("**④ 風險標記**（手動整理，來源是券商目標價調整與財經節目說法）")
+    風 = lab1118.讀風險標記()
+    if 風.empty:
+        st.caption("目前沒有風險標記。")
+    else:
+        名 = dict(zip(今日["代號"], 今日["名稱"]))
+        表格(風.assign(名稱=風["code"].map(名))[["code", "名稱", "風險", "依據", "更新日"]].rename(columns={"code": "代號"}),
+             hide_index=True, width="stretch", column_config={"依據": st.column_config.TextColumn(width="large")})
+        st.caption("新增一列到 GitHub 的 data/risk_notes.csv（code, 風險, 依據, 更新日）就會出現，個股頁也會顯示。")
+
+
+選股分頁 = st.tabs(["🚀 順勢做多", "條件選股", "烏賊每日功課", "烏賊策略總覽", "🏆 策略排行榜", "券商報告", "網紅說法", "📝 研究筆記", "🧲 三條件抄底", "📐 預估 EPS", "⭐ 關注清單", "📈 營收動能", "📋 投信作帳", "🧭 位階與籌碼警示"],
                    key="選股分頁", on_change="rerun")
 with 選股分頁[0], 區塊防護("順勢做多"):
     if 選股分頁[0].open:
         順勢做多區()
+with 選股分頁[13], 區塊防護("位階與籌碼警示"):
+    if 選股分頁[13].open:
+        位階與籌碼警示區()
 with 選股分頁[12], 區塊防護("投信作帳"):
     if 選股分頁[12].open:
         投信作帳區()
