@@ -34,6 +34,7 @@ import engine
 import etf_data
 import etf_analysis
 import etf_perf
+import lab1118
 import macro
 import momentum
 import beginner
@@ -76,6 +77,8 @@ if _已改(beginner):
     importlib.reload(beginner)  # 新手白話：名詞小卡、白話燈號
 if _已改(ai_debate):
     importlib.reload(ai_debate)  # AI 多空辯論、數字查核
+if _已改(lab1118):
+    importlib.reload(lab1118)  # 國安跟買驗證等 11/18 研究函式
 if _已改(macro):
     importlib.reload(macro)  # 01 首頁總經／資金用；沒重新載入時，部署新版後會沿用舊版 macro 而找不到新函式
 if _已改(feedback):
