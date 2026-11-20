@@ -16,6 +16,7 @@ import time
 import traceback
 import urllib.parse
 
+import pandas as pd
 import requests
 
 import engine
@@ -63,13 +64,46 @@ def _額度夠(設, 流程):
     return True
 
 
+略過數 = [0]   # 最近一次 影片清單 因為「雲端資料夾已有整理」而略過幾支
+
+
 def _已看(設):
     表 = engine.讀取設定檔(設, "intake_seen.json") or {}
     return 表, set(表.get("影片", [])), set(表.get("檔案", []))
 
 
+
+def _標題鍵(標題):
+    """去掉頻道前綴、日期、「_詳細整理」與標點，留中文／英數字，取前 12 字當比對鍵。"""
+    t = re.sub(r"^.{0,45}?\d{4}-\d{2}-\d{2}\s*", "", 標題 or "", count=1)
+    t = re.sub(r"_?詳細整理\s*$", "", t)
+    return "".join(re.findall(r"[\u4e00-\u9fffA-Za-z0-9]", t))[:12]
+
+
+def 已整理清單(設):
+    """ai-reports 的 influencer_drive_seen.json（每晚 22:00 的網紅摘要整理會寫進雲端資料夾已整理的影片「標題」與日期）
+    → [(日期, 標題鍵)]，用來和 YouTube 新片交叉檢核，避免同一支影片重複整理。"""
+    表 = engine.讀取設定檔(設, "influencer_drive_seen.json") or {}
+    結果 = []
+    for x in 表.get("seen", []):
+        鍵 = _標題鍵(x.get("title") or "")
+        日 = pd.to_datetime(x.get("date"), errors="coerce")
+        if len(鍵) >= 6 and pd.notna(日):
+            結果.append((日, 鍵))
+    return 結果
+
+
+def 已整理過(標題, 日期, 清單, 容許天=2):
+    """影片標題前 12 字與雲端已整理的標題相同，且日期差不超過 容許天 → True。"""
+    鍵 = _標題鍵(標題)
+    日 = pd.to_datetime(日期, errors="coerce")
+    if len(鍵) < 6 or pd.isna(日):
+        return False
+    return any(k == 鍵 and abs((d - 日).days) <= 容許天 for d, k in 清單)
+
+
 # ---------- 影片 ----------
-def 影片清單(設, 已看影片, 天數=3, 略過直播=True):
+def 影片清單(設, 已看影片, 天數=3, 略過直播=True, 略過已整理=False):
     """回傳 [(影片id, 網址, 標題, 日期)]：頻道 RSS 近 天數 天的新片＋手動網址。"""
     來源 = engine.讀取設定檔(設, "video_sources.json") or {}
     結果 = {}
@@ -100,9 +134,16 @@ def 影片清單(設, 已看影片, 天數=3, 略過直播=True):
         if m:
             結果.setdefault(m.group(1), (m.group(1), f"https://www.youtube.com/watch?v={m.group(1)}", "", ""))
     略過 = [k for k in (來源.get("略過關鍵字") or ["直播"]) if k]   # 直播常常好幾個小時，額度吃不消
+    整理 = 已整理清單(設) if 略過已整理 else []
     def 要處理(v):
         return v[0] not in 已看影片 and not (略過直播 and any(k in v[2] for k in 略過))
-    return [v for v in 結果.values() if 要處理(v)]
+    待 = [v for v in 結果.values() if 要處理(v)]
+    if 整理:
+        留 = [v for v in 待 if not 已整理過(v[2], v[3], 整理)]
+        略過數[0] = len(待) - len(留)
+        return 留
+    略過數[0] = 0
+    return 待
 
 
 批次指令 = ("請用繁體中文完整整理以下所有影片，不要只寫摘要，也不要加入你自己的看法。一個影片一個文字檔案\n"
@@ -133,7 +174,7 @@ def 新片提醒(設):
     """不用 Gemini：看頻道 RSS 有沒有新影片，有就傳 LINE（整理指令＋雲端資料夾＋影片連結，可一次複製），每支只提醒一次。"""
     表 = engine.讀取設定檔(設, "intake_seen.json") or {}
     已知 = set(表.get("影片", [])) | set(表.get("已通知", []))
-    新 = 影片清單(設, 已知, 天數=2, 略過直播=False)[:40]
+    新 = 影片清單(設, 已知, 天數=2, 略過直播=False, 略過已整理=True)[:40]
     if not 新:
         print("沒有新影片")
         return 0

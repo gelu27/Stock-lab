@@ -841,7 +841,94 @@ def 位階與籌碼警示區():
         st.caption("新增一列到 GitHub 的 data/risk_notes.csv（code, 風險, 依據, 更新日）就會出現，個股頁也會顯示。")
 
 
-選股分頁 = st.tabs(["🚀 順勢做多", "條件選股", "烏賊每日功課", "烏賊策略總覽", "🏆 策略排行榜", "券商報告", "網紅說法", "📝 研究筆記", "🧲 三條件抄底", "📐 預估 EPS", "⭐ 關注清單", "📈 營收動能", "📋 投信作帳", "🧭 位階與籌碼警示"],
+@st.cache_data(ttl=6 * 3600, show_spinner="計算網紅補強資料…")
+def 網紅補強1120資料(版本鍵):
+    import lab1120
+    inc = pd.read_csv(engine.資料夾 / "fundamental" / "income.csv", dtype={"code": str})
+    象, 季 = lab1120.營益四象限(inc)
+    名 = 指標.drop_duplicates("代號").set_index("代號")["名稱"]
+    象["名稱"] = 象["code"].map(名)
+    存 = engine.資料夾 / "fundamental" / "odm_inventory.csv"
+    odm = lab1120.ODM存貨銷售比(inc, pd.read_csv(存, dtype={"code": str}) if 存.exists() else None)
+    K = 指數K線("TAIEX", 版本鍵)
+    加權 = K.set_index("date")["close"] if K is not None else pd.Series(dtype=float)
+    個 = 指標[指標["代號"].astype(str).str.fullmatch(r"\d{4}")]
+    成交值 = 個.groupby("date")["成交值億"].sum()
+    台積電 = 個[個["代號"] == "2330"].set_index("date")["收盤"]
+    谷 = lab1120.谷底量(成交值.tail(200), 加權) if len(加權) else pd.DataFrame()
+    墊 = lab1120.領頭羊墊高(台積電, 加權) if len(加權) else pd.Series(dtype=bool)
+    return 象, 季, odm, 加權, 谷, 墊
+
+
+def 網紅補強1120區():
+    """2026-11-20 網紅摘要：台指 VIX、營業利益四象限、ODM 存貨銷售比、限空令事件追蹤、谷底量與領頭羊墊高底部。"""
+    import lab1120
+    段落("LAB 1120 // 網紅補強")
+    象, 季, odm, 加權, 谷, 墊 = 網紅補強1120資料(_版本)
+    測 = lab1120.讀回測()
+
+    st.markdown("**① 台指選擇權波動率（台指 VIX）**")
+    vix = lab1120.讀台指VIX()
+    現 = lab1120.VIX現況(vix)
+    if 現 is None:
+        st.caption("台指 VIX 資料還在累積：每天更新時會從期交所補（2021-11 起）。期交所有時會擋雲端主機，補不到的話資料夾裡不會有 tw_vix.csv。")
+    else:
+        卡片格([卡片("台指 VIX", f"{現['VIX']}", f"{現['日期']:%m/%d}", 綠), 卡片("歷史分位", f"{現['分位%']}%", f"資料 {現['起']:%Y-%m} 起", 綠),
+              卡片("近 5 日最高", f"{現['近5日最高']}", "", 綠)])
+    if 測.get("VIX"):
+        with st.expander(f"📊 回測：台指 VIX 站上門檻之後，加權指數怎麼走？（{測.get('VIX區間', '')}）"):
+            表格(pd.DataFrame(測["VIX"]), hide_index=True, width="stretch")
+            st.caption("同一段高 VIX 20 個交易日內只算第一次。兩位講者說的「VIX 超過 40% 是長線買點」可以對照這張表；樣本通常很少，不能當保證。")
+
+    st.markdown("**② 營業利益四象限**（單季營益年增，對照上一季年增）")
+    計 = 象["象限"].value_counts()
+    卡片格([卡片(k, f"{int(計.get(k, 0))}", f"{季} 檔數", 綠) for k in ("成長加速", "成長放緩", "衰退加深", "衰退收斂")])
+    選 = st.segmented_control("看哪一組", ["成長加速", "成長放緩", "衰退加深", "衰退收斂"], default="成長放緩", key="四象限組") or "成長放緩"
+    表 = 象[象["象限"] == 選].sort_values("單季營益", ascending=False).head(60)
+    表格(表[["code", "名稱", "單季營益", "年增", "上季年增"]].rename(columns={"code": "代號", "單季營益": "單季營益(千元)", "年增": "營益年增%", "上季年增": "上季營益年增%"}),
+         hide_index=True, width="stretch", column_config={"單季營益(千元)": st.column_config.NumberColumn(format="%,.0f"),
+                                                         "營益年增%": st.column_config.NumberColumn(format="%+.1f"), "上季營益年增%": st.column_config.NumberColumn(format="%+.1f")})
+    if 測.get("四象限"):
+        with st.expander("📊 回測：哪一組財報公布後比較好？"):
+            表格(pd.DataFrame(測["四象限"]), hide_index=True, width="stretch")
+            st.caption(f"每季財報截止後（季底＋75 天）買進、持有 60 個交易日，對照同期全市場平均（等權）；{測.get('資料區間', '')}，每組至少 10 檔才算一季。"
+                       "結論：衰退加深最差；「成長放緩先跌」沒有被資料支持，放緩組並不比加速組差。營益不含業外，年增只在去年同季營益為正時計算。")
+
+    st.markdown("**③ ODM 存貨銷售比**（鴻海、廣達、緯創：期末存貨 ÷ 單季營收）")
+    if odm.empty:
+        st.caption("存貨資料還在累積：每天更新時會向 FinMind 補三檔的存貨（data/fundamental/odm_inventory.csv）。")
+    else:
+        for 話 in lab1120.ODM警訊(odm):
+            st.warning(話)
+        表格(odm, hide_index=True, width="stretch", column_config={"存貨銷售比": st.column_config.NumberColumn(format="%.3f"), "較上季": st.column_config.NumberColumn(format="%+.3f")})
+        st.caption("說法：存貨高但營收開始放緩，會領先台積電反映 AI 需求轉弱。這只是觀察，還沒有回測；單季營收由年初至今累計相減而來。")
+
+    st.markdown("**④ 限空令事件追蹤**（從事件日收盤起算的加權報酬）")
+    追 = lab1120.限空事件追蹤(加權) if len(加權) else pd.DataFrame()
+    if 追.empty:
+        st.caption("加權指數資料不足。")
+    else:
+        表格(追.rename(columns={"至今天數": "至今(交易日)", "至今%": "至今報酬%"}), hide_index=True, width="stretch",
+             column_config={c: st.column_config.NumberColumn(format="%+.1f") for c in 追.columns if c.endswith("%")})
+        st.caption("2022、2025 兩列用國安基金決議日近似（當時限空措施不同期）；2026 兩列是 11/9 第一波、11/20 第二波。網紅說加強版限空令後 20 日平均雙位數反彈，"
+                   "網站只有這幾次可驗證，樣本太少，2020 年之前的要等長期指數補齊。")
+
+    st.markdown("**⑤ 落底訊號：谷底量、領頭羊墊高底部**")
+    if len(谷):
+        最 = 谷.iloc[-1]
+        墊今 = bool(墊.iloc[-1]) if len(墊) else False
+        卡片格([卡片("成交值 ÷ 近 60 日最高", f"{最['比高峰'] * 100:.0f}%", "≤ 50% 且不破 10 日低點才算谷底量", 綠),
+              卡片("量縮不破底", "是" if bool(最["量縮不破底"]) else "否", f"{谷.index[-1]:%m/%d}", 綠),
+              卡片("台積電墊高底部", "是" if 墊今 else "否", "台積電 5 日低點高於前 5 日、大盤沒有", 綠)])
+    if 測.get("落底訊號"):
+        with st.expander("📊 回測：這些訊號有用嗎？（只看加權離 120 日高點跌 8% 以上的日子）"):
+            表格(pd.DataFrame(測["落底訊號"]), hide_index=True, width="stretch")
+            st.caption("連續訊號 20 日內只算一次。樣本只有個位數（2021-11 起只有一兩段空頭），20 日多半上漲但和「跌深日子」對照差不多，"
+                       "目前不能說這兩個訊號比單純跌深買進更準，先當檢查表用。")
+    st.caption(f"回測算於 {測.get('算於', '—')}，指令：python lab1120.py backtest。僅供研究參考，不構成投資建議。")
+
+
+選股分頁 = st.tabs(["🚀 順勢做多", "條件選股", "烏賊每日功課", "烏賊策略總覽", "🏆 策略排行榜", "券商報告", "網紅說法", "📝 研究筆記", "🧲 三條件抄底", "📐 預估 EPS", "⭐ 關注清單", "📈 營收動能", "📋 投信作帳", "🧭 位階與籌碼警示", "🧪 網紅補強 1120"],
                    key="選股分頁", on_change="rerun")
 with 選股分頁[0], 區塊防護("順勢做多"):
     if 選股分頁[0].open:
@@ -849,6 +936,9 @@ with 選股分頁[0], 區塊防護("順勢做多"):
 with 選股分頁[13], 區塊防護("位階與籌碼警示"):
     if 選股分頁[13].open:
         位階與籌碼警示區()
+with 選股分頁[14], 區塊防護("網紅補強1120"):
+    if 選股分頁[14].open:
+        網紅補強1120區()
 with 選股分頁[12], 區塊防護("投信作帳"):
     if 選股分頁[12].open:
         投信作帳區()

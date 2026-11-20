@@ -1567,13 +1567,16 @@ def 新片查詢():
     import auto_intake
     設 = auto_intake._設定()
     表 = auto_intake.engine.讀取設定檔(設, "intake_seen.json") or {}
-    新 = auto_intake.影片清單(設, set(表.get("影片", [])), 天數=2, 略過直播=False)[:40]
+    新 = auto_intake.影片清單(設, set(表.get("影片", [])), 天數=2, 略過直播=False, 略過已整理=True)[:40]
+    略 = auto_intake.略過數[0]
     if not 新:
-        送出([{"type": "text", "text": "🎬 近 2 天沒有還沒整理的新影片。"}], "新片提醒")
+        送出([{"type": "text", "text": "🎬 近 2 天沒有還沒整理的新影片。" + (f"（雲端資料夾已整理 {略} 支，已略過）" if 略 else "")}], "新片提醒")
         return
     新.sort(key=lambda v: auto_intake.發布排序.get(v[0], v[3]), reverse=True)
     來源 = auto_intake.engine.讀取設定檔(設, "video_sources.json") or {}
     訊息們 = auto_intake.提醒訊息(新, 來源.get("雲端資料夾") or auto_intake.預設雲端資料夾)
+    if 略:
+        訊息們[0] = f"（雲端資料夾已整理 {略} 支，已略過）\n" + 訊息們[0]
     送出([{"type": "text", "text": t} for t in 訊息們[:5]], "新片提醒")
     表["已通知"] = sorted(set(表.get("已通知", [])) | {v[0] for v in 新})[-1000:]
     auto_intake.engine.儲存設定檔(設, "intake_seen.json", 表, f"新片查詢 {len(新)} 支")
