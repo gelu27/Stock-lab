@@ -41,6 +41,8 @@ import beginner
 import ai_debate
 import feedback
 import glance
+import lab1118
+import lab1120
 
 @st.cache_resource
 def _模組時間():
@@ -85,6 +87,10 @@ if _已改(feedback):
     importlib.reload(feedback)  # 回饋循環：錯誤本、券商與網紅記分板、規則體檢
 if _已改(glance):
     importlib.reload(glance)  # 一眼判斷：清單表情徽章、估值位階、重點卡三格、風險框、檢查表
+if _已改(lab1118):
+    importlib.reload(lab1118)  # 11/18 補強（首頁、個股、選股用）
+if _已改(lab1120):
+    importlib.reload(lab1120)  # 11/20 補強（台指 VIX、四象限、ODM 存貨等）
 
 _圖示 = Path(__file__).parent / "static" / "icon-192.png"
 st.set_page_config(page_title="台股觀測站", page_icon=str(_圖示) if _圖示.exists() else "◢", layout="wide")
