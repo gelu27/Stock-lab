@@ -11123,3 +11123,186 @@ def 波段新倉燈(K):
     else:
         燈, 字 = "🔴", "季線下且季線下彎：震盪／空頭，波段先不開新倉、提高現金"
     return {"燈": 燈, "說明": 字, "季線": 季, "乖離%": round((收 / 季 - 1) * 100, 1), "季線上彎": bool(上彎), "日期": c.index[-1]}
+
+
+# ---------- 2026-11-19 網紅摘要建議（打 8 折本益比、落底五訊號、融資減未破低、含輝量、主動式 ETF 相對大盤、1:2:3 分批買）----------
+打折本益比名單 = {"2330": "台積電", "2449": "京元電子", "2383": "台光電", "3037": "欣興", "3711": "日月光投控", "3189": "景碩",
+              "3017": "奇鋐", "2317": "鴻海", "2382": "廣達", "2454": "聯發科", "2308": "台達電", "6669": "緯穎",
+              "3661": "世芯-KY", "3443": "創意", "3105": "穩懋", "2327": "國巨", "3324": "雙鴻", "6274": "台燿"}
+
+
+def 打折本益比(今日, 折=0.8, 門檻=20.0, 名單=None):
+    """2027（明年）共識 EPS 打折後的本益比。今日：要有 代號、名稱、收盤。EPS 取預估檔的 A、B 中位數（預估EPS明年）。
+    回傳 DataFrame：代號、名稱、收盤、明年EPS、原本益比、打折後本益比、過關（打折後 ≤ 門檻）；沒預估檔或 EPS ≤ 0 的不列。"""
+    名單 = 名單 or 打折本益比名單
+    t, 日 = 讀取預估EPS()
+    if t is None or 今日 is None or not len(今日):
+        return pd.DataFrame()
+    共 = _預估共識(t)
+    if 共 is None or "預估EPS明年" not in 共:
+        return pd.DataFrame()
+    價 = dict(zip(今日["代號"].astype(str), 今日["收盤"]))
+    列 = []
+    for 碼, 名 in 名單.items():
+        eps = 共["預估EPS明年"].get(碼)
+        p = 價.get(碼)
+        if eps is None or p is None or pd.isna(eps) or pd.isna(p) or eps <= 0:
+            continue
+        原, 後 = p / eps, p / (eps * 折)
+        列.append({"代號": 碼, "名稱": 名, "收盤": float(p), "明年EPS": round(float(eps), 2), "原本益比": round(float(原), 1),
+                 "打折後本益比": round(float(後), 1), "過關": bool(後 <= 門檻)})
+    return pd.DataFrame(列).sort_values("打折後本益比").reset_index(drop=True) if 列 else pd.DataFrame()
+
+
+def 落底五訊號(K, 全市場成交值, 融資金額=None, 台積電收盤=None):
+    """高憲容的大盤落底五訊號，逐項看今天亮不亮。K：加權日 K（date、open、high、low、close）；全市場成交值：Series（日期→億元）；
+    融資金額：Series（日期→元）；台積電收盤：Series（日期→價）。每項回傳 {訊號, 亮, 說明}。資料不足的項目亮＝None。"""
+    K = K.sort_values("date").reset_index(drop=True)
+    結果 = []
+    # 1 谷底量：成交值縮到近 60 日高點的 6 成以下、且連 3 天沒再破底
+    亮, 說 = None, "成交值資料不足"
+    if 全市場成交值 is not None and len(全市場成交值.dropna()) >= 20:
+        v = 全市場成交值.dropna().sort_index()
+        高 = float(v.tail(60).max())
+        近 = v.tail(3)
+        不破底 = len(K) >= 4 and float(K["close"].iloc[-1]) >= float(K["close"].iloc[-4:-1].min())
+        亮 = bool((近 <= 高 * 0.6).all() and 不破底)
+        說 = f"近 3 日成交值 {近.iloc[0]:.0f}／{近.iloc[1]:.0f}／{近.iloc[2]:.0f} 億，近 60 日高點 {高:.0f} 億（6 成＝{高 * 0.6:.0f} 億）"
+    結果.append({"訊號": "① 谷底量（量縮到高點約一半～6 成且不再破底）", "亮": 亮, "說明": 說})
+    # 2 爆量長黑後低檔有承接：近 5 日有爆量黑 K（量 ≥ 20 日均量 1.5 倍），之後收盤沒再低於那天收盤
+    亮, 說 = None, "資料不足"
+    if 全市場成交值 is not None and len(全市場成交值.dropna()) >= 25 and len(K) >= 6:
+        v = 全市場成交值.dropna().sort_index()
+        均 = v.rolling(20).mean()
+        k = K.tail(5)
+        命中 = None
+        for _, r in k.iterrows():
+            d = r["date"]
+            if d in v.index and pd.notna(均.get(d)) and v[d] >= 均[d] * 1.5 and r["close"] < r["open"]:
+                命中 = r
+        if 命中 is None:
+            亮, 說 = False, "近 5 日沒有「量 ≥ 20 日均量 1.5 倍的黑 K」"
+        else:
+            後 = K[K["date"] > 命中["date"]]
+            亮 = bool(len(後) and float(後["close"].min()) >= float(命中["close"]))
+            說 = f"{pd.Timestamp(命中['date']):%m/%d} 爆量收黑（收 {命中['close']:,.0f}）；之後{'沒有' if 亮 else '又'}跌破那天收盤" if len(後) else \
+                f"{pd.Timestamp(命中['date']):%m/%d} 爆量收黑，還沒有後續交易日可驗證"
+    結果.append({"訊號": "② 爆量長黑後低檔有承接", "亮": 亮, "說明": 說})
+    # 3 融資大減：近 5 日融資金額減 ≥ 3%
+    亮, 說 = None, "融資金額資料不足"
+    if 融資金額 is not None and len(融資金額.dropna()) >= 6:
+        m = 融資金額.dropna().sort_index()
+        r = float(m.iloc[-1] / m.iloc[-6] - 1) * 100
+        亮, 說 = bool(r <= -3), f"上市融資金額近 5 日 {r:+.1f}%（門檻 −3%）"
+    結果.append({"訊號": "③ 融資大減（散戶、融資戶拋售）", "亮": 亮, "說明": 說})
+    # 4 領頭羊（台積電）墊高底部：近 5 日最低收盤高於前 5 日最低收盤，而大盤沒有墊高
+    亮, 說 = None, "台積電資料不足"
+    if 台積電收盤 is not None and len(台積電收盤.dropna()) >= 10 and len(K) >= 10:
+        s = 台積電收盤.dropna().sort_index()
+        近, 前 = float(s.tail(5).min()), float(s.iloc[-10:-5].min())
+        大近, 大前 = float(K["close"].tail(5).min()), float(K["close"].iloc[-10:-5].min())
+        亮 = bool(近 > 前)
+        說 = f"台積電近 5 日最低收 {近:,.0f}、前 5 日 {前:,.0f}；加權近 5 日最低 {大近:,.0f}、前 5 日 {大前:,.0f}"
+    結果.append({"訊號": "④ 領頭羊（台積電）悄悄墊高底部", "亮": 亮, "說明": 說})
+    # 5 關鍵紅 K：近 3 日有紅 K，收盤高於前一日最高
+    亮, 說 = False, "近 3 日沒有收紅且收盤突破前一日最高的 K 棒"
+    if len(K) >= 4:
+        for i in range(len(K) - 3, len(K)):
+            r, p = K.iloc[i], K.iloc[i - 1]
+            if r["close"] > r["open"] and r["close"] > p["high"]:
+                亮, 說 = True, f"{pd.Timestamp(r['date']):%m/%d} 收紅且收盤 {r['close']:,.0f} 高於前一日最高 {p['high']:,.0f}"
+    結果.append({"訊號": "⑤ 關鍵紅 K（收紅並突破前一根黑 K 高點）", "亮": 亮, "說明": 說})
+    return 結果
+
+
+def 融資減未破低名單(指標, 減張=1000, 天數=10, 前低窗=60, 最低成交張=1000):
+    """近 N 天融資餘額減少 ≥ 減張，而且近 N 天最低收盤沒有低於「更早 60 天」的最低收盤（還沒破前低）。
+    指標：長表（date、代號、名稱、收盤、融資餘額、成交張數）。回傳 DataFrame，依融資減少張數排序。"""
+    if 指標 is None or not len(指標) or "融資餘額" not in 指標.columns:
+        return pd.DataFrame()
+    日們 = sorted(指標["date"].unique())
+    if len(日們) < 天數 + 前低窗 // 2:
+        return pd.DataFrame()
+    x = 指標[指標["date"] >= 日們[-(天數 + 前低窗)]] if len(日們) >= 天數 + 前低窗 else 指標
+    近起 = 日們[-天數]
+    起前 = 日們[-天數 - 1]
+    列 = []
+    x = x[x["代號"].astype(str).str.fullmatch(r"\d{4}")]  # 只看一般股票，不含 ETF／反向／槓桿
+    for 碼, g in x.groupby("代號"):
+        g = g.sort_values("date")
+        近, 舊 = g[g["date"] >= 近起], g[g["date"] < 近起]
+        if len(近) < 天數 - 1 or len(舊) < 20:
+            continue
+        基 = g[g["date"] == 起前]["融資餘額"]
+        if not len(基) or pd.isna(基.iloc[0]) or pd.isna(g["融資餘額"].iloc[-1]):
+            continue
+        減 = float(基.iloc[0] - g["融資餘額"].iloc[-1])
+        if 減 < 減張:
+            continue
+        if float(近["成交張數"].tail(5).mean()) < 最低成交張:
+            continue
+        if float(近["收盤"].min()) < float(舊["收盤"].min()):
+            continue
+        列.append({"代號": 碼, "名稱": g["名稱"].iloc[-1], "收盤": float(g["收盤"].iloc[-1]),
+                 "融資減少(張)": int(減), "融資餘額(張)": int(g["融資餘額"].iloc[-1]),
+                 "近期低點": float(近["收盤"].min()), "前低": float(舊["收盤"].min())})
+    return pd.DataFrame(列).sort_values("融資減少(張)", ascending=False).reset_index(drop=True) if 列 else pd.DataFrame()
+
+
+def 讀取含輝量():
+    """data/nvidia_exposure.csv（code, 名稱, 說法, 依據, 日期）：公司或媒體公開講過的「輝達占營收」，手動維護、有出處才寫。"""
+    f = 資料夾 / "nvidia_exposure.csv"
+    return pd.read_csv(f, dtype={"code": str}) if f.exists() else pd.DataFrame(columns=["code", "名稱", "說法", "依據", "日期"])
+
+
+def 主動式ETF相對大盤(指標, K, 天數=(5, 10, 20)):
+    """主動式 ETF（代號結尾 A）近 N 日漲跌 vs 加權同期：相對%（ETF−大盤）、跌幅倍數（ETF÷大盤，兩者同為負才算）。"""
+    if 指標 is None or not len(指標) or K is None or len(K) < max(天數) + 1:
+        return pd.DataFrame()
+    K = K.sort_values("date")
+    列 = []
+    a = 指標[指標["代號"].astype(str).str.endswith("A") & (指標["代號"].astype(str).str.len() >= 6)]
+    for 碼, g in a.groupby("代號"):
+        g = g.sort_values("date").set_index("date")["收盤"].dropna()
+        if len(g) < max(天數) + 1:
+            continue
+        列表 = {"代號": 碼, "名稱": 指標[指標["代號"] == 碼]["名稱"].iloc[-1], "收盤": float(g.iloc[-1])}
+        for n in 天數:
+            e = (g.iloc[-1] / g.iloc[-1 - n] - 1) * 100
+            m = (float(K["close"].iloc[-1]) / float(K["close"].iloc[-1 - n]) - 1) * 100
+            列表[f"{n}日%"] = round(float(e), 1)
+            列表[f"{n}日大盤%"] = round(float(m), 1)
+            列表[f"{n}日相對%"] = round(float(e - m), 1)
+        列.append(列表)
+    if not 列:
+        return pd.DataFrame()
+    t = pd.DataFrame(列)
+    n = max(天數)
+    return t.sort_values(f"{n}日相對%").reset_index(drop=True)
+
+
+def 分批買試算(總資金, 價格, 停損價=None, 份數=(1, 2, 3)):
+    """朱家泓的 1:2:3 三批買法：總資金拆成 sum(份數) 份（預設 6 份），底底高買 1 份、站上月線買 2 份、多頭確認買 3 份。
+    價格：三批各自預計的買進價（list，長度同份數）。回傳 (明細 DataFrame, 摘要 dict)；價格有空值時該批不算。"""
+    if not 總資金 or 總資金 <= 0:
+        return pd.DataFrame(), {}
+    每份 = 總資金 / sum(份數)
+    名 = ["第一批：底底高、打底（先買 1 份，仍要停損）", "第二批：轉多且站上月線", "第三批：多頭確認、低點不再破"]
+    列, 金額, 股數 = [], 0.0, 0.0
+    for i, (份, p) in enumerate(zip(份數, 價格)):
+        if not p or p <= 0:
+            continue
+        金 = 每份 * 份
+        股 = 金 / p
+        金額 += 金
+        股數 += 股
+        列.append({"批次": 名[i], "份數": 份, "預計價": float(p), "投入金額": round(金), "股數": round(股), "張數": round(股 / 1000, 2)})
+    if not 列:
+        return pd.DataFrame(), {}
+    均 = 金額 / 股數
+    摘 = {"每份": round(每份), "已投入": round(金額), "平均成本": round(均, 2)}
+    if 停損價 and 停損價 > 0:
+        摘["停損價"] = float(停損價)
+        摘["停損虧損"] = round(股數 * (停損價 - 均))
+        摘["停損虧損%"] = round((停損價 / 均 - 1) * 100, 1)
+    return pd.DataFrame(列), 摘

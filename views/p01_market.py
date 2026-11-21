@@ -359,6 +359,8 @@ def 產業鏈指數資料(版本鍵, 鏈, 分組):
              "A 組裡衛星占營收比重差很多：昇達科約八成，敬鵬、群創只占一小部分；元晶、飛宏仍虧損。"
              "台揚已公告 12/21 終止上市，不列入；興櫃公司不列。僅供研究參考。",
 }
+等級說明["資安"] = ("A 已出貨＝已有明確資安服務或產品營收；B 送樣驗證、C 間接題材目前沒有列入。"
+                 "名單只收 11/19 網紅影片點名、且網站查得到的 3 檔，不代表完整資安族群；資安題材常因駭客事件短線急漲後回檔，僅供研究參考。")
 熱度註 = {
     "人形機器人": "族群剛大幅領先加權之後，接下來 20 日並沒有比較會贏；落後 10% 以上時之後也多半繼續落後。",
     "低軌衛星": "表上「領先 10% 以上」之後平均還贏，幾乎全來自 2025/12～2026/2 那一波；"
@@ -758,6 +760,7 @@ def 資金面區():
     融資減幅比區(洗)
     恐慌日區(洗)
     網紅1116區()
+    網紅1119區()
     正2融資區(每日, 洗)
     日 = 每日.index.strftime("%m/%d")
     圖 = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.06,
@@ -945,6 +948,76 @@ def 網紅1116區():
             st.caption("參考價＝(現價×原股數＋認購價×新股數)÷總股數，跌停價＝參考價×0.9，只是試算；實際以交易所公告為準。"
                        "現增除權時，股價看起來大跌但多數是參考價往下調整（例如德宏 11/16 跌 12.6% 就是這樣），別被數字嚇到。"
                        "私募、員工認股不在這張表。")
+
+
+def 網紅1119區():
+    """2026-11-19 網紅摘要建議：打 8 折本益比、落底五訊號、融資減未破低名單、含輝量、主動式 ETF 相對大盤、1:2:3 分批買試算。"""
+    with st.expander("🧮 2027 獲利「打 8 折」壓力測試：哪些權值股打折後本益比還在 20 倍以下？"):
+        折 = st.slider("把 2027 共識 EPS 打幾折", 0.5, 1.0, 0.8, 0.05, key="打折本益比折")
+        表 = engine.打折本益比(今日, 折=折)
+        if not len(表):
+            st.caption("沒有預估 EPS 資料（要在「共識預估」上傳匯出檔）。")
+        else:
+            表格(表.assign(過關=表["過關"].map({True: "✅ ≤20 倍", False: ""})), hide_index=True, width="stretch",
+                 column_config={"收盤": st.column_config.NumberColumn(format="%.1f"), "明年EPS": st.column_config.NumberColumn(format="%.2f"),
+                                "原本益比": st.column_config.NumberColumn(format="%.1f"), "打折後本益比": st.column_config.NumberColumn(format="%.1f")})
+            st.caption("來源：網紅提出「機構現在只看 2027 預估獲利，保守起見打 8 折」，打折後本益比仍在 20 倍以下的，被視為再修正空間有限的一線龍頭。"
+                       "這裡 EPS 用你上傳的預估檔（A、B 兩源中位數），不是網紅的資料；名單是網紅提到的 18 檔，不代表全市場。"
+                       "資金面壓力大時，本益比低不等於會馬上止跌，只代表「估值保護」比較多。")
+    with st.expander("🕯️ 大盤落底五訊號：今天亮了幾個？（高憲容的 5 項）"):
+        K = 指數K線("TAIEX", _版本)
+        if K is None or len(K) < 10:
+            st.caption("大盤資料不足。")
+        else:
+            成交 = 指標.groupby("date")["成交值億"].sum(min_count=1)
+            台 = 指標[指標["代號"] == "2330"].set_index("date")["收盤"]
+            訊號 = engine.落底五訊號(K, 成交, engine.讀取融資金額(), 台)
+            亮數 = sum(1 for x in 訊號 if x["亮"])
+            st.markdown(f"**今天 {亮數} / 5 項亮燈**")
+            表格(pd.DataFrame([{"訊號": x["訊號"], "狀態": {True: "🟢 亮", False: "⚪ 沒亮", None: "❔ 無資料"}[x["亮"]], "說明": x["說明"]} for x in 訊號]),
+                 hide_index=True, width="stretch")
+            st.caption("五項是網紅的經驗法則，門檻（量縮到 6 成、融資 5 日 −3%…）是網站自己設的，沒有經過全歷史回測，亮燈多不代表一定落底。"
+                       "網站另有「止跌三階段」與「融資減幅」，看法不同時以多項互相印證為準。")
+    with st.expander("🧹 融資洗乾淨又沒破前低：近 10 天融資減 1,000 張以上的股票"):
+        名單 = engine.融資減未破低名單(指標)
+        if not len(名單):
+            st.caption("目前沒有符合的股票。")
+        else:
+            表格(名單.head(40), hide_index=True, width="stretch")
+            st.caption("條件：近 10 個交易日融資餘額減少 ≥ 1,000 張、近 5 日平均成交 ≥ 1,000 張，而且近 10 日最低收盤沒有低於前 50 天的最低收盤（還沒破前低）。"
+                       "網紅的邏輯是「融資洗掉、股價還撐著＝籌碼變乾淨」，但在大盤持續下殺時，「還沒破低」也可能只是還沒輪到。"
+                       "「融資使用率」需要每檔融資限額資料，目前網站沒有，所以沒有算。")
+    with st.expander("🟩 含輝量：輝達占營收多少？（公開說法）"):
+        含 = engine.讀取含輝量()
+        if len(含):
+            表格(含, hide_index=True, width="stretch")
+        st.caption("只收公司或媒體公開講過、有出處的說法，沒有就不寫；伺服器代工廣達、鴻海市場普遍認為含輝量高，但這裡沒有官方百分比所以不列。"
+                   "想增刪可以直接在 GitHub 編輯 data/nvidia_exposure.csv。")
+    with st.expander("📉 主動式 ETF 跌得比大盤多少？（近 5／10／20 日）"):
+        相 = engine.主動式ETF相對大盤(指標, 指數K線("TAIEX", _版本))
+        if not len(相):
+            st.caption("資料不足。")
+        else:
+            表格(相, hide_index=True, width="stretch",
+                 column_config={c: st.column_config.NumberColumn(format="%+.1f") for c in 相.columns if c.endswith("%")})
+            st.caption("「相對%」＝ETF 漲跌 − 加權漲跌；負越多代表比大盤跌得更慘。網紅說主動式 ETF 重倉 CPO、散熱、PCB、ABF 這些熱門股，"
+                       "所以下跌時跌幅比大盤大；剛上市不足 20 日的 ETF 不列。價格是市價（收盤），不是淨值。")
+    with st.expander("🧱 1:2:3 分批抄底試算器（朱家泓三批買法）"):
+        c1, c2 = st.columns(2)
+        總 = c1.number_input("預計投入總資金（元）", min_value=0, value=1_200_000, step=100_000, key="分批總資金")
+        停 = c2.number_input("停損價（選填，0 表示不算）", min_value=0.0, value=0.0, step=1.0, key="分批停損")
+        p1, p2, p3 = st.columns(3)
+        a = p1.number_input("第一批：底底高時買價", min_value=0.0, value=0.0, step=1.0, key="分批價1")
+        b = p2.number_input("第二批：站上月線時買價", min_value=0.0, value=0.0, step=1.0, key="分批價2")
+        c = p3.number_input("第三批：多頭確認時買價", min_value=0.0, value=0.0, step=1.0, key="分批價3")
+        明細, 摘 = engine.分批買試算(總, [a, b, c], 停 or None)
+        if len(明細):
+            表格(明細, hide_index=True, width="stretch")
+            st.caption("、".join(f"{k}：{v:,}" for k, v in 摘.items()))
+        else:
+            st.caption("填入三個預計買價（例如 100、110、120）就會算出每批金額、張數、平均成本與停損虧損。")
+        st.caption("提醒：這是「越漲買越多」的右側加碼，不是越跌越買；影片開頭說「越跌買越多」與實際做法相反。"
+                   "每批價格要自己判斷條件成立時的價位，網站不會自動判斷底底高或月線，也沒有回測這個買法是否比一次買進好。")
 
 
 def 恐慌日區(洗):
