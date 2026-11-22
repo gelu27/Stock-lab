@@ -1,4 +1,4 @@
-# 個股分析 PDF 報告（黑底、橫式、左圖右文）
+# 個股分析 PDF 報告（黑底、直式、上圖下文；字體放大，手機直接看也清楚）
 # 首頁：大字股價、重點數據卡片、AI 結論、K 線圖與解讀；後面：營收、毛利率、法人圖表各配一段白話解讀、多空清單、完整 AI 報告、數據總表
 # 用 fpdf2 排版、matplotlib 畫圖，中文字型放在 fonts/（Noto Sans TC）
 
@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 字型夾 = Path(__file__).parent / "fonts"
+字倍 = 1.35  # PDF 文字放大倍數（直式 A4，手機打開不用放大也看得清楚）
 
 # 與網站一致的配色（台股習慣：紅漲綠跌）
 底色, 卡色, 線色 = "#0A0A0A", "#151515", "#2A2A2A"
@@ -40,7 +41,7 @@ def _畫布():
         font_manager.fontManager.addfont(路徑)
     plt.rcParams.update({
         "font.family": font_manager.FontProperties(fname=路徑).get_name(), "axes.unicode_minus": False,
-        "font.size": 10, "figure.facecolor": 底色, "axes.facecolor": 底色, "savefig.facecolor": 底色,
+        "font.size": 14, "figure.facecolor": 底色, "axes.facecolor": 底色, "savefig.facecolor": 底色,
         "axes.edgecolor": 線色, "axes.labelcolor": 次字, "xtick.color": 次字, "ytick.color": 次字,
         "text.color": 字色, "axes.spines.top": False, "axes.spines.right": False, "axes.grid": True,
         "grid.color": "#1E1E1E", "grid.linewidth": 0.8, "legend.labelcolor": 字色})
@@ -67,7 +68,7 @@ def _還原(歷史):
     return h
 
 
-def K線圖(歷史, 天數=120, 寬=9.2, 高=5.0):
+def K線圖(歷史, 天數=120, 寬=7.4, 高=5.0):
     """日 K 線（還原價）＋5／20／60 日線＋成交量。"""
     from matplotlib.patches import Rectangle
 
@@ -86,21 +87,21 @@ def K線圖(歷史, 天數=120, 寬=9.2, 高=5.0):
                                facecolor=色, edgecolor=色, linewidth=0.5))
     for n, 色 in ((5, 黃), (20, 青), (60, "#B388FF")):
         上.plot(x, h[f"均{n}"], color=色, linewidth=1.1, label=f"{n} 日線")
-    上.legend(loc="upper left", frameon=False, ncol=3, fontsize=9)
+    上.legend(loc="upper left", frameon=False, ncol=3, fontsize=14)
     上.set_xlim(-1, len(h))
     最高, 最低 = h["high"].idxmax(), h["low"].idxmin()
     上.annotate(f"{h['high'][最高]:,.2f}", (最高, h["high"][最高]), xytext=(0, 6), textcoords="offset points",
-               ha="center", color=紅, fontsize=8)
+               ha="center", color=紅, fontsize=12)
     上.annotate(f"{h['low'][最低]:,.2f}", (最低, h["low"][最低]), xytext=(0, -12), textcoords="offset points",
-               ha="center", color=綠, fontsize=8)
+               ha="center", color=綠, fontsize=12)
     下.bar(x, h["volume"] / 1000, color=np.where(h["收盤"] >= h["open"], 紅, 綠), width=0.7)
-    下.set_ylabel("張", fontsize=9)
+    下.set_ylabel("張", fontsize=14)
     步 = max(len(h) // 7, 1)
     下.set_xticks(x[::步], h["date"].dt.strftime("%m/%d").iloc[::步])
     return _存圖(plt, 圖)
 
 
-def 營收圖(營收, 寬=9.2, 高=3.6):
+def 營收圖(營收, 寬=7.4, 高=3.6):
     if 營收 is None or len(營收) < 13:
         return None
     plt = _畫布()
@@ -110,9 +111,9 @@ def 營收圖(營收, 寬=9.2, 高=3.6):
     圖, 軸 = plt.subplots(figsize=(寬, 高))
     軸.bar(v["month"].str[2:], v["revenue"] / 1e5, color="#2C4A5A", edgecolor=青, linewidth=0.4)
     軸.set_ylabel("營收（億）")
-    軸.tick_params(axis="x", rotation=60, labelsize=8)
+    軸.tick_params(axis="x", rotation=60, labelsize=12)
     右 = 軸.twinx()
-    右.plot(v["month"].str[2:], v["年增率"], color=紅, marker="o", markersize=3, linewidth=1.4)
+    右.plot(v["month"].str[2:], v["年增率"], color=紅, marker="o", markersize=5, linewidth=1.4)
     右.axhline(0, color=淡字, linewidth=0.7)
     右.set_ylabel("年增率 %", color=紅)
     右.tick_params(axis="y", colors=紅)
@@ -122,23 +123,23 @@ def 營收圖(營收, 寬=9.2, 高=3.6):
     return _存圖(plt, 圖)
 
 
-def 毛利圖(損益, 寬=9.2, 高=3.6):
+def 毛利圖(損益, 寬=7.4, 高=3.6):
     if 損益 is None or 損益.empty or 損益["毛利率"].notna().sum() < 2:
         return None
     plt = _畫布()
     t = 損益.dropna(subset=["毛利率"]).tail(10)
     圖, 軸 = plt.subplots(figsize=(寬, 高))
     q = t["quarter"].str[2:]
-    軸.plot(q, t["毛利率"], color=紅, marker="o", linewidth=1.8, label="毛利率")
-    軸.plot(q, t["營益率"], color=青, marker="o", linewidth=1.8, label="營業利益率")
+    軸.plot(q, t["毛利率"], color=紅, marker="o", markersize=6, linewidth=2.2, label="毛利率")
+    軸.plot(q, t["營益率"], color=青, marker="o", markersize=6, linewidth=2.2, label="營業利益率")
     for x, y in zip(q, t["毛利率"]):
-        軸.annotate(f"{y:.1f}", (x, y), textcoords="offset points", xytext=(0, 7), ha="center", fontsize=8, color=字色)
+        軸.annotate(f"{y:.1f}", (x, y), textcoords="offset points", xytext=(0, 7), ha="center", fontsize=12, color=字色)
     軸.set_ylabel("%")
     軸.legend(loc="upper left", frameon=False, ncol=2)
     return _存圖(plt, 圖)
 
 
-def 合約負債圖(合約, 寬=9.2, 高=3.6):
+def 合約負債圖(合約, 寬=7.4, 高=3.6):
     if 合約 is None or 合約["合約負債"].notna().sum() < 2:
         return None
     t = 合約.dropna(subset=["合約負債"]).tail(8)
@@ -148,7 +149,7 @@ def 合約負債圖(合約, 寬=9.2, 高=3.6):
     軸.set_axisbelow(True)
     軸.bar(q, t["合約負債"] / 1e5, color=青, width=0.6, label="合約負債（億）")
     if t["單季營收"].notna().any():
-        軸.plot(q, t["單季營收"] / 1e5, color=黃, marker="o", linewidth=1.8, label="單季營收（億）")
+        軸.plot(q, t["單季營收"] / 1e5, color=黃, marker="o", markersize=6, linewidth=2.2, label="單季營收（億）")
     軸.set_ylabel("億元")
     軸.legend(loc="upper left", frameon=False, ncol=2)
     return _存圖(plt, 圖)
@@ -176,7 +177,7 @@ def 合約負債解讀(合約):
     return 標題, 重點
 
 
-def 法人圖(歷史, 寬=9.2, 高=3.6):
+def 法人圖(歷史, 寬=7.4, 高=3.6):
     if "外資買超" not in 歷史.columns:
         return None
     plt = _畫布()
@@ -188,7 +189,7 @@ def 法人圖(歷史, 寬=9.2, 高=3.6):
     右 = 軸.twinx()
     右.plot(x, h["收盤"], color=字色, linewidth=1.2, label="收盤")
     右.grid(False)
-    右.tick_params(axis="y", labelsize=8)
+    右.tick_params(axis="y", labelsize=12)
     軸.axhline(0, color=淡字, linewidth=0.7)
     步 = max(len(h) // 7, 1)
     軸.set_xticks(x[::步], h["date"].dt.strftime("%m/%d").iloc[::步])
@@ -197,7 +198,7 @@ def 法人圖(歷史, 寬=9.2, 高=3.6):
     return _存圖(plt, 圖)
 
 
-def 變化圖(變化, 寬=9.2, 高=4.8):
+def 變化圖(變化, 寬=7.4, 高=4.8):
     """FLOW：股價、週轉率、千張大戶、三大法人買賣超四層共用時間軸。"""
     if not 變化 or 變化["歷史"] is None or len(變化["歷史"]) < 5:
         return None
@@ -211,12 +212,12 @@ def 變化圖(變化, 寬=9.2, 高=4.8):
                          gridspec_kw={"height_ratios": [1.5, 0.8, 1, 1][:列數], "hspace": 0.12})
     日 = h["date"]
     軸們[0].plot(日, h["收盤"], color=青, linewidth=1.3)
-    軸們[0].set_ylabel("股價", fontsize=8)
+    軸們[0].set_ylabel("股價", fontsize=12)
     軸們[1].bar(日, 週轉, color=黃, width=1)
-    軸們[1].set_ylabel("週轉率%", fontsize=8)
+    軸們[1].set_ylabel("週轉率%", fontsize=12)
     if 大 is not None and len(大):
         軸們[2].plot(大["date"], 大["big1000"], color=紅, linewidth=1.3, marker="o", markersize=2.5)
-    軸們[2].set_ylabel("千張大戶%", fontsize=8)
+    軸們[2].set_ylabel("千張大戶%", fontsize=12)
     if 有法人:
         底 = np.zeros(len(h))
         負底 = np.zeros(len(h))
@@ -228,15 +229,15 @@ def 變化圖(變化, 寬=9.2, 高=4.8):
             底 += 正
             負底 += 負
         軸們[3].axhline(0, color=淡字, linewidth=0.7)
-        軸們[3].set_ylabel("法人(張)", fontsize=8)
-        軸們[3].legend(loc="upper left", frameon=False, ncol=3, fontsize=7)
+        軸們[3].set_ylabel("法人(張)", fontsize=12)
+        軸們[3].legend(loc="upper left", frameon=False, ncol=3, fontsize=10)
     for 軸 in 軸們:
-        軸.tick_params(labelsize=7)
+        軸.tick_params(labelsize=10)
     軸們[-1].xaxis.set_major_formatter(__import__("matplotlib.dates", fromlist=["DateFormatter"]).DateFormatter("%m/%d"))
     return _存圖(plt, 圖)
 
 
-def 目標價時間軸圖(歷史, 點, 寬=9.2, 高=4.2):
+def 目標價時間軸圖(歷史, 點, 寬=7.4, 高=4.2):
     """股價線疊上每份券商報告的目標價（紅＝看多、灰＝中性、綠＝看空）。點：[{日期, 目標價, 看法}]。"""
     點 = [(pd.to_datetime(x.get("日期"), errors="coerce"), x.get("目標價"), x.get("看法") or "中性") for x in (點 or [])]
     點 = [(d, float(v), k) for d, v, k in 點 if pd.notna(d) and isinstance(v, (int, float)) and not pd.isna(v)]
@@ -254,8 +255,8 @@ def 目標價時間軸圖(歷史, 點, 寬=9.2, 高=4.2):
         if 組:
             軸.scatter([d for d, _ in 組], [v for _, v in 組], s=34, color=色, edgecolors="#FFFFFF", linewidths=0.5,
                        label=f"目標價（{看}）", zorder=3)
-    軸.legend(loc="upper left", frameon=False, ncol=4, fontsize=8)
-    軸.tick_params(labelsize=7)
+    軸.legend(loc="upper left", frameon=False, ncol=4, fontsize=12)
+    軸.tick_params(labelsize=10)
     軸.xaxis.set_major_formatter(__import__("matplotlib.dates", fromlist=["DateFormatter"]).DateFormatter("%y/%m"))
     return _存圖(plt, 圖)
 
@@ -429,11 +430,11 @@ def 產生PDF(代號, 名稱, 資料):
 
         def footer(self):
             self.set_y(-10)
-            self.set_font("tc", size=7.5)
+            self.set_font("tc", size=7.5 * 字倍)
             self.set_text_color(*_rgb(淡字))
             self.cell(0, 5, f"{代號} {名稱}  //  STOCK REPORT  //  僅供個人研究，不構成投資建議  //  {self.page_no()}", align="R")
 
-    pdf = 報告PDF(orientation="L", format="A4")
+    pdf = 報告PDF(orientation="P", format="A4")
     pdf.add_font("tc", "", str(字型夾 / "NotoSansTC-Regular.ttf"))
     pdf.add_font("tc", "B", str(字型夾 / "NotoSansTC-Bold.ttf"))
     pdf.set_auto_page_break(True, margin=14)
@@ -443,7 +444,8 @@ def 產生PDF(代號, 名稱, 資料):
     建議 = 資料.get("建議") or {}
 
     def 字(大小, 粗=False, 色=字色):
-        pdf.set_font("tc", "B" if 粗 else "", 大小)
+        """大小用原本（橫式）時的字級，實際乘上 字倍 放大。"""
+        pdf.set_font("tc", "B" if 粗 else "", 大小 * 字倍)
         pdf.set_text_color(*_rgb(色))
 
     def 段標(英文, 中文, y=None):
@@ -451,10 +453,10 @@ def 產生PDF(代號, 名稱, 資料):
             pdf.set_y(y)
         x = pdf.get_x()
         字(8, 色=青)
-        pdf.cell(0, 4, 英文.upper(), new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(0, 4 * 字倍, 英文.upper(), new_x="LMARGIN", new_y="NEXT")
         字(15, True)
         pdf.set_x(x)
-        pdf.cell(0, 8, 中文, new_x="LMARGIN", new_y="NEXT")
+        pdf.multi_cell(0, 8 * 字倍, 中文, new_x="LMARGIN", new_y="NEXT", align="L")
         pdf.set_draw_color(*_rgb(紅))
         pdf.set_line_width(0.8)
         pdf.line(x, pdf.get_y() + 0.5, x + 14, pdf.get_y() + 0.5)
@@ -464,14 +466,14 @@ def 產生PDF(代號, 名稱, 資料):
         """右側解讀：一句大標＋幾條重點（**粗體**會變成亮色粗體）。"""
         pdf.set_xy(x, y)
         字(14, True, 標題色)
-        pdf.multi_cell(w, 7.5, 標題, new_x="LEFT", new_y="NEXT", align="L")
+        pdf.multi_cell(w, 7.5 * 字倍, 標題, new_x="LEFT", new_y="NEXT", align="L")
         pdf.ln(2)
         for 條 in 重點:
             pdf.set_x(x)
             字(11, 色=紅)
-            pdf.cell(4, 6.5, "▍")
+            pdf.cell(6, 6.5 * 字倍, "▍")
             字(11, 色="#D5D5D5")
-            pdf.multi_cell(w - 4, 6.5, _乾淨(條), markdown=True, new_x="LEFT", new_y="NEXT", align="L")
+            pdf.multi_cell(w - 6, 6.5 * 字倍, _乾淨(條), markdown=True, new_x="LEFT", new_y="NEXT", align="L")
             pdf.set_x(x)
             pdf.ln(1.5)
         return pdf.get_y()
@@ -485,92 +487,113 @@ def 產生PDF(代號, 名稱, 資料):
         pdf.rect(x, y, 1.2, h, style="F")
         pdf.set_xy(x + 3.5, y + 2.5)
         字(8, 色=次字)
-        pdf.cell(w - 5, 4, 標題)
-        pdf.set_xy(x + 3.5, y + 7.5)
+        pdf.cell(w - 5, 4 * 字倍, 標題)
+        pdf.set_xy(x + 3.5, y + 3 + 4 * 字倍)
         字(16 if len(str(值)) <= 9 else 12, True, 色)
-        pdf.cell(w - 5, 8, str(值))
+        pdf.cell(w - 5, 8 * 字倍, str(值))
         if 小字:
-            pdf.set_xy(x + 3.5, y + h - 6.5)
+            pdf.set_xy(x + 3.5, y + h - 2 - 4 * 字倍)
             字(7.5, 色=次字)
-            pdf.cell(w - 5, 4, _乾淨(小字))
+            pdf.cell(w - 5, 4 * 字倍, _乾淨(小字))
 
     # ===== 第 1 頁：總覽 =====
     pdf.add_page()
     字(9, 色=青)
     即時 = f"（現價：{資料['即時']}）" if 資料.get("即時") else ""
-    pdf.cell(0, 5, f"STOCK REPORT  //  {資料.get('日期', '')}{即時}  //  {資料.get('產業') or ''}  ·  {資料.get('市場', '')}")
-    pdf.set_xy(左, 頂 + 6)
-    字(34, True)
-    pdf.cell(pdf.get_string_width(代號) + 4, 16, 代號)
-    字(22, True, 次字)
-    pdf.cell(pdf.get_string_width(名稱) + 8, 16, 名稱)
-    色 = _漲跌色(資料.get("漲跌"))
-    字(30, True, 色)
-    價 = f"{資料.get('收盤', 0):,.2f}"
-    pdf.cell(pdf.get_string_width(價) + 4, 16, 價)
-    字(14, True, 色)
-    pdf.cell(0, 16, f"{資料.get('漲跌', 0):+,.2f}（{資料.get('漲跌幅', 0):+.2f}%）")
+    pdf.multi_cell(寬, 5 * 字倍, f"STOCK REPORT  //  {資料.get('日期', '')}{即時}  //  {資料.get('產業') or ''}  ·  {資料.get('市場', '')}",
+                   align="L", new_x="LMARGIN", new_y="NEXT")
     if 資料.get("報告時間"):
-        pdf.set_xy(左, 頂 + 6)
         字(8, 色=淡字)
-        pdf.cell(寬, 4, f"AI 分析時間 {資料['報告時間']}", align="R")
-    y = 頂 + 26
+        pdf.cell(寬, 4 * 字倍, f"AI 分析時間 {資料['報告時間']}", new_x="LMARGIN", new_y="NEXT")
+    y = pdf.get_y() + 1
+    pdf.set_xy(左, y)
+    字(30, True)
+    pdf.cell(pdf.get_string_width(代號) + 4, 16 * 字倍, 代號)
+    字(20, True, 次字)
+    pdf.cell(pdf.get_string_width(名稱) + 6, 16 * 字倍, 名稱)
+    色 = _漲跌色(資料.get("漲跌"))
+    字(26, True, 色)
+    價 = f"{資料.get('收盤', 0):,.2f}"
+    pdf.cell(pdf.get_string_width(價) + 4, 16 * 字倍, 價)
+    字(13, True, 色)
+    pdf.cell(0, 16 * 字倍, f"{資料.get('漲跌', 0):+,.2f}（{資料.get('漲跌幅', 0):+.2f}%）")
+    y += 16 * 字倍 + 4
 
-    # 重點數據卡片：一排 6 張、兩排
+    # 重點數據卡片：一排 3 張（直式頁面），最多 4 排
     卡們 = 資料.get("卡片", [])[:12]
-    每排 = 6
+    每排 = 3
     卡寬 = (寬 - (每排 - 1) * 3) / 每排
+    卡高 = 26
     for i, (標題, 值, 小字, 方向) in enumerate(卡們):
-        卡片(左 + (i % 每排) * (卡寬 + 3), y + (i // 每排) * 25, 卡寬, 22, 標題, 值, 小字,
+        卡片(左 + (i % 每排) * (卡寬 + 3), y + (i // 每排) * (卡高 + 3), 卡寬, 卡高, 標題, 值, 小字,
              _漲跌色(方向) if 方向 is not None else 字色)
-    y += ((len(卡們) - 1) // 每排 + 1) * 25 + 2
+    y += ((len(卡們) - 1) // 每排 + 1) * (卡高 + 3) + 2
 
     # AI 結論
     結論 = 建議.get("一句話")
     if 結論 or 建議.get("看法"):
         看 = 建議.get("看法") or "—"
         看色 = {"偏多": 紅, "偏空": 綠}.get(看, 黃)
+        字(13, True)
+        結高 = pdf.multi_cell(寬 - 12, 7 * 字倍, _乾淨(結論 or ""), align="L", dry_run=True, output="HEIGHT") if 結論 else 0
+        框高 = 6 + 13 * 字倍 + (結高 + 2 if 結論 else 0)
+        if y + 框高 > pdf.h - 16:
+            pdf.add_page()
+            y = pdf.get_y()
         pdf.set_fill_color(*_rgb("#1A1A1A"))
-        pdf.rect(左, y, 寬, 18, style="F")
+        pdf.rect(左, y, 寬, 框高, style="F")
         pdf.set_fill_color(*_rgb(看色))
-        pdf.rect(左, y, 2, 18, style="F")
-        pdf.set_xy(左 + 6, y + 2.5)
+        pdf.rect(左, y, 2, 框高, style="F")
+        pdf.set_xy(左 + 6, y + 3)
         字(8, 色=次字)
-        pdf.cell(30, 4, "AI 看法")
-        pdf.set_xy(左 + 6, y + 7)
+        pdf.cell(25 * 字倍, 4 * 字倍, "AI 看法")
         字(18, True, 看色)
-        pdf.cell(30, 9, 看)
-        pdf.set_xy(左 + 38, y + 2.5)
-        字(8, 色=次字)
-        pdf.cell(0, 4, "一句話結論")
-        pdf.set_xy(左 + 38, y + 7)
-        字(15 if len(結論 or "") <= 40 else 12, True)
-        pdf.multi_cell(寬 - 44, 7.5, _乾淨(結論 or ""), align="L")
-        y += 22
+        pdf.cell(0, 4 * 字倍, "")
+        pdf.set_xy(左 + 6, y + 3 + 4 * 字倍)
+        pdf.cell(0, 9 * 字倍, 看)
+        if 結論:
+            pdf.set_xy(左 + 6, y + 4 + 13 * 字倍)
+            字(13, True)
+            pdf.multi_cell(寬 - 12, 7 * 字倍, _乾淨(結論), align="L")
+        y += 框高 + 4
 
     # K 線＋解讀
-    圖寬 = 寬 * 0.62
-    右x = 左 + 圖寬 + 6
-    右寬 = 寬 - 圖寬 - 6
-    pdf.image(K線圖(資料["歷史"], 寬=9.2, 高=max(3.2, (pdf.h - y - 16) / 25.4 * 9.2 / (圖寬 / 25.4))), x=左, y=y, w=圖寬)
-    標題, 重點 = K線解讀(資料["歷史"])
-    pdf.set_xy(右x, y)
+    # 直式：圖表佔滿整個寬度，解讀文字放在圖下面
+    圖寬 = 寬
+    K高 = 寬 * 0.62
+    if y + K高 + 10 > pdf.h - 14:
+        pdf.add_page()
+        y = pdf.get_y()
+    pdf.set_xy(左, y)
     字(8, 色=青)
-    pdf.cell(右寬, 4, "PRICE ACTION  //  近半年 K 線", new_x="LEFT", new_y="NEXT")
-    文段(右x, pdf.get_y() + 1, 右寬, 標題, 重點)
+    pdf.cell(寬, 4 * 字倍, "PRICE ACTION  //  近半年 K 線", new_x="LMARGIN", new_y="NEXT")
+    y = pdf.get_y() + 1
+    pdf.image(K線圖(資料["歷史"], 寬=7.4, 高=7.4 * 0.62), x=左, y=y, w=圖寬)
+    pdf.set_y(y + K高 + 3)
+    標題, 重點 = K線解讀(資料["歷史"])
+    if pdf.get_y() > pdf.h - 50:
+        pdf.add_page()
+    文段(左, pdf.get_y(), 寬, 標題, 重點)
 
     # ===== 第 2 頁：營收、毛利率 =====
     def 左圖右文(英文, 中文, 圖檔, 解讀, 高):
+        """直式頁面：段標、整寬圖表、圖下面接解讀文字（名稱沿用舊版）。高＝圖表大約高度（mm）。"""
         if 圖檔 is None or 解讀 is None:
             return
-        if pdf.get_y() + 高 > pdf.h - 14:
+        from PIL import Image
+        像 = Image.open(圖檔)
+        圖高 = 圖寬 * 像.height / 像.width
+        圖檔.seek(0)
+        if pdf.get_y() + 圖高 + 25 * 字倍 > pdf.h - 14:
             pdf.add_page()
-        y0 = pdf.get_y()
         段標(英文, 中文)
         y1 = pdf.get_y()
         pdf.image(圖檔, x=左, y=y1, w=圖寬)
-        文段(右x, y1, 右寬, *解讀)
-        pdf.set_y(max(y1 + 高 - (y1 - y0), pdf.get_y()) + 4)
+        pdf.set_y(y1 + 圖高 + 3)
+        if pdf.get_y() > pdf.h - 45:
+            pdf.add_page()
+        文段(左, pdf.get_y(), 寬, *解讀)
+        pdf.set_y(pdf.get_y() + 6)
 
     # ===== 公司介紹：主要業務、營收比重、規模、AI 整理的產品客戶與產業地位 =====
     公司 = 資料.get("公司") or {}
@@ -583,9 +606,9 @@ def 產生PDF(代號, 名稱, 資料):
             if pdf.get_y() > pdf.h - 30:
                 pdf.add_page()
             字(11.5, True, 青)
-            pdf.cell(0, 7, 標, new_x="LMARGIN", new_y="NEXT")
+            pdf.multi_cell(寬, 7 * 字倍, 標, align="L", new_x="LMARGIN", new_y="NEXT")
             字(10.5, 色="#D5D5D5")
-            pdf.multi_cell(寬, 6, _乾淨(內容), markdown=True, align="L", new_x="LMARGIN", new_y="NEXT")
+            pdf.multi_cell(寬, 6 * 字倍, _乾淨(內容), markdown=True, align="L", new_x="LMARGIN", new_y="NEXT")
             pdf.ln(2)
         小段("規模與地位", 公司.get("規模"))
         小段("主要經營業務（公開資訊觀測站）", 公司.get("業務"))
@@ -602,21 +625,22 @@ def 產生PDF(代號, 名稱, 資料):
         段標("News", "近期新聞整理（近 30 天，標題情緒為關鍵字粗判）")
         for n in 新聞們:
             字(10, True, {"利多": 紅, "利空": 綠}.get(n.get("情緒"), 青))
-            pdf.cell(22, 6, _乾淨(f"{n.get('日期', '')} {n.get('情緒', '')}"))
+            pdf.cell(22 * 字倍, 6 * 字倍, _乾淨(f"{n.get('日期', '')} {n.get('情緒', '')}"))
             字(10, 色="#D5D5D5")
-            pdf.multi_cell(寬 - 22, 6, _乾淨(f"{n.get('標題', '')}（{n.get('來源', '')}）"), align="L", new_x="LMARGIN", new_y="NEXT")
+            pdf.multi_cell(寬 - 22 * 字倍, 6 * 字倍, _乾淨(f"{n.get('標題', '')}（{n.get('來源', '')}）"), align="L", new_x="LMARGIN", new_y="NEXT")
+            pdf.ln(1)
         pdf.ln(3)
 
     pdf.add_page()
     圖高 = 72
-    左圖右文("Revenue", "月營收：生意做得怎麼樣", 營收圖(資料.get("營收"), 高=3.3), 營收解讀(資料.get("營收")), 圖高 + 14)
-    左圖右文("Margin", "毛利率：賺錢的效率", 毛利圖(資料.get("損益"), 高=3.3), 毛利解讀(資料.get("損益")), 圖高 + 14)
-    左圖右文("Backlog", "合約負債：預收款與營收能見度", 合約負債圖(資料.get("合約負債"), 高=3.3),
+    左圖右文("Revenue", "月營收：生意做得怎麼樣", 營收圖(資料.get("營收"), 高=2.8), 營收解讀(資料.get("營收")), 圖高 + 14)
+    左圖右文("Margin", "毛利率：賺錢的效率", 毛利圖(資料.get("損益"), 高=2.8), 毛利解讀(資料.get("損益")), 圖高 + 14)
+    左圖右文("Backlog", "合約負債：預收款與營收能見度", 合約負債圖(資料.get("合約負債"), 高=2.8),
              合約負債解讀(資料.get("合約負債")), 圖高 + 14)
-    左圖右文("Institutional", "法人動向：大戶在買還是賣", 法人圖(資料["歷史"], 高=3.3), 法人解讀(資料["歷史"]), 圖高 + 14)
+    左圖右文("Institutional", "法人動向：大戶在買還是賣", 法人圖(資料["歷史"], 高=2.8), 法人解讀(資料["歷史"]), 圖高 + 14)
     變化 = 資料.get("變化")
     if 變化:
-        左圖右文("Flow", "股價・週轉率・大戶・法人 變化（近半年）", 變化圖(變化, 高=4.8),
+        左圖右文("Flow", "股價・週轉率・大戶・法人 變化（近半年）", 變化圖(變化, 高=4.4),
                  ("籌碼與股價一起看", 變化["解讀"]), 105)
 
     # 目標價
@@ -627,19 +651,19 @@ def 產生PDF(代號, 名稱, 資料):
         return f"{v:,.2f}" if abs(v) < 100 else f"{v:,.0f}"
 
     if 建議.get("目標價合理") is not None:
-        if pdf.get_y() + 45 > pdf.h - 14:
+        if pdf.get_y() + 80 > pdf.h - 14:
             pdf.add_page()
         段標("Valuation", "AI 目標價與估值")
         y0 = pdf.get_y()
         項 = [("保守", 建議.get("目標價保守"), 綠), ("合理", 建議.get("目標價合理"), 青), ("樂觀", 建議.get("目標價樂觀"), 紅),
              ("券商目標價", 建議.get("券商目標價"), 黃)]
-        w = (寬 - 9) / 4
+        w = (寬 - 3) / 2  # 直式頁面：兩張一排
         for i, (名, 值, 色) in enumerate(項):
             空間 = (值 / 資料["收盤"] - 1) * 100 if isinstance(值, (int, float)) and 資料.get("收盤") else np.nan
-            卡片(左 + i * (w + 3), y0, w, 24, f"目標價 · {名}" if i < 3 else 名,
+            卡片(左 + (i % 2) * (w + 3), y0 + (i // 2) * 29, w, 26, f"目標價 · {名}" if i < 3 else 名,
                  價(值) if isinstance(值, (int, float)) else "—",
                  f"距現價 {空間:+.1f}%" if pd.notna(空間) else "", 色)
-        pdf.set_y(y0 + 28)
+        pdf.set_y(y0 + 2 * 29 + 2)
 
     # 券商目標價時間軸
     圖檔 = 目標價時間軸圖(資料.get("歷史"), 資料.get("券商目標"))
@@ -655,11 +679,11 @@ def 產生PDF(代號, 名稱, 資料):
             pdf.add_page()
         段標("Consensus", "市場預估 EPS 共識")
         字(10.5, 色="#D5D5D5")
-        pdf.multi_cell(寬, 6, _乾淨(文預), align="L", new_x="LMARGIN", new_y="NEXT")
+        pdf.multi_cell(寬, 6 * 字倍, _乾淨(文預), align="L", new_x="LMARGIN", new_y="NEXT")
         修 = [(n, 預.get(k)) for n, k in (("今年預估較前期", "預估修正%"), ("明年預估較前期", "明年預估修正%"))]
         修 = [f"{n} {v:+.1f}%" for n, v in 修 if isinstance(v, (int, float)) and pd.notna(v)]
         if 修:
-            pdf.multi_cell(寬, 6, "・近期預估修正：" + "、".join(修), align="L", new_x="LMARGIN", new_y="NEXT")
+            pdf.multi_cell(寬, 6 * 字倍, "・近期預估修正：" + "、".join(修), align="L", new_x="LMARGIN", new_y="NEXT")
         pdf.ln(3)
 
     # AI 重點：把 AI 給的 json 欄位排成兩欄表格（null 顯示「無」），不再印原始 json
@@ -687,7 +711,7 @@ def 產生PDF(代號, 名稱, 資料):
         字(10.5, 色="#D5D5D5")
         pdf.set_draw_color(*_rgb(線色))
         pdf.set_fill_color(*_rgb(卡色))
-        with pdf.table(col_widths=(32, 寬 - 32), width=寬, cell_fill_color=_rgb(卡色), cell_fill_mode="ALL", align="LEFT", text_align="LEFT", line_height=6,
+        with pdf.table(col_widths=(32 * 字倍, 寬 - 32 * 字倍), width=寬, cell_fill_color=_rgb(卡色), cell_fill_mode="ALL", align="LEFT", text_align="LEFT", line_height=6 * 字倍,
                        first_row_as_headings=False) as 表:
             for k, v in 欄們:
                 列 = 表.row()
@@ -708,13 +732,13 @@ def 產生PDF(代號, 名稱, 資料):
             pass
         提醒 = engine.檢查AI目標價(建議, 資料.get("收盤"), 本益比, 三年高, 共識=預 or None)
         if 提醒:
-            if pdf.get_y() + 10 + 7 * len(提醒) > pdf.h - 14:
+            if pdf.get_y() + (10 + 7 * len(提醒)) * 字倍 > pdf.h - 14:
                 pdf.add_page()
             字(11, True, 黃)
-            pdf.cell(0, 7, "數字檢查（網站自動比對，AI 的數字未修改）", new_x="LMARGIN", new_y="NEXT")
+            pdf.multi_cell(寬, 7 * 字倍, "數字檢查（網站自動比對，AI 的數字未修改）", align="L", new_x="LMARGIN", new_y="NEXT")
             字(10.5, 色="#D5D5D5")
             for 句 in 提醒:
-                pdf.multi_cell(寬, 6, "・" + 句, align="L", new_x="LMARGIN", new_y="NEXT")
+                pdf.multi_cell(寬, 6 * 字倍, "・" + 句, align="L", new_x="LMARGIN", new_y="NEXT")
             pdf.ln(3)
 
     # 多空清單
@@ -722,25 +746,20 @@ def 產生PDF(代號, 名稱, 資料):
     多 = AI段落(資料.get("報告"), "利多") or 判.get("利多", [])
     空 = AI段落(資料.get("報告"), "利空") or 判.get("利空", [])
     if 多 or 空:
-        if pdf.get_y() + 70 > pdf.h - 14:
+        if pdf.get_y() + 50 > pdf.h - 14:
             pdf.add_page()
         段標("Bull vs Bear", f"多空清單" + (f"　·　數據綜合分數 {判['分數']:+d}（{判['看法']}）" if 判 else ""))
-        y0 = pdf.get_y()
-        半 = (寬 - 6) / 2
-        for 欄, (名, 條們, 色) in enumerate((("利多", 多, 紅), ("利空與風險", 空, 綠))):
-            x = 左 + 欄 * (半 + 6)
-            pdf.set_fill_color(*_rgb(卡色))
-            pdf.set_xy(x, y0)
+        for 欄, (名, 條們, 色) in enumerate((("利多", 多, 紅), ("利空與風險", 空, 綠))):  # 直式：利多在上、利空在下
+            if pdf.get_y() > pdf.h - 40:
+                pdf.add_page()
             字(13, True, 色)
-            pdf.cell(半, 8, ("▲ " if 欄 == 0 else "▼ ") + 名, new_x="LEFT", new_y="NEXT")
+            pdf.cell(寬, 8 * 字倍, ("▲ " if 欄 == 0 else "▼ ") + 名, new_x="LMARGIN", new_y="NEXT")
             for 條 in 條們 or ["（無）"]:
-                pdf.set_x(x)
                 字(10.5, 色="#D5D5D5")
-                pdf.multi_cell(半, 6, "・" + _乾淨(條), markdown=True, new_x="LEFT", new_y="NEXT", align="L")
+                pdf.multi_cell(寬, 6 * 字倍, "・" + _乾淨(條), markdown=True, new_x="LMARGIN", new_y="NEXT", align="L")
                 pdf.ln(1)
-            if 欄 == 0:
-                y多 = pdf.get_y()
-        pdf.set_y(max(y多, pdf.get_y()) + 4)
+            pdf.ln(3)
+        pdf.ln(2)
 
     # ===== 完整 AI 報告 =====
     報告 = 資料.get("報告")
@@ -758,7 +777,7 @@ def 產生PDF(代號, 名稱, 資料):
             字(9.5, 色="#D5D5D5")
             pdf.set_draw_color(*_rgb(線色))
             pdf.set_fill_color(*_rgb(底色))
-            with pdf.table(text_align="LEFT", line_height=5.5, first_row_as_headings=True,
+            with pdf.table(text_align="LEFT", line_height=5.5 * 字倍, first_row_as_headings=True,
                            headings_style=FontFace(emphasis="BOLD", color=_rgb(青), fill_color=_rgb("#1A1A1A"))) as 表:
                 for 格們 in 表列:
                     列 = 表.row()
@@ -783,7 +802,7 @@ def 產生PDF(代號, 名稱, 資料):
             if 行.startswith("#"):
                 pdf.ln(2)
                 字(14, True, 青)
-                pdf.multi_cell(寬, 8, _乾淨(行.lstrip("# ")).replace("**", ""), new_x="LMARGIN", new_y="NEXT", align="L")
+                pdf.multi_cell(寬, 8 * 字倍, _乾淨(行.lstrip("# ")).replace("**", ""), new_x="LMARGIN", new_y="NEXT", align="L")
                 pdf.ln(1)
                 continue
             縮 = min(len(行) - len(行.lstrip()), 6) * 1.5
@@ -792,31 +811,42 @@ def 產生PDF(代號, 名稱, 資料):
                 內容 = "・" + re.sub(r"^[-*•]\s+", "", 內容)
             字(11, 色="#D5D5D5")
             pdf.set_x(左 + 縮)
-            pdf.multi_cell(寬 - 縮, 6.5, _乾淨(內容), markdown=True, new_x="LMARGIN", new_y="NEXT", align="L")
+            pdf.multi_cell(寬 - 縮, 6.5 * 字倍, _乾淨(內容), markdown=True, new_x="LMARGIN", new_y="NEXT", align="L")
 
     # ===== 數據總表 =====
     基本 = 資料.get("基本資料") or []
     if 基本:
         pdf.add_page()
         段標("Data Sheet", "數據總表")
-        欄寬 = (寬 - 6 * 3) / 4
-        y0 = pdf.get_y()
-        for 欄, (段, 項目們) in enumerate(基本[:4]):
-            x = 左 + 欄 * (欄寬 + 6)
-            pdf.set_xy(x, y0)
-            字(12, True, 青)
-            pdf.cell(欄寬, 8, 段, new_x="LEFT", new_y="NEXT")
-            for 名, 值 in 項目們:
-                pdf.set_x(x)
-                字(9, 色=次字)
-                pdf.cell(欄寬 * 0.48, 7, _乾淨(名))
-                字(10, True)
-                pdf.cell(欄寬 * 0.52, 7, _乾淨(值), align="R", new_x="LEFT", new_y="NEXT")
-                pdf.set_draw_color(*_rgb(線色))
-                pdf.line(x, pdf.get_y(), x + 欄寬, pdf.get_y())
-        pdf.set_y(pdf.h - 30)
+        欄寬 = (寬 - 8) / 2  # 直式：兩欄，四段分兩排
+        for 排 in range(0, min(len(基本), 4), 2):
+            y0 = pdf.get_y()
+            段們 = 基本[排:排 + 2]
+            需要 = (8 + 7 * max(len(項) for _, 項 in 段們)) * 字倍
+            if y0 + 需要 > pdf.h - 16:
+                pdf.add_page()
+                y0 = pdf.get_y()
+            底 = y0
+            for 欄, (段, 項目們) in enumerate(段們):
+                x = 左 + 欄 * (欄寬 + 8)
+                pdf.set_xy(x, y0)
+                字(12, True, 青)
+                pdf.cell(欄寬, 8 * 字倍, 段, new_x="LEFT", new_y="NEXT")
+                for 名, 值 in 項目們:
+                    pdf.set_x(x)
+                    字(9, 色=次字)
+                    pdf.cell(欄寬 * 0.5, 7 * 字倍, _乾淨(名))
+                    字(10, True)
+                    pdf.cell(欄寬 * 0.5, 7 * 字倍, _乾淨(值), align="R", new_x="LEFT", new_y="NEXT")
+                    pdf.set_draw_color(*_rgb(線色))
+                    pdf.line(x, pdf.get_y(), x + 欄寬, pdf.get_y())
+                底 = max(底, pdf.get_y())
+            pdf.set_y(底 + 6)
+        if pdf.get_y() > pdf.h - 40:
+            pdf.add_page()
+        pdf.set_y(max(pdf.get_y(), pdf.h - 40))
         字(8, 色=淡字)
-        pdf.multi_cell(寬, 4.5, "資料來源：臺灣證券交易所、證券櫃檯買賣中心、公開資訊觀測站、Google 新聞、Yahoo 奇摩股市。"
+        pdf.multi_cell(寬, 4.5 * 字倍, "資料來源：臺灣證券交易所、證券櫃檯買賣中心、公開資訊觀測站、Google 新聞、Yahoo 奇摩股市。"
                                 "AI 分析由大型語言模型彙整，可能有錯誤或過時資訊；解讀文字依數據自動產生。本報告僅供個人研究參考，不構成任何投資建議。",
                        align="L")
     return bytes(pdf.output())
