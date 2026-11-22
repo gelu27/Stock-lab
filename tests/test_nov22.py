@@ -78,6 +78,12 @@ def main():
             update_data.資料夾, update_data.上市法人 = 舊資料夾, 舊法人
         補 = pd.read_csv(根 / "chips" / "2026-11" / "20261117.csv.gz", dtype={"code": str}).set_index("code")
         assert 補.at["1101", "foreign"] == 100 and 補.at["6488", "foreign"] == 5 and 補.at["1102", "margin"] == 2, 補
+    # 斷頭年線摘要：年線下、維持率 140、20 日跌 8% 以上 → 都要有
+    c6 = list(np.linspace(100, 200, 300)) + list(np.linspace(190, 150, 25))
+    K6 = pd.DataFrame({"date": pd.bdate_range("2025-01-01", periods=len(c6)), "close": c6})
+    摘 = engine.斷頭年線摘要(K6, 140)
+    assert any("年線下" in x for x in 摘) and any("130～135%" in x for x in 摘) and any("外資連買" in x for x in 摘), 摘
+    assert engine.斷頭年線摘要(K6.head(300), 170) == []
     print("test_nov22 OK")
 
 

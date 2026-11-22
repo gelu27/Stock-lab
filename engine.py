@@ -4213,6 +4213,10 @@ def 大盤摘要(指標, 加權, 國際=None, 期貨=None, 設定=None):
         v = 維.iloc[-1]
         行.append(f"上市融資維持率約 {v:.0f}%（低於 130% 才會追繳；"
                  + ("目前偏緊，留意斷頭賣壓）" if v < 150 else "目前在安全範圍）"))
+    try:
+        行 += 斷頭年線摘要(讀取指數K線("TAIEX"), float(維.iloc[-1]) if 維 is not None and len(維) else None)
+    except Exception:
+        pass
     期 = 讀取期貨未平倉()
     if 期 is not None and len(期) > 5:
         行.append(f"外資台指期淨部位 {期['foreign_oi'].iloc[-1]:+,.0f} 口（5 日變化 {期['foreign_oi'].iloc[-1] - 期['foreign_oi'].iloc[-6]:+,.0f}）")
@@ -11549,3 +11553,37 @@ def 外資連買籌碼表(指標, 集保=None, 連買下限=5, 天數=20, 檔數
                 列["大戶"] = f"大戶增加 {增人:.0f} 人" if 增人 > 0 and 增比 > 0 else "不同步"
         列們.append(列)
     return pd.DataFrame(列們)
+
+
+def 斷頭年線摘要(K, 維持率=None, 今天=None):
+    """給 LINE 收盤摘要與 AI 大盤解讀用的幾句白話（2026-11-22 盤勢文查核的結論）：
+    年線下第幾天＋長期回檔滿足點、維持率距歷史底部、未來兩個交易日的最快處分日、崩跌期外資連買的提醒。條件不成立的不寫。"""
+    if K is None or len(K) < 260:
+        return []
+    行們 = []
+    s = K.sort_values("date").set_index("date")["close"].astype(float)
+    ma = s.rolling(240).mean()
+    if pd.notna(ma.iloc[-1]) and s.iloc[-1] < ma.iloc[-1]:
+        下 = 0
+        for c, m in zip(s.iloc[::-1], ma.iloc[::-1]):
+            if pd.isna(m) or c >= m:
+                break
+            下 += 1
+        破日 = s.index[-下]
+        點們 = 年線回檔滿足點(ma.loc[破日])
+        行們.append(f"加權在年線下第 {下} 個交易日，距年線 {(s.iloc[-1] / ma.iloc[-1] - 1) * 100:+.1f}%；"
+                  + "、".join(f"{名}滿足點約 {點:,}" for 名, _, _, 點 in 點們[:2])
+                  + "（2015 年後 5 次真跌破有 4 次是中回檔）")
+    if 維持率 and 維持率 < 150:
+        行們.append(f"上市融資維持率約 {維持率:.0f}%，過去三次國安基金底部在 130～135%"
+                  + (f"，還差約 {維持率 - 135:.0f}～{維持率 - 130:.0f} 個百分點" if 維持率 > 135 else "，已進入歷史底部區"))
+    曆 = 斷頭處分日曆(K.sort_values("date"), 最近天數=5)
+    if len(曆):
+        今 = pd.Timestamp(今天 or s.index[-1]).normalize()
+        近 = 曆[(曆["狀態"] == "還沒到") & (曆["最快處分日"] <= 加交易日(今, 2))]
+        for _, r in 近.iterrows():
+            行們.append(f"{r['大跌日']:%m/%d} 大跌 {r['加權漲跌%']:+.1f}% 的追繳最快 {r['最快處分日']:%m/%d} 處分（第二波斷頭）；"
+                      "2000 年起大跌後第 3 天平均只小跌 0.2%，影響有限")
+    if len(s) > 21 and s.iloc[-1] / s.iloc[-21] - 1 <= -0.08:
+        行們.append("崩跌期間外資連買的股票，之後 20 日平均輸大盤約 1～3 個百分點（多是抗跌股，反彈較慢），別只看外資連買撿股")
+    return 行們
