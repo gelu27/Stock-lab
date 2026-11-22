@@ -1,0 +1,61 @@
+# 2026-11-22 盤勢文查核：斷頭處分日曆、處分日回測、跌破年線統計、融資金額減幅、歷史底部維持率：python tests/test_nov22.py
+import sys
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import engine  # noqa: E402
+
+
+def main():
+    # 加交易日：週五 +1 → 週一；遇假日再往後
+    assert engine.加交易日("2026-11-20", 1) == pd.Timestamp("2026-11-23")
+    assert engine.加交易日("2026-11-25", 1, 休市=["2026-11-26"]) == pd.Timestamp("2026-11-27")
+    # 斷頭處分日曆：週一大跌 → 週四處分；最後一天（週五）大跌 → 下週三
+    日 = pd.bdate_range("2026-11-09", "2026-11-20")
+    收 = [100, 101, 102, 103, 104, 97, 97.5, 98, 94, 88]
+    K = pd.DataFrame({"date": 日, "close": 收})
+    曆 = engine.斷頭處分日曆(K)
+    assert list(曆["大跌日"]) == [pd.Timestamp("2026-11-16"), pd.Timestamp("2026-11-19"), pd.Timestamp("2026-11-20")], 曆
+    assert 曆["最快處分日"].iloc[0] == pd.Timestamp("2026-11-19") and 曆["狀態"].iloc[0] == "已過"
+    assert 曆["最快處分日"].iloc[1] == pd.Timestamp("2026-11-24") and 曆["最快處分日"].iloc[2] == pd.Timestamp("2026-11-25")
+    assert 曆["追繳通知"].iloc[2] == pd.Timestamp("2026-11-23")
+    # 處分日回測：T+3 標成處分日
+    rng = np.random.default_rng(1)
+    c = 100 * np.cumprod(1 + rng.normal(0, 0.02, 600))
+    K2 = pd.DataFrame({"date": pd.bdate_range("2020-01-01", periods=600), "close": c})
+    回, 次, 均, 漲 = engine.處分日回測(K2, 跌幅門檻=-3)
+    assert 次 > 0 and "T+3（處分日）" in list(回["第幾天"]), 回
+    # 跌破年線統計：一路漲 300 天 → 跌到年線下 30 天 → 再漲回
+    上 = list(np.linspace(100, 200, 300))
+    下 = list(np.linspace(150, 140, 30))
+    回升 = list(np.linspace(150, 230, 60))
+    K3 = pd.DataFrame({"date": pd.bdate_range("2020-01-01", periods=390), "close": 上 + 下 + 回升})
+    事, 今 = engine.跌破年線統計(K3, 最少站回天數=0)
+    assert len(事) == 1 and 事["站回日"].notna().iloc[0] and 事["站回前最多再跌%"].iloc[0] < 0, 事
+    assert 今["距年線%"] > 0
+    # 只留真跌破：站回少於 100 天的不列
+    事2, _ = engine.跌破年線統計(K3, 最少站回天數=100)
+    assert len(事2) == 0
+    # 融資金額減幅：金額 100 → 60（−40%），指數高 1000 → 收 800（−20%）
+    金 = pd.Series([90, 100, 80, 70, 60, 60], index=pd.bdate_range("2026-01-05", periods=6), dtype=float) * 1e5
+    K4 = pd.DataFrame({"date": 金.index, "high": [950, 1000, 900, 850, 820, 810], "close": [940, 990, 880, 840, 810, 800]})
+    減 = engine.融資金額減幅(金, K4)
+    assert 減["融資減幅%"] == -40.0 and 減["指數跌幅%"] == -20.0 and 減["比例"] == 2.0, 減
+    # 維持率警戒點位加了 135%
+    assert [x[0] for x in engine.維持率警戒點位(140, 10000)] == [135, 130]
+    底 = engine.讀取歷史底部維持率()
+    assert len(底) == 3 and 底["維持率%"].between(129, 136).all()
+    # 槓桿追繳機率：一路跌 30% 的資料 → 融資一定碰到追繳線、現股沒有追繳欄
+    K5 = pd.DataFrame({"date": pd.bdate_range("2020-01-01", periods=600), "close": np.linspace(100, 60, 600)})
+    槓 = engine.槓桿追繳機率(K5, 窗=250)
+    assert pd.isna(槓["一年內碰到追繳線%"].iloc[0]) and 槓["一年內碰到追繳線%"].iloc[2] > 槓["一年內碰到追繳線%"].iloc[1], 槓
+    回本 = engine.高點回本時間(K3, 高點們=[("2021-01", "2021-03")])
+    assert len(回本) == 1 and 回本["期間最大跌%"].iloc[0] < 0
+    print("test_nov22 OK")
+
+
+if __name__ == "__main__":
+    main()
