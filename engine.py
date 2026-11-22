@@ -11408,16 +11408,33 @@ def 跌破年線統計(K, 年線天數=240, 前置天數=10, 站回天數=10, �
                        "距一年高點%": round((v[i] / v[max(0, i - 250):i].max() - 1) * 100, 1),
                        "站回日": idx[回] if 回 is not None else None, "幾個交易日站回": (回 - i) if 回 is not None else None,
                        "站回前最多再跌%": round((低 / v[i] - 1) * 100, 1),
+                       "自年線最多再跌%": round((低 / float(ma.iloc[i]) - 1) * 100, 1),
                        **{f"{n}日後%": (round((v[i + n] / v[i] - 1) * 100, 1) if i + n < len(s) else None) for n in 天數}})
             if 最少站回天數 and 回 is not None and 回 - i < 最少站回天數:
                 列們.pop()
             i = 尾 + 1
         else:
             i += 1
-    今 = {"日期": idx[-1], "收盤": float(v[-1]), "年線": float(ma.iloc[-1]) if pd.notna(ma.iloc[-1]) else None}
+    今 = {"日期": idx[-1], "收盤": float(v[-1]), "年線": float(ma.iloc[-1]) if pd.notna(ma.iloc[-1]) else None,
+         "年線每日變化": round(float(ma.iloc[-1] - ma.iloc[-2]), 2) if len(ma) > 1 and pd.notna(ma.iloc[-2]) else None}
     if 今["年線"]:
         今["距年線%"] = round((今["收盤"] / 今["年線"] - 1) * 100, 1)
-    return pd.DataFrame(列們), 今
+    表 = pd.DataFrame(列們)
+    if len(表):
+        深 = -表["自年線最多再跌%"]
+        表.insert(0, "回檔級別", np.where(深 >= 40, "大", np.where(深 >= 15, "中", "小")))
+    return 表, 今
+
+
+# 長期統計（1962 年起，1990 年度以前年線用 288 日、之後 240 日）：自年線再下跌的平均幅度，來源為投顧主管盤後圖表（2026-11-20 資料）
+年線回檔分級 = [("小回檔", 14, 9.63), ("中回檔", 13, 26.64), ("大回檔", 5, 58.55)]
+
+
+def 年線回檔滿足點(年線):
+    """以 年線回檔分級 的平均再跌幅度，換算這次的滿足點位。回傳 [(級別, 次數, 平均%, 點位)]。"""
+    if not 年線:
+        return []
+    return [(名, 次, 幅, round(float(年線) * (1 - 幅 / 100))) for 名, 次, 幅 in 年線回檔分級]
 
 
 def 融資金額減幅(金額, K, 窗=120):

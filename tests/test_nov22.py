@@ -35,7 +35,9 @@ def main():
     K3 = pd.DataFrame({"date": pd.bdate_range("2020-01-01", periods=390), "close": 上 + 下 + 回升})
     事, 今 = engine.跌破年線統計(K3, 最少站回天數=0)
     assert len(事) == 1 and 事["站回日"].notna().iloc[0] and 事["站回前最多再跌%"].iloc[0] < 0, 事
-    assert 今["距年線%"] > 0
+    assert 今["距年線%"] > 0 and "回檔級別" in 事.columns and 事["自年線最多再跌%"].iloc[0] < 0
+    點 = engine.年線回檔滿足點(39368.24)
+    assert 點[0][3] == 35577 and 點[2][0] == "大回檔", 點
     # 只留真跌破：站回少於 100 天的不列
     事2, _ = engine.跌破年線統計(K3, 最少站回天數=100)
     assert len(事2) == 0
