@@ -2177,6 +2177,12 @@ with 分頁[4], 區塊防護("AI 分析"):
             if 合約摘要:
                 摘要 += "\n" + 合約摘要
             摘要 += f"\n- 建議評價方法：{engine.評價方法建議(r.get('產業'), r.get('近三季EPS'))}"
+            try:
+                背 = engine.斷頭年線摘要(engine.讀取指數K線("TAIEX"))
+                if 背:
+                    摘要 += "\n- 大盤背景（崩跌期請把融資斷頭、跌破年線納入風險與停損考量）：" + "；".join(背)
+            except Exception:
+                pass
             if not 代號.startswith("0"):
                 try:
                     公司 = 公司文字(公司資料(代號))

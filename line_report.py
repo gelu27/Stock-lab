@@ -218,6 +218,12 @@ def 數據摘要(代號, r, 全, 公司=None, 新聞=None):
         摘要 += (f"\n- 近三年本益比區間：最低 {本益.min():.1f}、中位數 {本益.median():.1f}、最高 {本益.max():.1f}"
                f"（目前 {數(r['本益比'])}）")
     try:
+        背 = engine.斷頭年線摘要(engine.讀取指數K線("TAIEX"))
+        if 背:
+            摘要 += "\n- 大盤背景（崩跌期請把融資斷頭、跌破年線納入風險與停損考量）：" + "；".join(背)
+    except Exception:
+        pass
+    try:
         摘要 += f"\n- 建議評價方法：{engine.評價方法建議(r.get('產業'), r.get('近三季EPS'))}"
     except Exception:
         pass

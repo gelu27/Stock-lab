@@ -516,6 +516,10 @@ def 提醒事項(代號們):
     except Exception as e:
         print("大盤融資洗盤提醒失敗：", repr(e))
     try:
+        行們 += 斷頭年線提醒()
+    except Exception as e:
+        print("斷頭／年線提醒失敗：", repr(e))
+    try:
         行們 += 台幣提醒(狀態)
     except Exception as e:
         print("台幣提醒失敗：", repr(e))
@@ -768,8 +772,29 @@ def 大盤融資洗盤提醒(狀態, 門檻=-1.5):
                 行們.append(f"上市融資維持率約 {維.iloc[-1]:.0f}%（網站估算）；" + "、".join(f"到 {a}% 加權約 {b:,.0f}" for a, b, _ in 點們[:2]))
     except Exception as e:
         print("維持率估算失敗：", repr(e))
+    try:
+        減 = engine.融資金額減幅(engine.讀取融資金額(), engine.讀取指數K線("TAIEX"))
+        if 減 and 減["比例"]:
+            行們.append(f"融資金額從 {減['融資高點日']:%m/%d} 高點減 {減['融資減幅%']:+.1f}%，加權同期 {減['指數跌幅%']:+.1f}%（比例 {減['比例']:.0%}）；"
+                       "減得比指數多不代表一定反彈，2022 空頭時常常還在跌")
+    except Exception as e:
+        print("融資金額減幅失敗：", repr(e))
     行們.append("洗盤後偏多但不保證，還是要等止跌訊號、設停損。")
     return 行們
+
+
+def 斷頭年線提醒():
+    """2026-11-22 盤勢文查核：跌破年線、維持率接近歷史底部、第二波斷頭處分日、崩跌期外資連買偏弱。
+    併在收盤摘要同一則（不另外推播、不多花額度）；條件都不成立就不寫。"""
+    import engine
+    維 = None
+    try:
+        v = engine.融資維持率(engine.計算指標(engine.讀取資料庫(最近天數=3)))
+        維 = float(v.iloc[-1]) if v is not None and len(v) else None
+    except Exception as e:
+        print("維持率估算失敗：", repr(e))
+    行們 = engine.斷頭年線摘要(engine.讀取指數K線("TAIEX"), 維)
+    return (["", "🧯 斷頭／年線"] + [f"・{x}" for x in 行們]) if 行們 else []
 
 
 def 集體升降評提醒(狀態):
