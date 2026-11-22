@@ -23,6 +23,8 @@ jobs:
           python-version: "3.12"
       - run: pip install pandas requests pyarrow
       - run: python -c "import update_data; update_data.補融資()"
+      - name: 上市三大法人偶爾漏抓（外資連買天數會被切斷），有缺就重抓
+        run: python -c "import update_data; update_data.補上市法人()" || true
       - name: 借券賣出、融資金額也是晚上才公布，順便補當天的
         run: |
           python -c "import update_data; update_data.抓借券(天數=10)" || true

@@ -161,6 +161,13 @@ def 上市一天(日期):
     估值 = 證交所(f"https://www.twse.com.tw/rwd/zh/afterTrading/BWIBBU_d?date={字串}&selectType=ALL&response=json")
     個股 = 加估值(個股, 估值, "證券代號", {"本益比": "pe", "殖利率(%)": "dy", "股價淨值比": "pb"})
 
+    籌碼 = [x for x in [上市法人(日期)] if x is not None]
+    return 個股, 指數, 合併籌碼(籌碼, 上市融資(日期))
+
+
+def 上市法人(日期):
+    """證交所三大法人個股買賣超（T86）。回傳 DataFrame[code, foreign, trust, dealer, total] 或 None。"""
+    字串 = f"{日期:%Y%m%d}"
     籌碼 = []
     法人 = 證交所(f"https://www.twse.com.tw/rwd/zh/fund/T86?date={字串}&selectType=ALLBUT0999&response=json")
     for _, 欄位, 資料 in 取得表格(法人 or {}):
@@ -174,7 +181,36 @@ def 上市一天(日期):
                 "trust": 表["投信買賣超股數"].map(轉數字), "dealer": 表["自營商買賣超股數"].map(轉數字),
                 "total": 表["三大法人買賣超股數"].map(轉數字),
             }))
-    return 個股, 指數, 合併籌碼(籌碼, 上市融資(日期))
+    return pd.concat(籌碼) if 籌碼 else None
+
+
+def 補上市法人(天數=10):
+    """偶爾證交所 T86 當天沒抓到（例如 2026-11-17 上市 1,300 多檔外資、投信都是空的），外資連買天數會被切斷。
+    檢查最近 天數 個籌碼檔，上市股票法人欄一半以上是空的就重抓 T86 補回去。"""
+    檔們 = sorted((資料夾 / "chips").glob("*/*.csv.gz"))[-天數:]
+    補了 = []
+    for 檔 in 檔們:
+        t = pd.read_csv(檔, dtype={"code": str})
+        價檔 = 資料夾 / "prices" / 檔.parent.name / 檔.name
+        if "foreign" not in t.columns or not 價檔.exists():
+            continue
+        市 = pd.read_csv(價檔, dtype={"code": str}, usecols=["code", "market"])
+        上市碼 = set(市.loc[市["market"] == "上市", "code"])
+        x = t[t["code"].isin(上市碼)]
+        if not len(x) or x["foreign"].isna().mean() < 0.5:
+            continue
+        日期 = dt.datetime.strptime(檔.name[:8], "%Y%m%d").date()
+        法 = 上市法人(日期)
+        if 法 is None or not len(法):
+            print(f"{日期} 上市法人還是抓不到")
+            continue
+        法 = 法.drop_duplicates("code").set_index("code")
+        for 欄 in ("foreign", "trust", "dealer", "total"):
+            新 = t["code"].map(法[欄])
+            t[欄] = 新.where(新.notna(), t[欄])
+        存壓縮檔(t.sort_values("code"), 檔)
+        補了.append(f"{日期:%m/%d}")
+    print("補上市法人：" + ("、".join(補了) if 補了 else "沒有缺的"))
 
 
 def 上市融資(日期):

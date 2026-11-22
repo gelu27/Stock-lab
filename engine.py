@@ -11507,3 +11507,45 @@ def 高點回本時間(K, 高點們=None):
         列們.append({"高點日": 日, "高點": round(p), "期間最大跌%": round((float(低.min()) / p - 1) * 100, 1),
                    "回到高點": 到, "花了幾年": round((到 - 日).days / 365, 1) if 到 is not None else None})
     return pd.DataFrame(列們)
+
+
+def 集保週表(週數=8):
+    """data/tdcc 最近 週數 週的全部股票（code、date、big1000、big400、holders、big1000_people）。"""
+    檔們 = sorted((資料夾 / "tdcc").glob("*.csv.gz"))[-週數:]
+    表們 = [pd.read_csv(f, dtype={"code": str}).assign(date=pd.Timestamp(f.name[:8])) for f in 檔們]
+    return pd.concat(表們, ignore_index=True) if 表們 else pd.DataFrame()
+
+
+def 外資連買籌碼表(指標, 集保=None, 連買下限=5, 天數=20, 檔數=30, 最少成交值億=0.5):
+    """崩跌時常見的籌碼篩選表：外資連買 ≥ 連買下限 天的股票，附外資／投信近 天數 日買賣超（給迷你長條圖）、
+    千張大戶人數與總股東人數近幾週變化、「大戶增加 N 人」或「不同步」（千張大戶人數與 400 張以上持股比例同步增加才算）。
+    指標：讀取指標() 的多日表（代號、date、名稱、收盤、漲跌幅、外資買超、投信買超、外資連買、投信連買、成交值億）。"""
+    if 指標 is None or not len(指標) or "外資連買" not in 指標.columns:
+        return pd.DataFrame()
+    日 = 指標["date"].max()
+    今 = 指標[(指標["date"] == 日) & 指標["代號"].astype(str).str.fullmatch(r"\d{4}")]
+    今 = 今[(今["外資連買"] >= 連買下限) & (今["成交值億"].fillna(0) >= 最少成交值億)]
+    今 = 今.sort_values(["外資連買", "成交值億"], ascending=False).head(檔數)
+    if not len(今):
+        return pd.DataFrame()
+    近 = 指標[指標["代號"].isin(今["代號"]) & (指標["date"] > 日 - pd.Timedelta(days=天數 * 2))].sort_values("date")
+    外 = 近.groupby("代號")["外資買超"].apply(lambda s: [float(x) for x in s.fillna(0).tail(天數)])
+    投 = 近.groupby("代號")["投信買超"].apply(lambda s: [float(x) for x in s.fillna(0).tail(天數)])
+    列們 = []
+    集 = 集保 if 集保 is not None and len(集保) else None
+    for _, r in 今.iterrows():
+        代 = str(r["代號"])
+        列 = {"代號": 代, "名稱": r.get("名稱"), "收盤": r.get("收盤"), "漲跌%": r.get("漲跌幅"),
+              "外資買賣超": 外.get(代, []), "外資連買": int(r["外資連買"]),
+              "投信買賣超": 投.get(代, []), "投信連買": int(r.get("投信連買") or 0)}
+        if 集 is not None:
+            g = 集[集["code"] == 代].sort_values("date")
+            if len(g) >= 2:
+                人 = g["big1000_people"].astype(float)
+                列["千張大戶人數"] = [float(x) for x in 人]
+                列["總股東人數"] = [float(x) for x in g["holders"].astype(float)]
+                增人 = 人.iloc[-1] - 人.iloc[-2]
+                增比 = float(g["big400"].iloc[-1] - g["big400"].iloc[-2])
+                列["大戶"] = f"大戶增加 {增人:.0f} 人" if 增人 > 0 and 增比 > 0 else "不同步"
+        列們.append(列)
+    return pd.DataFrame(列們)

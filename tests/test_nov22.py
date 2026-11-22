@@ -56,6 +56,28 @@ def main():
     assert pd.isna(槓["一年內碰到追繳線%"].iloc[0]) and 槓["一年內碰到追繳線%"].iloc[2] > 槓["一年內碰到追繳線%"].iloc[1], 槓
     回本 = engine.高點回本時間(K3, 高點們=[("2021-01", "2021-03")])
     assert len(回本) == 1 and 回本["期間最大跌%"].iloc[0] < 0
+    # 補上市法人：上市法人欄大多是空的 → 重抓補回，上櫃不動
+    import tempfile
+    import update_data
+    with tempfile.TemporaryDirectory() as 暫:
+        根 = Path(暫)
+        (根 / "chips" / "2026-11").mkdir(parents=True)
+        (根 / "prices" / "2026-11").mkdir(parents=True)
+        pd.DataFrame({"code": ["1101", "1102", "6488"], "foreign": [np.nan, np.nan, 5.0], "trust": [np.nan, np.nan, 1.0],
+                      "dealer": [np.nan] * 3, "total": [np.nan] * 3, "margin": [1.0, 2.0, 3.0]}).to_csv(
+            根 / "chips" / "2026-11" / "20261117.csv.gz", index=False)
+        pd.DataFrame({"code": ["1101", "1102", "6488"], "market": ["上市", "上市", "上櫃"]}).to_csv(
+            根 / "prices" / "2026-11" / "20261117.csv.gz", index=False)
+        舊資料夾, 舊法人 = update_data.資料夾, update_data.上市法人
+        try:
+            update_data.資料夾 = 根
+            update_data.上市法人 = lambda d: pd.DataFrame({"code": ["1101", "1102"], "foreign": [100.0, -50.0],
+                                                     "trust": [0.0, 1.0], "dealer": [0.0, 0.0], "total": [100.0, -49.0]})
+            update_data.補上市法人()
+        finally:
+            update_data.資料夾, update_data.上市法人 = 舊資料夾, 舊法人
+        補 = pd.read_csv(根 / "chips" / "2026-11" / "20261117.csv.gz", dtype={"code": str}).set_index("code")
+        assert 補.at["1101", "foreign"] == 100 and 補.at["6488", "foreign"] == 5 and 補.at["1102", "margin"] == 2, 補
     print("test_nov22 OK")
 
 
