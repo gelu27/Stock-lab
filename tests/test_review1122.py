@@ -136,5 +136,19 @@ def main():
     print("綜合評估 11/22 修正：全部通過")
 
 
+def test_畫面區塊函式不能被快取():
+    """11/22 故障：三步篩選區被插到別人的 @st.cache_data 下面，出現 CachedWidgetWarning。"""
+    import ast, pathlib
+    錯 = []
+    for 檔 in pathlib.Path(__file__).resolve().parent.parent.joinpath("views").glob("*.py"):
+        for 節 in ast.walk(ast.parse(檔.read_text(encoding="utf-8"))):
+            if isinstance(節, ast.FunctionDef) and 節.name.endswith("區"):
+                for 裝 in 節.decorator_list:
+                    if "cache_" in ast.unparse(裝):
+                        錯.append(f"{檔.name}:{節.name}")
+    assert not 錯, 錯
+
+
 if __name__ == "__main__":
+    test_畫面區塊函式不能被快取()
     main()
