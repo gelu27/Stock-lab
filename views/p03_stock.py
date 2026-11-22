@@ -1471,9 +1471,9 @@ def 辯論顯示(結果, 包):
     if 長.get("一句話"):  # AI 寫的文字一律跳脫，避免夾帶 HTML
         st.markdown(f'<div class="verdict">{html.escape(str(長["一句話"]))}</div>', unsafe_allow_html=True)
     a, b = st.columns(2)
-    with a.container(border=True):
+    with a, 報告區("辯多", border=True):
         st.markdown("**🐂 多方（激進做多操盤手）**\n\n" + 結果.get("多方", ""))
-    with b.container(border=True):
+    with b, 報告區("辯空", border=True):
         st.markdown("**🐻 空方（風險控管分析師）**\n\n" + 結果.get("空方", ""))
     if 長.get("觀察指標"):
         st.markdown("**要追蹤的數字：** " + "、".join(map(str, 長["觀察指標"])))
@@ -2106,7 +2106,7 @@ with 分頁[4], 區塊防護("AI 分析"):
         if st.button("📑 產生投研報告", key=f"投研_{代號}"):
             st.session_state[f"投研報告_{代號}"] = 投研報告(代號, r)
         if st.session_state.get(f"投研報告_{代號}"):
-            with st.container(border=True):
+            with 報告區(f"投研_{代號}", border=True):
                 st.markdown(st.session_state[f"投研報告_{代號}"])
             st.download_button("⬇️ 下載報告（Markdown）", st.session_state[f"投研報告_{代號}"].encode("utf-8"),
                                file_name=f"{代號}_投研報告_{最新日:%Y%m%d}.md", key=f"投研下載_{代號}")
@@ -2351,7 +2351,7 @@ with 分頁[4], 區塊防護("AI 分析"):
                             except Exception as 錯:
                                 st.error(f"會診失敗：{錯}")
                 if st.session_state.get(會鍵):
-                    with st.container(border=True):
+                    with 報告區(f"會診_{代號}", border=True):
                         st.markdown(st.session_state[會鍵])
                         查核區(st.session_state[會鍵], AI數據包(代號, r))
 
@@ -2448,7 +2448,7 @@ with 分頁[4], 區塊防護("AI 分析"):
                     if 提醒:
                         st.warning("🔎 數字檢查（網站自動比對，AI 的數字未修改）\n\n" + "\n".join(f"- {句}" for 句 in 提醒))
                 if 內文.strip():
-                    with st.expander("完整 AI 報告", expanded=not 建議):
+                    with st.expander("完整 AI 報告", expanded=not 建議), 報告區(f"AI_{代號}"):
                         st.markdown(內文)
                 else:
                     st.caption("這份只有卡片資料（json），沒有完整報告內文。")
@@ -2458,9 +2458,10 @@ with 分頁[4], 區塊防護("AI 分析"):
                 PDF按鈕(代號, r, 建議, 內文, 上次["時間"])
                 if len(紀錄們) > 1:
                     with st.expander(f"過去的 AI 報告（{len(紀錄們) - 1}）"):
-                        for 舊 in 紀錄們[1:]:
+                        for 第, 舊 in enumerate(紀錄們[1:]):
                             st.markdown(f"#### {舊['時間']}（當時收盤 {舊.get('收盤', '—')}，{舊.get('引擎', '')}）")
-                            st.markdown(engine.拆解AI建議(舊["內容"])[0])
+                            with 報告區(f"舊AI_{代號}_{第}"):
+                                st.markdown(engine.拆解AI建議(舊["內容"])[0])
                             st.divider()
         個股券商報告(代號, float(r["收盤"]))
         個股網紅說法(代號)
