@@ -2692,11 +2692,14 @@ def 讀取設定檔(設定, 檔名):
 
     權杖, 網址, 分支, 標頭 = _GitHub設定(設定, 檔名)
     if 權杖:
-        回應 = requests.get(網址, params={"ref": 分支}, headers=標頭, timeout=15)
+        # 用 raw 格式直接拿檔案內容：一般 JSON 格式在檔案超過 1MB 時 content 會是空字串
+        # （broker_reports.json 11/19 超過 1MB 後，網站、AI、LINE、記分板都讀到 0 份券商報告）
+        回應 = requests.get(網址, params={"ref": 分支}, headers={**標頭, "Accept": "application/vnd.github.raw+json"},
+                          timeout=30)
         if 回應.status_code == 404:
             return {}
         回應.raise_for_status()
-        return json.loads(base64.b64decode(回應.json()["content"]).decode("utf-8"))
+        return json.loads(回應.content.decode("utf-8"))
     f = 資料夾.parent / "ai_reports" / 檔名
     return json.loads(f.read_text("utf-8")) if f.exists() else {}
 
@@ -5272,10 +5275,14 @@ def AI讀券商報告(檔案, 檔名, 引擎, 金鑰, 模型):
     return 結果
 
 
-def 讀取券商報告(設定):
+def 讀取券商報告(設定, 嚴格=False):
+    """嚴格＝True 給「讀出來、合併、再存回去」用：讀失敗就丟錯，免得用空清單把舊報告整份蓋掉。"""
     try:
         return (讀取設定檔(設定, "broker_reports.json") or {}).get("報告", [])
-    except Exception:
+    except Exception as e:
+        if 嚴格:
+            raise
+        print("讀券商報告失敗：", repr(e))
         return []
 
 
@@ -8408,9 +8415,11 @@ def _大盤本益比(天數=None):
     if 股 is None or not len(股):
         return pd.DataFrame(columns=欄們)
     產業 = 股.set_index("code")["industry"] if "industry" in 股.columns else pd.Series(dtype=str)
-    股 = 股.set_index("code")["shares"]
+    # 雲端主機（Python 3.14）11/17 起偶發「字串乘數字」錯誤：股數、收盤、本益比一律轉成數字
+    股 = pd.to_numeric(股.drop_duplicates("code").set_index("code")["shares"], errors="coerce")
 
     def 算(t):
+        t = t.assign(close=pd.to_numeric(t["close"], errors="coerce"), pe=pd.to_numeric(t["pe"], errors="coerce"))
         t = t[(t["market"] == "上市") & t["code"].isin(股.index) & (t["pe"] > 0)]
         市 = t["close"] * t["code"].map(股)
         if len(t) <= 100:

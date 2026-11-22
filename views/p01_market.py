@@ -1088,7 +1088,7 @@ def 網紅1119區():
             st.caption("來源：網紅提出「機構現在只看 2027 預估獲利，保守起見打 8 折」，打折後本益比仍在 20 倍以下的，被視為再修正空間有限的一線龍頭。"
                        "這裡 EPS 用你上傳的預估檔（A、B 兩源中位數），不是網紅的資料；名單是網紅提到的 18 檔，不代表全市場。"
                        "資金面壓力大時，本益比低不等於會馬上止跌，只代表「估值保護」比較多。")
-    with st.expander("🕯️ 大盤落底五訊號：今天亮了幾個？（高憲容的 5 項）"):
+    with st.expander("🕯️ 大盤落底五訊號：今天亮了幾個？（投顧分析師常用的 5 項）"):
         K = 指數K線("TAIEX", _版本)
         if K is None or len(K) < 10:
             st.caption("大盤資料不足。")
@@ -1126,7 +1126,7 @@ def 網紅1119區():
                  column_config={c: st.column_config.NumberColumn(format="%+.1f") for c in 相.columns if c.endswith("%")})
             st.caption("「相對%」＝ETF 漲跌 − 加權漲跌；負越多代表比大盤跌得更慘。網紅說主動式 ETF 重倉 CPO、散熱、PCB、ABF 這些熱門股，"
                        "所以下跌時跌幅比大盤大；剛上市不足 20 日的 ETF 不列。價格是市價（收盤），不是淨值。")
-    with st.expander("🧱 1:2:3 分批抄底試算器（朱家泓三批買法）"):
+    with st.expander("🧱 1:2:3 分批抄底試算器（技術分析老師的三批買法）"):
         c1, c2 = st.columns(2)
         總 = c1.number_input("預計投入總資金（元）", min_value=0, value=1_200_000, step=100_000, key="分批總資金")
         停 = c2.number_input("停損價（選填，0 表示不算）", min_value=0.0, value=0.0, step=1.0, key="分批停損")

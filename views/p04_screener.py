@@ -34,7 +34,7 @@ def 券商報告上傳區():
         表格(engine.券商報告表(預覽).drop(columns=["前次目標價"]), hide_index=True, width="stretch")
         a, b = st.columns(2)
         if a.button("💾 存檔", key="存券商", type="primary"):
-            舊 = engine.讀取券商報告(_設定())
+            舊 = engine.讀取券商報告(_設定(), 嚴格=True)
             全 = engine.合併券商報告(舊, 預覽)
             永久 = engine.儲存券商報告(_設定(), 全)
             st.session_state.pop("券商預覽", None)
