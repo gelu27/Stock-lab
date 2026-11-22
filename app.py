@@ -394,6 +394,14 @@ a.cardlink:hover .card, a.cardlink:active .card {{ border-color: {青}; backgrou
 /* 區塊標題：英文 // 中文 */
 .sec .en {{ color: {青}; }} .sec b {{ font-family: 'Noto Sans TC', sans-serif; font-weight: 700; color: #EDEDED; font-size: 15px; letter-spacing: .08em; }}
 svg.spark {{ flex: 0 0 auto; align-self: center; margin-left: auto; }}
+/* 分析報告內文（AI 報告、投研報告、會診、辯論、盤勢解讀）：比一般文字大 2 階（16→20px），標題等比放大 */
+[class*="st-key-rpt"] [data-testid="stMarkdownContainer"] :is(p, li) {{ font-size: 20px; line-height: 1.75; }}
+[class*="st-key-rpt"] [data-testid="stMarkdownContainer"] h1 {{ font-size: 34px; }}
+[class*="st-key-rpt"] [data-testid="stMarkdownContainer"] h2 {{ font-size: 30px; }}
+[class*="st-key-rpt"] [data-testid="stMarkdownContainer"] h3 {{ font-size: 26px; }}
+[class*="st-key-rpt"] [data-testid="stMarkdownContainer"] :is(h4, h5, h6) {{ font-size: 23px; }}
+[class*="st-key-rpt"] [data-testid="stMarkdownContainer"] table {{ display: block; max-width: 100%; overflow-x: auto; }}
+[class*="st-key-rpt"] [data-testid="stMarkdownContainer"] table :is(td, th) {{ font-size: 18px; }}
 /* 今天必須知道 */
 .must {{ border: 1px solid #1E1E1E; border-left: 3px solid {青}; background: #050505; margin: 6px 0 4px; }}
 .must div {{ display: flex; gap: 10px; padding: 12px 14px; border-bottom: 1px solid #141414;
@@ -645,6 +653,13 @@ header[data-testid="stHeader"] {{ background: transparent !important; height: 2.
 /* 手機字級下限 13px：表格、小字說明不再小到要放大才看得到 */
 [data-testid="stMarkdownContainer"] :is(span, small, td, th, li, em, div, b, a) {{ font-size: max(13px, 1em); }}
 [data-testid="stMarkdownContainer"] table :is(td, th) {{ font-size: 14px !important; }}
+/* 手機的分析報告內文：一般文字 20px 再大 2 階到 24px；表格可左右滑，字只加到 16px 避免爆版 */
+body [class*="st-key-rpt"] [data-testid="stMarkdownContainer"] :is(p, li) {{ font-size: 24px; line-height: 1.7; }}
+body [class*="st-key-rpt"] [data-testid="stMarkdownContainer"] h1 {{ font-size: 34px; }}
+body [class*="st-key-rpt"] [data-testid="stMarkdownContainer"] h2 {{ font-size: 31px; }}
+body [class*="st-key-rpt"] [data-testid="stMarkdownContainer"] h3 {{ font-size: 28px; }}
+body [class*="st-key-rpt"] [data-testid="stMarkdownContainer"] :is(h4, h5, h6) {{ font-size: 26px; }}
+body [class*="st-key-rpt"] [data-testid="stMarkdownContainer"] table :is(td, th) {{ font-size: 16px !important; }}
 </style>"""
 
 
@@ -656,6 +671,11 @@ def 卡片(標題, 數值, 小字="", 顏色="#EDEDED", 連結=None):
     內 = (f'<div class="card"><div class="k">{標題}</div>'
           f'<div class="v" style="color:{顏色}">{數值}</div><div class="d" style="color:{顏色}">{小字}</div></div>')
     return f'<a class="cardlink" href="{連結}" target="_self">{內}</a>' if 連結 else 內
+
+
+def 報告區(鍵, **參數):
+    """分析報告內文的容器：裡面的 Markdown 字體比一般文字大 2 階（CSS 看 st-key-rpt 開頭的 class）。"""
+    return st.container(key=f"rpt_{鍵}", **參數)
 
 
 def 卡片格(卡們):

@@ -2196,7 +2196,8 @@ def AI解讀區():
                 t = st.selectbox("看哪一天", 時間們, key=f"解讀日{模式}", label_visibility="collapsed")
                 選 = next(v for v in 這類 if v["時間"] == t)
             st.caption(f"🕒 {選['時間']}　·　{選.get('模型', '')}" + (f"　·　看法 {選['看法']}" if 選.get("看法") else ""))
-            st.markdown(re.sub(r"^#{1,3}\s+", "##### ", 選["內容"], flags=re.M))  # 標題縮小，手機比較好讀
+            with 報告區(f"解讀_{模式}"):
+                st.markdown(re.sub(r"^#{1,3}\s+", "##### ", 選["內容"], flags=re.M))  # 標題縮小，手機比較好讀
             if 選.get("條件"):
                 結 = next((x for x in 驗 if x["時間"] == 選["時間"]), None)
                 行們 = []
