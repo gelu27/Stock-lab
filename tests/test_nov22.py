@@ -86,6 +86,27 @@ def main():
     assert engine.斷頭年線摘要(K6.head(300), 170) == []
     print("test_nov22 OK")
 
+def 測崩跌模式():
+    import engine
+    d = pd.DataFrame({"外資連買": [5, 5, 1], "崩跌模式": [False, True, True]})
+    加 = [0, 0, 0]
+    for 面, 點, 條件, 文字 in engine.評分規則:
+        try:
+            是 = 面 == "籌碼" and "外資連買" in 文字(d.iloc[0])
+        except (KeyError, TypeError, ValueError):
+            是 = False
+        if 是:
+            for i, 中 in enumerate(條件(d).fillna(False).astype(bool)):
+                加[i] += 點 * 中
+    assert 加 == [10, 5, 0], 加
+    assert engine.崩跌模式說明({"崩跌模式": False}) == ""
+    說 = engine.崩跌模式說明({"崩跌模式": True, "數字": {"漲20日": -12.3}})
+    assert "12.3%" in 說 and "+5" in 說
+    大 = engine.大盤評分(None, pd.DataFrame({"代號": ["2330"], "收盤": [1.0], "漲跌幅": [1.0]}))
+    assert 大["崩跌模式"] is False
+    print("崩跌模式 OK")
+
 
 if __name__ == "__main__":
     main()
+    測崩跌模式()
