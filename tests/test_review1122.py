@@ -90,6 +90,35 @@ def main():
         with mock.patch.object(engine, "資料夾", Path(d)):
             r = engine._大盤本益比(1)
     assert abs(float(r["本益比"].iloc[-1]) - 20) < 1e-6, r
+    # 依盤勢切換權重（2026-11-22 TAi 決定）
+    import numpy as np
+    漲 = np.linspace(100, 200, 300)            # 一路漲：年線上、60 日漲 > 10%
+    assert engine.判斷盤勢(漲)[0] == "強多頭"
+    緩 = np.linspace(100, 104, 300)            # 年線上但 60 日漲不到 10%
+    assert engine.判斷盤勢(緩)[0] == "多頭"
+    跌 = np.r_[np.linspace(100, 120, 260), np.linspace(120, 100, 40)]   # 20 日跌 > 8%
+    assert engine.判斷盤勢(跌)[0] == "崩跌"
+    空 = np.r_[np.full(240, 120.0), np.linspace(119, 110, 60)]          # 年線下、20 日跌不到 8%
+    assert engine.判斷盤勢(空)[0] == "空頭", engine.判斷盤勢(空)
+    assert engine.判斷盤勢([100] * 30)[0] == "不明"
+    assert engine.盤勢權重({"盤勢": "強多頭"})["市場"] == 0.2 and engine.盤勢權重({"盤勢": "崩跌"})["市場"] == 0
+    assert abs(sum(engine.評分權重.values()) - 1) < 1e-9 and abs(sum(engine.強多頭權重.values()) - 1) < 1e-9
+    assert "強多頭" in engine.盤勢權重說明({"盤勢": "強多頭", "數字": {"漲60日": 12.0}})
+    assert engine.盤勢權重說明({"盤勢": "不明"}) == ""
+    明 = pd.DataFrame({"技術": [50, 50], "籌碼": [50, 50], "基本": [50, 50], "市場": [100, 100], "盤勢": ["強多頭", "空頭"]})
+    總 = engine.加權總分(明)
+    assert 總.iloc[0] == 60 and 總.iloc[1] == 50, 總   # 強多頭市場面佔 20%：50×0.8＋100×0.2
+    K = pd.DataFrame({"date": pd.bdate_range("2025-01-01", periods=300), "close": 漲})
+    勢 = engine.盤勢序列(K)
+    assert 勢.iloc[-1] == "強多頭" and 勢.iloc[0] == "不明"
+    大 = engine.大盤評分(K, pd.DataFrame({"代號": ["2330"], "收盤": [1.0], "漲跌幅": [1.0]}))
+    assert 大["盤勢"] == "強多頭" and "漲60日" in 大["數字"]
+    # 80 分名單太長只列前 20 檔（庫存一定列）
+    分 = pd.DataFrame({"名稱": [f"股{i}" for i in range(30)], "總分": [90 - i * 0.1 for i in range(30)],
+                      "較昨日": [0.0] * 30, "收盤": [10.0] * 30, "漲跌幅": [1.0] * 30},
+                     index=[str(1100 + i) for i in range(30)])
+    行, _ = notify.高分名單變化(分, "2026-11-23", {}, 庫存們={"1129"})
+    assert sum(1 for x in 行 if x.startswith(("11", "💼"))) == 21 and any("其餘 9 檔" in x for x in 行), 行
     print("綜合評估 11/22 修正：全部通過")
 
 

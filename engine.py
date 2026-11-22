@@ -3017,7 +3017,62 @@ def 崩跌模式說明(大盤):
     ("市場", "+5／−5", "近 5 日贏大盤／輸大盤 3% 以上"),
 ]
 # 權重依 data/score_backtest.json 的歷史驗證調整（2026-10：基本面最有效，技術、市場面平均效果偏負）
-評分權重 = {"技術": 0.15, "籌碼": 0.25, "基本": 0.50, "市場": 0.10}
+# 2026-11-22 依盤勢切換（TAi 決定）：市場面（個股贏不贏大盤、族群強弱＝追強勢股）只有在「強多頭」時有用
+#（46 期回測：強多頭 15 期市場面最高 1/5 之後 20 日 +1.68%、60 日 +3.53%；一般多頭沒用、空頭不一致），
+# 所以強多頭時市場面佔 20%，其他時候拿掉、基本面加重。60 日最高組 +3.09%（舊的固定權重 +2.79%）。
+評分權重 = {"技術": 0.10, "籌碼": 0.20, "基本": 0.70, "市場": 0.0}      # 一般盤勢（含空頭、崩跌）
+強多頭權重 = {"技術": 0.10, "籌碼": 0.20, "基本": 0.50, "市場": 0.20}    # 強多頭
+舊評分權重 = {"技術": 0.15, "籌碼": 0.25, "基本": 0.50, "市場": 0.10}    # 2026-10-26 ～ 11-22
+強多頭漲幅 = 10.0   # 加權在年線上，且近 60 個交易日漲 ≥ 10%
+
+
+def 判斷盤勢(收):
+    """加權收盤序列（舊到新）→ 今天的盤勢：崩跌（20 日跌 ≥ 8%）、強多頭（年線上且 60 日漲 ≥ 10%）、多頭（年線上）、空頭（年線下）。
+    資料不到 240 天時年線用現有資料平均。回傳 (盤勢, 數字 dict)。"""
+    收 = pd.Series(收, dtype=float).dropna().reset_index(drop=True)
+    if len(收) < 61:
+        return "不明", {}
+    現 = float(收.iloc[-1])
+    年 = float(收.tail(240).mean())
+    數 = {"年線": 年, "漲20日": (現 / 收.iloc[-21] - 1) * 100, "漲60日": (現 / 收.iloc[-61] - 1) * 100}
+    if 數["漲20日"] <= 崩跌門檻:
+        return "崩跌", 數
+    if 現 >= 年:
+        return ("強多頭" if 數["漲60日"] >= 強多頭漲幅 else "多頭"), 數
+    return "空頭", 數
+
+
+def 盤勢權重(大盤=None):
+    """依大盤評分() 的盤勢回傳這一天用的權重。"""
+    return 強多頭權重 if (大盤 or {}).get("盤勢") == "強多頭" else 評分權重
+
+
+def 盤勢權重說明(大盤):
+    """網站評分頁、選股明細、LINE 用的一句話：現在是什麼盤勢、用哪組權重。"""
+    勢 = (大盤 or {}).get("盤勢")
+    if not 勢 or 勢 == "不明":
+        return ""
+    w = 盤勢權重(大盤)
+    組 = "／".join(f"{面}{w[面] * 100:.0f}" for 面 in w)
+    if 勢 == "強多頭":
+        return (f"盤勢：強多頭（加權在年線上、近 60 日漲 {大盤['數字'].get('漲60日', 0):.1f}%），評分權重 {組}。"
+                "強多頭時強勢股容易續強，所以市場面（贏大盤、族群強弱）佔 20%")
+    return (f"盤勢：{勢}，評分權重 {組}。不是強多頭時追強勢股沒有優勢（回測），所以市場面不計分、基本面佔 70%；"
+            f"加權站上年線且 60 日漲 {強多頭漲幅:.0f}% 以上時自動切換")
+
+
+def 盤勢序列(加權):
+    """加權日 K（date、close）→ Series(date → 盤勢)，給歷史回測明細補盤勢。"""
+    if 加權 is None or not len(加權):
+        return pd.Series(dtype=object)
+    k = 加權.sort_values("date")
+    收 = k["close"].astype(float).reset_index(drop=True)
+    年 = 收.rolling(240, min_periods=61).mean()
+    r20, r60 = (收 / 收.shift(20) - 1) * 100, (收 / 收.shift(60) - 1) * 100
+    勢 = np.where(r20 <= 崩跌門檻, "崩跌", np.where(收 >= 年, np.where(r60 >= 強多頭漲幅, "強多頭", "多頭"), "空頭"))
+    勢 = pd.Series(勢, index=k["date"].values)
+    勢[r60.isna().values] = "不明"
+    return 勢
 
 
 def 評分看法(分):
@@ -3061,8 +3116,12 @@ def 大盤評分(加權, 今日):
         看(金額 <= -50, -10, f"外資賣超約 {abs(金額):,.0f} 億")
     分數 = int(np.clip(50 + sum(s for s, _ in 多) - sum(s for s, _ in 空), 0, 100))
     崩 = bool(pd.notna(數.get("漲20日", np.nan)) and 數["漲20日"] <= 崩跌門檻)
+    勢 = "不明"
+    if 加權 is not None and len(加權) >= 61:
+        勢, 勢數 = 判斷盤勢(加權["close"])
+        數.update(年線=勢數.get("年線"), 漲60日=勢數.get("漲60日"))
     return {"分數": 分數, "看法": 評分看法(分數), "利多": [t for _, t in 多], "利空": [t for _, t in 空], "數字": 數,
-            "崩跌模式": 崩}
+            "崩跌模式": 崩, "盤勢": 勢}
 
 
 def 每日評分(今日, 加權=None, 大盤=None):
@@ -3091,8 +3150,8 @@ def 每日評分(今日, 加權=None, 大盤=None):
     結果.loc[_有(d, "外資買超").isna(), "籌碼"] = np.nan
     沒基本 = _有(d, "營收年增率").isna() & _有(d, "近三季EPS").isna() & (d["本益比"].fillna(0) <= 0)
     結果.loc[沒基本, "基本"] = np.nan
-    權重 = pd.DataFrame({面: 結果[面].notna() * w for 面, w in 評分權重.items()})
-    結果["總分"] = ((結果.fillna(0) * 權重).sum(axis=1) / 權重.sum(axis=1)).round(1)
+    權重 = pd.DataFrame({面: 結果[面].notna() * w for 面, w in 盤勢權重(大盤).items()})
+    結果["總分"] = ((結果.fillna(0) * 權重).sum(axis=1) / 權重.sum(axis=1).replace(0, np.nan)).round(1)
     結果["看法"] = 結果["總分"].map(評分看法)
     for 欄 in ("名稱", "產業", "收盤", "漲跌幅", "5日均量"):
         結果[欄] = d[欄] if 欄 in d.columns else np.nan
@@ -3351,12 +3410,13 @@ def 評分回測(持有天數=20, 最少量=500, 含合約負債=True):
         if 財 is not None and len(財):
             當 = 當.drop(columns=[c for c in 財.columns if c in 當.columns]).join(財, on="代號")
         分, _ = 每日評分(當, 加[加["date"] <= 日])
+        分["盤勢"] = 判斷盤勢(加[加["date"] <= 日]["close"])[0]
         分["報酬"] = 未來.loc[日].reindex(分.index)
         for n, t in 長.items():
             分[f"報酬{n}"] = t.loc[日].reindex(分.index)
         分 = 分[(分["5日均量"] >= 最少量) & ~分.index.str.startswith("00")].dropna(subset=["報酬", "總分"])
         分["date"] = 日
-        結果.append(分[["date", "總分", "看法", "技術", "籌碼", "基本", "市場", "報酬", "報酬60", "報酬120"]])
+        結果.append(分[["date", "總分", "看法", "技術", "籌碼", "基本", "市場", "盤勢", "報酬", "報酬60", "報酬120"]])
     return pd.concat(結果) if 結果 else None
 
 
@@ -3381,10 +3441,12 @@ def 評分回測摘要(表, 持有天數=20):
         "計算時間": pd.Timestamp.now(tz="Asia/Taipei").strftime("%Y/%m/%d %H:%M"),
         "起": f"{pd.Timestamp(日們[0]):%Y/%m/%d}", "迄": f"{pd.Timestamp(日們[-1]):%Y/%m/%d}",
         "期數": len(日們), "平均檔數": int(表.groupby("date").size().mean()), "持有天數": 持有天數,
-        "權重": 評分權重,
+        "權重": {"一般": 評分權重, "強多頭": 強多頭權重},
         "相關": {欄: 相關(欄) for 欄 in ("總分", "技術", "籌碼", "基本", "市場")},
         "五分組": {欄: 分組(欄) for 欄 in ("總分", "技術", "籌碼", "基本", "市場")},
         "前後半": {"前半": 分組("總分", 表[表["date"] < 中]), "後半": 分組("總分", 表[表["date"] >= 中])},
+        "盤勢": ({勢: {"期數": int(g["date"].nunique()), "總分": 分組("總分", g), "市場": 分組("市場", g)}
+                for 勢, g in 表.groupby("盤勢") if g["date"].nunique() >= 1} if "盤勢" in 表.columns else {}),
         "看法": [{"看法": k, "檔次": int(r["檔次"]), "超額": round(float(r["超額"]), 3), "報酬": round(float(r["報酬"]), 3)}
                for k, r in 看法.iterrows()],
     }
@@ -3397,7 +3459,7 @@ def 更新評分回測(強制=False, 間隔天數=25):
     明細檔 = 資料夾 / "score_backtest_detail.csv.gz"
     if 檔.exists() and 明細檔.exists() and not 強制:
         舊 = json.loads(檔.read_text())
-        if 舊.get("權重") == 評分權重 and 舊.get("版本") == 2 and (pd.Timestamp.now() - pd.Timestamp(舊.get("計算日", "2000-01-01"))).days < 間隔天數:
+        if 舊.get("權重") == {"一般": 評分權重, "強多頭": 強多頭權重} and 舊.get("版本") == 2 and (pd.Timestamp.now() - pd.Timestamp(舊.get("計算日", "2000-01-01"))).days < 間隔天數:
             print("評分回測：還不用重算")
             return
     表 = 評分回測()
@@ -3408,7 +3470,7 @@ def 更新評分回測(強制=False, 間隔天數=25):
     摘要["版本"] = 2  # 2：基本面加入當時已公布的 EPS、毛利率
     # 每期每檔的四個面向分數與之後報酬，網站「自訂權重」用來即時重算驗證
     欄 = ["技術", "籌碼", "基本", "市場", "報酬", "報酬60", "報酬120"]
-    明細 = 表[["date"] + 欄].rename_axis("代號").reset_index()
+    明細 = 表[["date"] + 欄 + ["盤勢"]].rename_axis("代號").reset_index()
     明細[欄] = 明細[欄].round(2)
     明細.to_csv(明細檔, index=False, compression="gzip")
     檔.write_text(json.dumps(摘要, ensure_ascii=False, indent=1))
@@ -6694,15 +6756,29 @@ def 策略排行(指標, 往後們=(5, 20), 間隔=5, 起=60, 基本面=None, �
 
 
 # ========== 自訂評分權重 ==========
-def 加權總分(分, 權重):
-    """分：含 技術、籌碼、基本、市場 欄；沒資料的面向不算，權重按比例重分。"""
+def 加權總分(分, 權重=None):
+    """分：含 技術、籌碼、基本、市場 欄；沒資料的面向不算，權重按比例重分。
+    權重＝None：依每列的「盤勢」欄切換（強多頭用 強多頭權重，其他用 評分權重），跟網站正式分數一樣。"""
+    if 權重 is None:
+        強 = 分["盤勢"].eq("強多頭") if "盤勢" in 分.columns else pd.Series(False, index=分.index)
+        return 加權總分(分, 強多頭權重).where(強, 加權總分(分, 評分權重))
     權 = pd.DataFrame({面: 分[面].notna() * w for 面, w in 權重.items()})
     return ((分[list(權重)].fillna(0) * 權).sum(axis=1) / 權.sum(axis=1).replace(0, np.nan)).round(1)
 
 
 def 讀取評分回測明細():
+    """每期每檔的四面分數與之後報酬；補上當期「盤勢」欄（依加權指數），加權總分(明細) 才能依盤勢切換權重。"""
     f = 資料夾 / "score_backtest_detail.csv.gz"
-    return pd.read_csv(f, dtype={"代號": str}, parse_dates=["date"]) if f.exists() else None
+    if not f.exists():
+        return None
+    t = pd.read_csv(f, dtype={"代號": str}, parse_dates=["date"])
+    if "盤勢" not in t.columns:
+        try:
+            勢 = 盤勢序列(讀取加權指數())
+            t["盤勢"] = 勢.reindex(勢.index.union(t["date"].unique())).ffill().reindex(t["date"]).values
+        except Exception as e:
+            print("回測明細補盤勢失敗：", repr(e))
+    return t
 
 
 def 權重驗證(明細, 權重):
