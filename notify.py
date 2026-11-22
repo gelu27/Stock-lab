@@ -48,7 +48,16 @@ def 讀設定(檔名):
         return {}, None
     if r.status_code != 200:
         return {}, None
-    return json.loads(base64.b64decode(r.json()["content"]).decode("utf-8")), r.json()["sha"]
+    j = r.json()
+    if not j.get("content") and j.get("download_url"):
+        # 超過 1MB 的檔案 content 是空的，要另外用 raw 格式拿
+        try:
+            raw = requests.get(r.url, headers={**_gh標頭(), "Accept": "application/vnd.github.raw+json"}, timeout=30)
+            raw.raise_for_status()
+            return json.loads(raw.content.decode("utf-8")), j["sha"]
+        except (requests.RequestException, ValueError):
+            return {}, None
+    return json.loads(base64.b64decode(j["content"]).decode("utf-8")), j["sha"]
 
 
 def 寫設定(檔名, 內容物, sha):
@@ -1191,6 +1200,22 @@ def _最新檔日(子):
     return pd.Timestamp(max(檔們)).date() if 檔們 else None
 
 
+def _法人缺漏(天數=8, 比例=0.7):
+    """最近幾個籌碼檔，外資有數字的檔數少於其他天中位數的 比例 → 回傳日期清單（mm/dd）。"""
+    檔們 = sorted((資料夾 / "chips").glob("*/*.csv.gz"))[-天數:]
+    數 = {}
+    for f in 檔們:
+        try:
+            t = pd.read_csv(f, usecols=lambda c: c in ("code", "foreign"))
+            數[f.name[:8]] = int(t["foreign"].notna().sum()) if "foreign" in t else 0
+        except Exception:
+            數[f.name[:8]] = 0
+    if len(數) < 3:
+        return []
+    中 = float(pd.Series(list(數.values())).median())
+    return [f"{pd.Timestamp(d):%m/%d}（{n}/{中:.0f} 檔）" for d, n in 數.items() if 中 and n < 中 * 比例]
+
+
 def 健康檢查():
     """每天更新完檢查一次：今天有開盤卻沒抓到、每週每月資料太久沒更新、網站即時查詢的來源連不上，就 LINE 通知。"""
     import engine
@@ -1225,6 +1250,17 @@ def 健康檢查():
             缺融.append(f"{pd.Timestamp(f.name[:8]):%m/%d}")
     if 缺融:
         問題.append("融資融券缺漏：" + "、".join(缺融) + "（晚上 22:23 補抓沒成功，可到 Actions 手動跑「補融資融券」）")
+    # 三大法人只抓到一部分（例如 11/17 上市法人漏抓，外資只有平常的 4 成）：跟最近幾天比，少於 7 成就報
+    缺法 = _法人缺漏()
+    if 缺法:
+        問題.append("三大法人只抓到一部分：" + "、".join(缺法) + "（晚上「補融資融券」會補上市法人，隔天還在就到 Actions 手動跑）")
+    # 券商報告讀不到（例如檔案超過 1MB 時 GitHub 一般格式不給內容）：網站、AI、記分板會全部變成 0 份
+    try:
+        券, _ = 讀設定("broker_reports.json")
+        if os.environ.get("GITHUB_TOKEN") and not (券 or {}).get("報告"):
+            問題.append("券商報告讀到 0 份（ai-reports 的 broker_reports.json 讀不到或是空的）")
+    except Exception as e:
+        問題.append(f"券商報告讀取失敗（{type(e).__name__}）")
     公司 = 資料夾 / "company_profile.csv"
     if 公司.exists():
         更 = pd.read_csv(公司, usecols=["更新日"])["更新日"].dropna()

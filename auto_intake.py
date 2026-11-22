@@ -290,7 +290,7 @@ def 收券商(設):
     if not 待:
         return 0, 0
     模型 = 設.get("GEMINI_MODEL") or "gemini-flash-latest"
-    筆數, 失敗, 全 = 0, 0, engine.讀取券商報告(設)
+    筆數, 失敗, 全 = 0, 0, engine.讀取券商報告(設, 嚴格=True)
     for f in 待:
         if not _額度夠(設, "券商報告"):
             break
