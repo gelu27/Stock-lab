@@ -980,6 +980,9 @@ def 評分摘要(持股, 自選們=()):
                           engine.讀取基本面(), engine.讀取加權指數())
     變 = lambda v: "" if pd.isna(v) or v == 0 else f"{符號(v)}{abs(v):.0f}"
     行們 = ["", f"🧮 今日評分（滿分 100，50 為中性）", f"大盤 {大['分數']} 分 {大['看法']} {變(大.get('較昨日'))}".rstrip()]
+    if 大.get("崩跌模式"):
+        行們.append(f"⚠️ 崩跌模式：加權近 20 日跌 {abs(大['數字'].get('漲20日', 0)):.1f}%，評分「外資連買」加分已由 +10 減半為 "
+                  f"+{engine.外資連買崩跌加分}（崩跌期外資連買多是抗跌股，之後未必比較強）")
     if 持股:
         h = pd.read_csv(io.StringIO(持股), dtype={"代號": str})
         庫 = 分.reindex(h["代號"].str.strip().unique()).dropna(subset=["總分"]).sort_values("總分", ascending=False)

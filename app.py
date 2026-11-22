@@ -1635,6 +1635,17 @@ def 評分資料(版本鍵):
                          基本面資料(版本鍵), 加權)
 
 
+def 崩跌模式提示():
+    """崩跌模式（加權 20 日跌 ≥ 8%）時，在評分頁、選股明細上方顯示黃色提示，說明外資連買加分已調降。"""
+    try:
+        說明 = engine.崩跌模式說明(評分資料(_版本)[2])
+    except Exception:
+        說明 = ""
+    if 說明:
+        st.warning("⚠️ " + 說明 + "。")
+    return bool(說明)
+
+
 @st.cache_resource(max_entries=1, show_spinner="計算評分 3、5 日變化中…")
 def 評分累計資料(版本鍵):
     return engine.評分累計變化(指標[指標["date"] >= 指標["date"].max() - pd.Timedelta(days=20)],
