@@ -8512,7 +8512,7 @@ def 月線連跌統計(K):
     return 目前, 歷, 彙
 
 
-def 維持率警戒點位(維持率, 加權收盤, 官方=None, 警戒=(165, 150, 130)):
+def 維持率警戒點位(維持率, 加權收盤, 官方=None, 警戒=(165, 150, 135, 130)):
     """融資股票大致跟著大盤跌時，維持率要降到 165%／150%／130%，加權約要跌到幾點。
     官方＝證交所／金管會公布的整戶維持率（有填就用它當基準，網站估算只用來算比例）。
     回傳 [(警戒線, 加權約略點位, 還要跌%)]；已經低於的線不列。融資股通常跌得比大盤重，實際會更早到。"""
@@ -8570,7 +8570,7 @@ def 更新大盤融資洗盤(強制=False, 間隔天數=25):
     if 檔.exists() and not 強制:
         舊 = json.loads(檔.read_text())
         if (pd.Timestamp.now() - pd.Timestamp(舊.get("計算日", "2000-01-01"))).days < 間隔天數 and "恐慌日" in 舊 \
-                and "正2背離" in 舊:
+                and "正2背離" in 舊 and "減幅比100" in 舊:
             print("大盤融資洗盤：還不用重算")
             return
     表 = 讀取資料庫()
@@ -8583,6 +8583,7 @@ def 更新大盤融資洗盤(強制=False, 間隔天數=25):
             "分位": {f"{q:g}": round(float(變.quantile(q)), 2) for q in (0.01, 0.05, 0.1)},
             "洗盤": 融資洗盤統計(變, K, -1.5), "大洗盤": 融資洗盤統計(變, K, -2.5),
             "減幅比": 融資減幅比回測(融資減幅比序列(變, K), K),
+            "減幅比100": 融資減幅比回測(融資減幅比序列(變, K, 窗=120), K, 門檻=1.0),
             "恐慌日": 恐慌日統計(K, 變)}
     正2每日, _ = 正2融資明細(讀取資料庫(代號=list(台股正2)))
     結果["正2背離"] = 正2背離統計(變, 正2每日, K)
@@ -11306,3 +11307,186 @@ def 分批買試算(總資金, 價格, 停損價=None, 份數=(1, 2, 3)):
         摘["停損虧損"] = round(股數 * (停損價 - 均))
         摘["停損虧損%"] = round((停損價 / 均 - 1) * 100, 1)
     return pd.DataFrame(列), 摘
+
+
+# ========== 2026-11-22 盤勢文查核：歷史底部維持率、斷頭處分日、跌破年線之後、融資金額減幅 ==========
+# 過去三次大跌、國安基金進場那波的大盤融資維持率底部（各家口徑不同，列兩個來源）
+歷史底部維持率 = [
+    {"事件": "2011 歐債／美國債信危機", "底部日": "2011-12-19", "國安基金進場": "2011-12-20", "維持率%": 131.8, "另一來源%": None,
+     "說明": "FinLab 估算 131.8%（網路文章寫 131.9%）"},
+    {"事件": "2020 新冠疫情", "底部日": "2020-03-19", "國安基金進場": "2020-03-19", "維持率%": 134.8, "另一來源%": 135.73,
+     "說明": "FinLab 134.8%、TEJ 135.73%"},
+    {"事件": "2025 對等關稅", "底部日": "2025-04-09", "國安基金進場": "2025-04-08", "維持率%": 129.96, "另一來源%": 130.38,
+     "說明": "FinLab 129.96%（2009 年以來最低）、TEJ 130.38%"},
+]
+
+
+def 讀取歷史底部維持率():
+    return pd.DataFrame(歷史底部維持率)
+
+
+def 加交易日(日, n, 休市=()):
+    """從 日 往後數 n 個交易日（跳過週末與 休市 裡的日期；國定假日沒列就會算錯一天）。"""
+    休 = {pd.Timestamp(x).normalize() for x in 休市}
+    d = pd.Timestamp(日).normalize()
+    k = 0
+    while k < n:
+        d += pd.Timedelta(days=1)
+        if d.weekday() < 5 and d not in 休:
+            k += 1
+    return d
+
+
+def 斷頭處分日曆(K, 跌幅門檻=-3.0, 最近天數=10, 處分天數=3, 休市=()):
+    """融資追繳規則：收盤後整戶維持率 < 130% → 隔天（T+1）通知、通知日起 2 個營業日內補繳，補不足 T+3 起券商可以賣（斷頭）。
+    找出最近 最近天數 個交易日裡加權單日跌 ≤ 跌幅門檻% 的日子，推算對應的處分日。
+    已經過去的處分日用實際交易日，還沒到的用週一到週五往後推（休市 可給國定假日）。回傳 DataFrame。"""
+    if K is None or len(K) < 2:
+        return pd.DataFrame()
+    d = K[["date", "close"]].dropna().sort_values("date").reset_index(drop=True)
+    d["漲跌%"] = d["close"].pct_change() * 100
+    日們 = list(d["date"])
+    列們 = []
+    for i in range(max(1, len(d) - 最近天數), len(d)):
+        if d.at[i, "漲跌%"] > 跌幅門檻:
+            continue
+        if i + 處分天數 < len(d):
+            處 = 日們[i + 處分天數]
+            已 = True
+        else:
+            處 = 加交易日(日們[-1], i + 處分天數 - (len(d) - 1), 休市)
+            已 = False
+        列們.append({"大跌日": d.at[i, "date"], "加權漲跌%": round(float(d.at[i, "漲跌%"]), 2),
+                   "追繳通知": 日們[i + 1] if i + 1 < len(d) else 加交易日(日們[-1], i + 1 - (len(d) - 1), 休市),
+                   "最快處分日": 處, "狀態": "已過" if 已 else "還沒到",
+                   "處分日漲跌%": round(float(d.at[i + 處分天數, "漲跌%"]), 2) if 已 else None})
+    return pd.DataFrame(列們)
+
+
+def 處分日回測(K, 跌幅門檻=-4.0, 處分天數=3, 天數=(1, 2, 3, 4, 5)):
+    """加權單日跌 ≤ 跌幅門檻% 之後第 1～5 個交易日的平均漲跌與上漲機率，對照所有日子（看 T+3 處分日是否特別弱）。
+    K 最好接上 讀取長期指數()（2000 年起）。回傳 (DataFrame, 次數, 一般日子平均%, 一般日子上漲%)。"""
+    if K is None or len(K) < 50:
+        return pd.DataFrame(), 0, None, None
+    c = K.sort_values("date")["close"].astype(float).reset_index(drop=True)
+    r = c.pct_change() * 100
+    事 = np.where(r <= 跌幅門檻)[0]
+    列們 = []
+    for k in 天數:
+        x = np.array([r.iloc[i + k] for i in 事 if i + k < len(r)])
+        if not len(x):
+            continue
+        列們.append({"第幾天": f"T+{k}" + ("（處分日）" if k == 處分天數 else ""), "次數": int(len(x)),
+                   "平均%": round(float(x.mean()), 2), "上漲機率%": round(float((x > 0).mean() * 100))})
+    return pd.DataFrame(列們), int(len(事)), round(float(r.mean()), 2), round(float((r > 0).mean() * 100))
+
+
+def 跌破年線統計(K, 年線天數=240, 前置天數=10, 站回天數=10, 天數=(20, 60, 120, 250), 最少站回天數=20):
+    """收盤跌破年線（前 前置天數 天都在年線上）之後：多久「連續 站回天數 天收在年線上」才算站回、站回前最多再跌多少、N 日後漲跌。
+    只留「真跌破」：要 最少站回天數 個交易日以上才站回（或到今天還沒站回）；跌破一兩天就站回的假跌破不列（設 0 全列）。
+    K：日 K（最好接 讀取長期指數()）。回傳 (事件表, 今天 dict)。"""
+    if K is None or len(K) < 年線天數 + 前置天數:
+        return pd.DataFrame(), {}
+    s = K.sort_values("date").set_index("date")["close"].astype(float)
+    s = s[~s.index.duplicated()]
+    ma = s.rolling(年線天數).mean()
+    上 = (s > ma).to_numpy()
+    有 = ma.notna().to_numpy()
+    idx, v = s.index, s.to_numpy()
+    列們, i = [], 年線天數 + 前置天數
+    while i < len(s):
+        if 有[i] and not 上[i] and 上[i - 前置天數:i].all():
+            j, 回 = i, None
+            while j <= len(s) - 站回天數:
+                if 上[j:j + 站回天數].all():
+                    回 = j
+                    break
+                j += 1
+            尾 = 回 if 回 is not None else len(s) - 1
+            低 = v[i:尾 + 1].min()
+            列們.append({"跌破日": idx[i], "收盤": round(v[i]), "年線": round(float(ma.iloc[i])),
+                       "距一年高點%": round((v[i] / v[max(0, i - 250):i].max() - 1) * 100, 1),
+                       "站回日": idx[回] if 回 is not None else None, "幾個交易日站回": (回 - i) if 回 is not None else None,
+                       "站回前最多再跌%": round((低 / v[i] - 1) * 100, 1),
+                       **{f"{n}日後%": (round((v[i + n] / v[i] - 1) * 100, 1) if i + n < len(s) else None) for n in 天數}})
+            if 最少站回天數 and 回 is not None and 回 - i < 最少站回天數:
+                列們.pop()
+            i = 尾 + 1
+        else:
+            i += 1
+    今 = {"日期": idx[-1], "收盤": float(v[-1]), "年線": float(ma.iloc[-1]) if pd.notna(ma.iloc[-1]) else None}
+    if 今["年線"]:
+        今["距年線%"] = round((今["收盤"] / 今["年線"] - 1) * 100, 1)
+    return pd.DataFrame(列們), 今
+
+
+def 融資金額減幅(金額, K, 窗=120):
+    """用證交所公布的上市「融資金額」（不是張數 × 收盤）算：近 窗 日融資金額最高點到今天減了幾 %，對照加權同期間（盤中高點→今天收盤）跌幅。
+    金額：讀取融資金額()（千元）。回傳 dict 或 None。"""
+    if 金額 is None or K is None or not len(金額):
+        return None
+    m = 金額.dropna().tail(窗)
+    if len(m) < 5:
+        return None
+    k = K.set_index("date").sort_index()
+    k = k[k.index >= m.index.min()]
+    if not len(k):
+        return None
+    高日 = m.idxmax()
+    指高日 = k["high"].idxmax() if "high" in k else k["close"].idxmax()
+    指高 = float(k.loc[指高日, "high"] if "high" in k else k.loc[指高日, "close"])
+    減 = (float(m.iloc[-1]) / float(m.max()) - 1) * 100
+    跌 = (float(k["close"].iloc[-1]) / 指高 - 1) * 100
+    return {"融資高點日": 高日, "融資高點億": round(float(m.max()) / 1e5), "融資今天億": round(float(m.iloc[-1]) / 1e5),
+            "融資減幅%": round(減, 1), "指數高點日": 指高日, "指數高點": round(指高), "指數跌幅%": round(跌, 1),
+            "比例": round(減 / 跌, 2) if 跌 < -0.5 else None}
+
+
+def 槓桿追繳機率(K, 窗=250, 融資成數=0.6, 追繳線=1.3, 年費=0.01):
+    """歷史上任何一天進場，之後 窗 個交易日內「融資買進」會不會碰到 130% 追繳線（現股、融資、融資買正2 模擬比較）。
+    融資自備 1−融資成數：維持率 = 價 ÷（融資成數 × 進場價），< 追繳線 ⇔ 價 < 追繳線 × 融資成數 × 進場價（6 成融資 → 跌 22%）。
+    正2 用加權每日報酬 × 2 減年費模擬（實際 ETF 有追蹤誤差）。K：日 K（最好接 讀取長期指數()）。回傳 DataFrame。"""
+    if K is None or len(K) < 窗 * 2:
+        return pd.DataFrame()
+    v = K.sort_values("date")["close"].astype(float).to_numpy()
+    r = np.diff(v) / v[:-1]
+    正2 = np.concatenate([[1.0], np.cumprod(1 + 2 * r - 年費 / 250)])
+    門 = 追繳線 * 融資成數
+    from numpy.lib.stride_tricks import sliding_window_view as 滑
+
+    def 統計(價):
+        後低 = 滑(價[1:], 窗).min(axis=1)[: len(價) - 窗]
+        進 = 價[: len(後低)]
+        return 後低 / 進
+    列們 = []
+    for 名, 價 in (("現股買加權（不借錢）", v), ("融資買加權（自備 4 成）", v), ("融資買正2（約 5 倍曝險）", 正2)):
+        比 = 統計(價)
+        是融資 = 名.startswith("融資")
+        列們.append({"買法": 名, "樣本天數": int(len(比)),
+                   "一年內最大跌幅中位數%": round(float((np.median(比) - 1) * 100), 1),
+                   "一年內碰到追繳線%": round(float((比 < 門).mean() * 100), 1) if 是融資 else None,
+                   "碰到時自備款大約剩%": round((1 - (1 - 門) / (1 - 融資成數)) * 100) if 是融資 else None})
+    return pd.DataFrame(列們)
+
+
+def 高點回本時間(K, 高點們=None):
+    """歷次大頭部（加權價格指數，不含股息）要多久才回到高點。高點們：[(起, 迄)] 月份區間，在區間裡找最高收盤。"""
+    if K is None or not len(K):
+        return pd.DataFrame()
+    c = K.sort_values("date").set_index("date")["close"].astype(float)
+    c = c[~c.index.duplicated()]
+    高點們 = 高點們 or [("2000-01", "2000-04"), ("2007-09", "2007-11"), ("2015-03", "2015-05"), ("2018-01", "2018-02"),
+                    ("2021-12", "2022-02"), ("2024-06", "2024-08"), ("2025-01", "2025-03"), ("2026-09", "2026-10")]
+    列們 = []
+    for a, b in 高點們:
+        段 = c[a:b]
+        if not len(段):
+            continue
+        日 = 段.idxmax()
+        p = float(段.max())
+        回 = c[(c.index > 日) & (c >= p)]
+        到 = 回.index[0] if len(回) else None
+        低 = c[日:到] if 到 is not None else c[日:]
+        列們.append({"高點日": 日, "高點": round(p), "期間最大跌%": round((float(低.min()) / p - 1) * 100, 1),
+                   "回到高點": 到, "花了幾年": round((到 - 日).days / 365, 1) if 到 is not None else None})
+    return pd.DataFrame(列們)
