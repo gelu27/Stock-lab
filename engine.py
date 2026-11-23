@@ -11729,3 +11729,162 @@ def 斷頭年線摘要(K, 維持率=None, 今天=None):
         行們.append("崩跌期間外資連買的股票，之後 20 日平均輸大盤約 1～3 個百分點（多是抗跌股，反彈較慢），別只看外資連買撿股；"
                   f"網站評分已切到崩跌模式，「外資連買」加分由 +10 減半為 +{外資連買崩跌加分}")
     return 行們
+
+
+# ========== 2026-11-23 盤勢圖文查核：修復檢核表、等幅測量、向下缺口 ==========
+def _近低墊高(低, 天=5):
+    """近 天 日最低是否高於前 天 日最低（低點不再下移）。資料不足回 None。"""
+    低 = pd.Series(低).dropna()
+    if len(低) < 天 * 2:
+        return None, None, None
+    近, 前 = float(低.tail(天).min()), float(低.iloc[-天 * 2:-天].min())
+    return 近 > 前, 近, 前
+
+
+def 修復檢核表(每日, 加權K=None, 櫃買K=None, 台積電收盤=None, 天=5):
+    """盤勢圖文「什麼情況出現會改變判斷」的 7 個條件，逐項看今天亮不亮。
+    每日：市場每日() 的表（融資變化%、外資（億）、外資期貨、匯率、上漲、下跌）；加權K、櫃買K：date、low、close；台積電收盤：Series。
+    回傳 (列們=[{條件, 燈, 說明, 實測}], 總結)。🟢＝修復、🔴＝還在惡化、⚪＝資料不足。"""
+    列們 = []
+
+    def 加(條件, 亮, 說, 實測):
+        列們.append({"條件": 條件, "燈": "⚪" if 亮 is None else ("🟢" if 亮 else "🔴"), "說明": 說, "實測": 實測})
+
+    # ① 融資續減、指數不再破低
+    亮, 說 = None, "資料不足"
+    if 加權K is not None and "融資變化%" in 每日 and 每日["融資變化%"].notna().sum() >= 天:
+        融 = float(每日["融資變化%"].dropna().tail(天).sum())
+        K = 加權K.sort_values("date")
+        低 = (K["low"] if "low" in K else K["close"]).astype(float)
+        墊, 近, 前 = _近低墊高(低, 天)
+        if 墊 is not None:
+            亮 = bool(融 < 0 and 墊)
+            說 = (f"近 {天} 日融資 {融:+.1f}%（張數口徑），加權近 {天} 日低點 {近:,.0f} "
+                 f"{'高於' if 墊 else '低於'}前 {天} 日 {前:,.0f}")
+            if 融 >= 0:
+                說 += "；融資沒有在減"
+    加("① 融資續減、指數不再破低（賣壓被吸收）", 亮, 說,
+       "融資大減後 5 日「續減又不破底」2021 年來只有 2 次；「續減但放量破底」9 次之後 20 日平均 +4.8%，反而不差，多是最後一跌")
+    # ② 外資期貨空單減少
+    亮, 說 = None, "資料不足"
+    if "外資期貨" in 每日 and 每日["外資期貨"].notna().sum() > 天:
+        s = 每日["外資期貨"].dropna()
+        差 = float(s.iloc[-1] - s.iloc[-1 - 天])
+        亮, 說 = 差 > 0, f"外資台指期淨未平倉 {s.iloc[-1]:+,.0f} 口，{天} 日{'減空' if 差 > 0 else '加空'} {abs(差):,.0f} 口"
+    加("② 外資期貨空單減少", 亮, 說, "2025-09 起：單看期貨回補之後 20 日 +6.3%，不比三項同時差，「只是空方獲利了結」沒有被驗證")
+    # ③ 外資現貨賣壓收斂
+    亮, 說 = None, "資料不足"
+    if "外資" in 每日 and 每日["外資"].notna().sum() >= 天:
+        s = 每日["外資"].dropna()
+        合, 前合 = float(s.tail(天).sum()), float(s.iloc[-天 * 2:-天].sum()) if len(s) >= 天 * 2 else np.nan
+        亮 = 合 > 0 or (pd.notna(前合) and 前合 < 0 and 合 > 前合 * 0.5)
+        說 = f"外資近 {天} 日 {合:+,.0f} 億" + (f"（前 {天} 日 {前合:+,.0f} 億）" if pd.notna(前合) else "")
+    加("③ 外資現貨賣壓收斂（轉買或賣超減半）", 亮, 說, "2024-10 起：外資 5 日買超＋台幣升值的日子，20 日後 +3.8%；賣超＋貶值 +2.0%")
+    # ④ 新台幣止貶
+    亮, 說 = None, "資料不足"
+    if "匯率" in 每日 and 每日["匯率"].notna().sum() > 天:
+        s = 每日["匯率"].dropna()
+        差 = float(s.iloc[-1] - s.iloc[-1 - 天])
+        亮 = 差 < 0.05   # 5 日貶不到 5 分錢算持平
+        說 = f"美元兌台幣 {s.iloc[-1]:.3f}，{天} 日 {差:+.3f}（{'台幣升值' if 差 < 0 else ('大致持平' if 亮 else '台幣貶值')}）"
+    加("④ 新台幣止貶", 亮, 說, "同上，跟外資現貨一起看比較有意義")
+    # ⑤ 台積電先止穩
+    亮, 說 = None, "資料不足"
+    if 台積電收盤 is not None:
+        墊, 近, 前 = _近低墊高(台積電收盤.sort_index(), 天)
+        if 墊 is not None:
+            亮, 說 = 墊, f"台積電近 {天} 日最低收 {近:,.0f}，前 {天} 日 {前:,.0f}"
+    加("⑤ 台積電與權值股先止穩", 亮, 說, "2022 年來 5 次崩跌，台積電、加權、櫃買的最低點幾乎同一天（最多差 1 天），台積電「先」止穩看不出領先")
+    # ⑥ 櫃買不再破低
+    亮, 說 = None, "資料不足"
+    if 櫃買K is not None and len(櫃買K) >= 天 * 2:
+        K = 櫃買K.sort_values("date")
+        墊, 近, 前 = _近低墊高((K["low"] if "low" in K else K["close"]).astype(float), 天)
+        亮, 說 = 墊, f"櫃買近 {天} 日低點 {近:,.2f}，前 {天} 日 {前:,.2f}"
+    加("⑥ 櫃買停止破低", 亮, 說, "崩跌區只有櫃買止穩、台積電沒有，之後 20 日加權 −1.9%、櫃買 −2.5%（最差）；只有台積電止穩、櫃買沒有 +2.4%")
+    # ⑦ 上漲家數改善
+    亮, 說 = None, "資料不足"
+    if {"上漲", "下跌"} <= set(每日.columns) and len(每日) >= 天:
+        t = 每日.tail(天)
+        比 = float(t["上漲"].sum() / (t["上漲"] + t["下跌"]).sum() * 100)
+        亮, 說 = 比 > 50, f"近 {天} 日上漲家數占 {比:.0f}%"
+    加("⑦ 反彈時上漲家數同步改善", 亮, 說, "跟⑤⑥一起：崩跌區三項全部止穩之後 20 日 +2.2%，跟都沒止穩（+2.6%）差不多，等全面確認不會比較賺")
+    綠 = sum(r["燈"] == "🟢" for r in 列們)
+    有 = sum(r["燈"] != "⚪" for r in 列們)
+    if not 有:
+        總結 = "資料不足"
+    elif 綠 >= 有 - 1:
+        總結 = f"{綠}/{有} 項修復：文章說的「提高部位」條件大致到齊；但實測這組條件成立後 20 日只比崩跌區任一天多約 0.4 個百分點，回檔少約 0.7 個百分點"
+    elif 綠 <= 2:
+        總結 = f"{綠}/{有} 項修復：還在去槓桿、反彈先當反彈看"
+    else:
+        總結 = f"{綠}/{有} 項修復：部分改善，持續觀察"
+    return 列們, 總結
+
+
+def 等幅測量(K, 高點窗=60, 比例們=(0.618, 0.786, 1.0, 1.272)):
+    """A-B-C 等幅測量：近 高點窗 日最高點 H → 之後第一段低點 L1（第一段跌幅 A＝H−L1）→ 反彈高點 B → 第二段 C＝B − A×比例。
+    K：date、high、low、close。L1 取 H 之後到 B 之前的最低；B 取 L1 之後最高、且要在最新低點之前。條件不成立回 None。"""
+    if K is None or len(K) < 20:
+        return None
+    K = K.sort_values("date").reset_index(drop=True).tail(高點窗).reset_index(drop=True)
+    高 = (K["high"] if "high" in K else K["close"]).astype(float)
+    低 = (K["low"] if "low" in K else K["close"]).astype(float)
+    h = int(高.idxmax())
+    後低 = 低.iloc[h + 1:]
+    if len(後低) < 5:
+        return None
+    最新低位 = int(後低.idxmin())
+    # 在 H 到最新低點之間，找「反彈幅度最大」的 L1→B
+    最好 = None
+    for l1 in range(h + 1, 最新低位):
+        b段 = 高.iloc[l1 + 1:最新低位]
+        if not len(b段):
+            continue
+        b = int(b段.idxmax())
+        if 低.iloc[l1] != 低.iloc[h + 1:b + 1].min():
+            continue
+        幅 = 高.iloc[b] / 低.iloc[l1] - 1
+        if 最好 is None or 幅 > 最好[2]:
+            最好 = (l1, b, 幅)
+    if 最好 is None or 最好[2] < 0.03:
+        return None
+    l1, b, _ = 最好
+    H, L1, B = float(高.iloc[h]), float(低.iloc[l1]), float(高.iloc[b])
+    A = H - L1
+    收 = float(K["close"].iloc[-1])
+    目標 = [{"比例": r, "點位": round(B - A * r), "距收盤%": round((B - A * r) / 收 * 100 - 100, 1),
+           "已到": bool(float(低.iloc[b:].min()) <= B - A * r)} for r in 比例們]
+    日 = lambda i: pd.Timestamp(K["date"].iloc[i])
+    return {"H": H, "H日": 日(h), "L1": L1, "L1日": 日(l1), "B": B, "B日": 日(b), "A": round(A),
+            "最新低": float(低.iloc[最新低位]), "最新低日": 日(最新低位), "收盤": 收, "目標": 目標}
+
+
+def 向下缺口(K, 天數=20):
+    """近 天數 日還沒回補的向下跳空缺口：當天最高 < 前一天最低。回傳 [{日期, 缺口上緣, 缺口下緣, 距收盤%}]，由近到遠。"""
+    if K is None or len(K) < 3 or "high" not in K or "low" not in K:
+        return []
+    K = K.sort_values("date").reset_index(drop=True)
+    收 = float(K["close"].iloc[-1])
+    出 = []
+    for i in range(max(1, len(K) - 天數), len(K)):
+        上, 下 = float(K["low"].iloc[i - 1]), float(K["high"].iloc[i])
+        if 下 < 上:
+            之後高 = float(K["high"].iloc[i + 1:].max()) if i + 1 < len(K) else -np.inf
+            if 之後高 < 上:   # 還沒完全回補
+                出.append({"日期": pd.Timestamp(K["date"].iloc[i]), "缺口上緣": round(上), "缺口下緣": round(max(下, 之後高)),
+                          "距收盤%": round(上 / 收 * 100 - 100, 1)})
+    return 出[::-1]
+
+
+def 前波低點(K, 窗=20, 天數=250, 檔數=4):
+    """近 天數 日的轉折低點（左右各 窗 日內最低），由近到遠，最多 檔數 個；最新一段（右邊不足 窗 日）不算。回傳 [(日期, 低點)]。"""
+    if K is None or len(K) < 窗 * 2 + 1:
+        return []
+    K = K.sort_values("date").reset_index(drop=True).tail(天數).reset_index(drop=True)
+    低 = (K["low"] if "low" in K else K["close"]).astype(float)
+    出 = []
+    for i in range(窗, len(K) - 窗):
+        if 低.iloc[i] == 低.iloc[i - 窗:i + 窗 + 1].min():
+            出.append((pd.Timestamp(K["date"].iloc[i]), float(低.iloc[i])))
+    return 出[::-1][:檔數]
