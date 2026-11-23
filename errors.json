@@ -61,13 +61,13 @@
  },
  "60fb5b3f24": {
   "首次": "2026-11-19 15:29",
-  "次數": 11,
-  "最近": "2026-11-21 03:26",
+  "次數": 12,
+  "最近": "2026-11-23 15:44",
   "頁面": "01 / 市場總覽 價位:估值週線",
   "類型": "TypeError",
   "訊息": "Can only string multiply by an integer.",
   "位置": "array.py:1423",
-  "追蹤": "File \"/mount/src/stock-lab/views/p01_market.py\", line 1334, in 關鍵價位區\n  函()\nFile \"/mount/src/stock-lab/views/p01_market.py\", line 1332, in <lambda>\n  (\"估值週線\", lambda: 估值週線區(K)), (\"預估估值\", lambda: 預估估值區(K))):\nFile \"/mount/src/stock-lab/views/p01_market.py\", line 1369, in 估值週線區\n  本 = 大盤本益比資料(_版本)\nFile \"/mount/src/stock-lab/views/p01_market.py\", line 1364, in 大盤本益比資料\n  return engine.大盤本益比(天數=60)\nFile \"/mount/src/stock-lab/engine.py\", line 8368, in 大盤本益比\n  _本益比快取[鍵] = _大盤本益比(天數)\nFile \"/mount/src/stock-lab/engine.py\", line 8410, in _大盤本益比\n  列們.append({\"date\": pd.to_datetime(f.name[:8]), **算(t)})\nFile \"/mount/src/stock-lab/engine.py\", line 8386, in 算\n  市 = t[\"close\"] * t[\"code\"].map(股)\nFile \"pandas/_libs/ops_dispatch.pyx\", line 113, in pandas._libs.ops_dispatch.maybe_dispatch_ufunc_to_dunder_op\n  File \"/home/adminuser/venv/lib/python3.14/site-packages/pandas/core/ops/common.py\", line 140, in new_method\n...\n    result = self._evaluate_op_method(other, op, ARROW_ARITHMETIC_FUNCS)\n  File \"/home/adminuser/venv/lib/python3.14/site-packages/pandas/core/arrays/arrow/array.py\", line 1423, in _evaluate_op_method\n    raise TypeError(\"Can only string multiply by an integer.\")\nTypeError: Can only string multiply by an integer."
+  "追蹤": "File \"/mount/src/stock-lab/views/p01_market.py\", line 1602, in 關鍵價位區\n  函()\nFile \"/mount/src/stock-lab/views/p01_market.py\", line 1600, in <lambda>\n  (\"估值週線\", lambda: 估值週線區(K)), (\"預估估值\", lambda: 預估估值區(K))):\nFile \"/mount/src/stock-lab/views/p01_market.py\", line 1637, in 估值週線區\n  本 = 大盤本益比資料(_版本)\nFile \"/mount/src/stock-lab/views/p01_market.py\", line 1632, in 大盤本益比資料\n  return engine.大盤本益比(天數=60)\nFile \"/mount/src/stock-lab/engine.py\", line 8511, in 大盤本益比\n  _本益比快取[鍵] = _大盤本益比(天數)\nFile \"/mount/src/stock-lab/engine.py\", line 8555, in _大盤本益比\n  列們.append({\"date\": pd.to_datetime(f.name[:8]), **算(t)})\nFile \"/mount/src/stock-lab/engine.py\", line 8531, in 算\n  市 = t[\"close\"] * t[\"code\"].map(股)\nFile \"pandas/_libs/ops_dispatch.pyx\", line 113, in pandas._libs.ops_dispatch.maybe_dispatch_ufunc_to_dunder_op\n  File \"/home/adminuser/venv/lib/python3.14/site-packages/pandas/core/ops/common.py\", line 140, in new_method\n...\n    result = self._evaluate_op_method(other, op, ARROW_ARITHMETIC_FUNCS)\n  File \"/home/adminuser/venv/lib/python3.14/site-packages/pandas/core/arrays/arrow/array.py\", line 1423, in _evaluate_op_method\n    raise TypeError(\"Can only string multiply by an integer.\")\nTypeError: Can only string multiply by an integer."
  },
  "9ee2d04a0b": {
   "首次": "2026-11-19 15:29",
