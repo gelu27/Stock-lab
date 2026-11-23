@@ -8502,6 +8502,11 @@ def 外部觀點摘要(設定, 指標=None, 名表=None):
 _本益比快取 = {}
 
 
+def _轉浮點(s):
+    """任何型別（字串、Arrow 字串、object）→ float64；轉不了的變 NaN。避免「字串乘數字」錯誤。"""
+    return pd.to_numeric(pd.Series(s).astype(object), errors="coerce").astype("float64")
+
+
 def 大盤本益比(天數=None):
     """同一天的資料只算一次（讀 5 年月檔約 7 秒）。"""
     最新 = max((f.name for f in (資料夾 / "prices").glob("*/*.csv.gz")), default="")
@@ -8523,12 +8528,13 @@ def _大盤本益比(天數=None):
         return pd.DataFrame(columns=欄們)
     產業 = 股.set_index("code")["industry"] if "industry" in 股.columns else pd.Series(dtype=str)
     # 雲端主機（Python 3.14）11/17 起偶發「字串乘數字」錯誤：股數、收盤、本益比一律轉成數字
-    股 = pd.to_numeric(股.drop_duplicates("code").set_index("code")["shares"], errors="coerce")
+    # 再用 astype(float64) 強制轉成 numpy 浮點數（pandas 3 的 Arrow 字串欄位 to_numeric 後仍可能不是純數字欄）
+    股 = pd.to_numeric(股.drop_duplicates("code").set_index("code")["shares"], errors="coerce").astype("float64")
 
     def 算(t):
-        t = t.assign(close=pd.to_numeric(t["close"], errors="coerce"), pe=pd.to_numeric(t["pe"], errors="coerce"))
+        t = t.assign(close=_轉浮點(t["close"]), pe=_轉浮點(t["pe"]))
         t = t[(t["market"] == "上市") & t["code"].isin(股.index) & (t["pe"] > 0)]
-        市 = t["close"] * t["code"].map(股)
+        市 = t["close"] * _轉浮點(t["code"].map(股))
         if len(t) <= 100:
             return {"本益比": np.nan}
         大 = float(市.sum() / (市 / t["pe"]).sum())
@@ -9979,11 +9985,12 @@ def 大盤預估本益比(今日, 龍頭="2330", 下修們=(0.9, 0.8)):
             & (今日["發行股數"] > 0)].copy()
     if t.empty:
         return None
+    t["收盤"], t["發行股數"] = _轉浮點(t["收盤"]).to_numpy(), _轉浮點(t["發行股數"]).to_numpy()
     t["市值"] = t["收盤"] * t["發行股數"]
     總市值 = t["市值"].sum()
     結果 = {"龍頭": 龍頭, "龍頭權重%": round(float(t.loc[t["代號"] == 龍頭, "市值"].sum() / 總市值 * 100), 1)}
     for 欄, 名 in (("預估EPS今年", "今年"), ("預估EPS明年", "明年")):
-        e = pd.to_numeric(t[欄], errors="coerce")
+        e = _轉浮點(t[欄]).set_axis(t.index)
         有 = e > 0
         if 有.sum() < 100:
             continue
