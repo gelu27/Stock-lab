@@ -1,16 +1,9 @@
 name: 更新資料庫
 
 on:
-  # GitHub 排程在整點最擁擠、常延遲或漏跑，所以錯開整點，再加一個備援時間；
-  # 備援那次如果今天 18:00 後已經更新過就自動跳過，不會重複傳 LINE
   schedule:
-    - cron: "17 10 * * 1-5"  # 週一到週五 台灣時間 18:17
-    - cron: "43 11 * * 1-5"  # 19:43 備援
+    - cron: "0 10 * * 1-5"   # 週一到週五 台灣時間 18:00
   workflow_dispatch:          # 可以在 Actions 頁面手動按 Run workflow
-    inputs:
-      auto:
-        description: "true＝當成自動排程（今天已更新過就跳過）；外部定時服務請帶 true"
-        default: "false"
 
 permissions:
   contents: write
@@ -18,78 +11,16 @@ permissions:
 concurrency: data-update
 
 jobs:
-  gate:
-    runs-on: ubuntu-latest
-    outputs:
-      skip: ${{ steps.check.outputs.skip }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          sparse-checkout: data/updated.txt
-          sparse-checkout-cone-mode: false
-      - id: check
-        name: 今天 18:00 後已經更新過就跳過（只限自動排程）
-        run: |
-          TODAY=$(TZ=Asia/Taipei date '+%Y/%m/%d')
-          LAST=$(cat data/updated.txt 2>/dev/null || echo "")
-          echo "上次更新：$LAST"
-          if [ "$AUTO" = "1" ] && [ "${LAST:0:10}" = "$TODAY" ] && [ "${LAST:11:2}" \> "17" ]; then
-            echo "今天已經更新過，略過"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          fi
-        env:
-          AUTO: ${{ (github.event_name == 'schedule' || github.event.inputs.auto == 'true') && '1' || '0' }}
-
   update:
-    needs: gate
-    if: needs.gate.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 340
-    env:
-      LINE_OUTBOX: /tmp/line_outbox.json   # 收盤摘要、收盤解讀、健康檢查先放這裡，最後一步合成 1 則推播（省 LINE 額度）
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install pandas requests pyarrow
-      - id: update
-        run: python update_data.py --years 5 --max-minutes 320
-      - name: 整併過完的月份成 parquet（網站讀得快、省記憶體）
-        if: always()
-        run: |
-          python -c "import engine; engine.整併月檔()"
-          TZ=Asia/Taipei date '+%Y/%m/%d %H:%M' > data/updated.txt
-      - name: 本益比 5 年位階（清單「估值」、個股估值刻度用，約 5 秒）
-        continue-on-error: true
-        run: python -c "import glance; glance.更新本益比位階()"
-      - name: 評分歷史驗證（約每月重算一次）
-        continue-on-error: true
-        run: python -c "import engine; engine.更新評分回測()"
-      - name: 講義規則實測（約每月重算一次）
-        continue-on-error: true
-        run: python -c "import engine; engine.更新規則實測()"
-      - name: 順勢做多訊號回測（約每月重算一次）
-        continue-on-error: true
-        run: python -c "import momentum; momentum.更新全市場回測()"
-      - name: 合約負債全市場驗證（約每月重算一次）
-        continue-on-error: true
-        run: python -c "import engine; engine.更新合約負債驗證()"
-      - name: 大盤融資洗盤日回測（約每月重算一次）
-        continue-on-error: true
-        run: python -c "import engine; engine.更新大盤融資洗盤()"
-      - name: 年線與反彈尺全市場統計（約每月重算一次）
-        continue-on-error: true
-        run: python -c "import engine; engine.更新價位統計()"
-      - name: 規則體檢（約每月一次，看燈號與訊號有沒有失效）
-        continue-on-error: true
-        run: python -c "import feedback; feedback.更新規則體檢()"
-      - name: 回饋統計（AI 錯誤本、券商與網紅記分板、資料累積進度、LINE 額度）
-        continue-on-error: true
-        run: python -c "import feedback; feedback.更新回饋統計()"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
+      - run: pip install pandas requests
+      - run: python update_data.py --years 5 --max-minutes 320
       - name: 存回 GitHub
         if: always()
         run: |
@@ -97,47 +28,5 @@ jobs:
           git config user.email "stock-bot@users.noreply.github.com"
           git add -A data
           git diff --cached --quiet || git commit -m "更新資料庫 $(date +%F)"
-          # GitHub 偶爾回 500 Internal Server Error，失敗就等一下重試，免得整天的資料白抓
-          for i in 1 2 3 4 5; do
-            git pull --rebase origin main && git push && exit 0
-            echo "推送失敗，第 $i 次，$((i * 15)) 秒後重試"
-            sleep $((i * 15))
-          done
-          exit 1
-      - name: LINE 收盤摘要
-        continue-on-error: true
-        run: python notify.py daily
-        env:
-          LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
-          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
-          HOLDINGS: ${{ secrets.HOLDINGS }}
-          SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: AI 收盤解讀（有設定 GEMINI_API_KEY 才會執行）
-        continue-on-error: true
-        run: |
-          pip install -q anthropic
-          python notify.py brief 收盤
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
-          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: 資料來源健康檢查（有問題才 LINE 通知）
-        if: always()
-        continue-on-error: true
-        run: python notify.py health
-        env:
-          UPDATE_OUTCOME: ${{ steps.update.outcome }}
-          LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
-          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 記下哪些網站錯誤已通知過，避免每天重複推播
-      - name: LINE 合併送出（收盤摘要＋收盤解讀＋健康檢查，一次推播只算 1 則）
-        if: always()
-        continue-on-error: true
-        run: python notify.py flush
-        env:
-          LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
-          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          git pull --rebase origin main
+          git push

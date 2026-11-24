@@ -2,169 +2,22 @@
 # 執行方式：streamlit run app.py
 
 import datetime as dt
-import hashlib
 import hmac
-import html
 import io
-import json
-import os
-import re
-import threading
-import time
-import urllib.parse
-from pathlib import Path
 
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from pandas.io.formats.style import Styler
 import streamlit as st
 
 import importlib
 
-# 雲端主機的時鐘是 UTC：台灣 00:00～08:00 時「今天」會變成昨天（交易日記預設日期、除權息預告、近 N 天篩選都會錯一天）。
-# 整個網站一律用台灣時間，pd.Timestamp.now()、dt.date.today() 拿到的就是台灣的現在。
-os.environ["TZ"] = "Asia/Taipei"
-if hasattr(time, "tzset"):
-    time.tzset()
-
-import portfolio
 import engine
-import etf_data
-import etf_analysis
-import etf_perf
-import lab1118
-import macro
-import momentum
-import beginner
-import ai_debate
-import feedback
-import glance
-import lab1118
-import lab1120
 
-@st.cache_resource
-def _模組時間():
-    return {}
+importlib.reload(engine)  # 程式更新後確保用的是最新版的計算規則
 
-
-def _已改(模組):
-    """模組檔案有改過（部署新版）才重新載入；以前每次重跑都重載 10 個模組，背景執行緒可能拿到半新半舊的版本。"""
-    try:
-        t = Path(模組.__file__).stat().st_mtime
-    except Exception:
-        return True
-    紀 = _模組時間()
-    if 紀.get(模組.__name__) == t:
-        return False
-    紀[模組.__name__] = t
-    return True
-
-
-_拆出改了 = _已改(portfolio)
-if _拆出改了:
-    importlib.reload(portfolio)  # engine 拆出的模組先重載，engine 再重載才會拿到新版
-if _已改(engine) or _拆出改了:
-    importlib.reload(engine)
-if _已改(etf_data):
-    importlib.reload(etf_data)  # 程式更新後確保用的是最新版的計算規則
-if _已改(etf_analysis):
-    importlib.reload(etf_analysis)
-if _已改(etf_perf):
-    importlib.reload(etf_perf)
-if _已改(momentum):
-    importlib.reload(momentum)  # 順勢做多選股引擎
-if _已改(beginner):
-    importlib.reload(beginner)  # 新手白話：名詞小卡、白話燈號
-if _已改(ai_debate):
-    importlib.reload(ai_debate)  # AI 多空辯論、數字查核
-if _已改(lab1118):
-    importlib.reload(lab1118)  # 國安跟買驗證等 11/18 研究函式
-if _已改(macro):
-    importlib.reload(macro)  # 01 首頁總經／資金用；沒重新載入時，部署新版後會沿用舊版 macro 而找不到新函式
-if _已改(feedback):
-    importlib.reload(feedback)  # 回饋循環：錯誤本、券商與網紅記分板、規則體檢
-if _已改(glance):
-    importlib.reload(glance)  # 一眼判斷：清單表情徽章、估值位階、重點卡三格、風險框、檢查表
-if _已改(lab1118):
-    importlib.reload(lab1118)  # 11/18 補強（首頁、個股、選股用）
-if _已改(lab1120):
-    importlib.reload(lab1120)  # 11/20 補強（台指 VIX、四象限、ODM 存貨等）
-
-_圖示 = Path(__file__).parent / "static" / "icon-192.png"
-st.set_page_config(page_title="台股觀測站", page_icon=str(_圖示) if _圖示.exists() else "◢", layout="wide")
-if not st.session_state.get("_主畫面圖示"):
-    st.session_state["_主畫面圖示"] = True
-    # 手機「加入主畫面」用的圖示與名稱（Streamlit 沒辦法直接改 <head>，用小段程式加到上層頁面）
-    st.iframe("""<script>
-    try {
-      const app = window.parent, top = (() => { try { return window.top.document ? window.top : app; } catch (e) { return app; } })();
-      const d = top.document, h = d.head;
-      const b = new URL("app/static/", app.location.href.split("?")[0].replace(/[^/]*$/, "")).href;
-      // 先拿掉平台原本的圖示與 manifest，避免手機抓到舊圖示
-      d.querySelectorAll('link[rel~="icon"], link[rel="apple-touch-icon"], link[rel="manifest"], link[rel="shortcut icon"]').forEach((e) => e.remove());
-      const link = (rel, href, sizes) => { const e = d.createElement("link"); e.rel = rel; e.href = href + "?v=2"; if (sizes) e.sizes = sizes; h.appendChild(e); };
-      const meta = (name, content) => { const e = d.createElement("meta"); e.name = name; e.content = content; h.appendChild(e); };
-      link("apple-touch-icon", b + "icon-180.png", "180x180");
-      link("icon", b + "icon-192.png", "192x192");
-      link("icon", b + "icon-32.png", "32x32");
-      d.title = "台股觀測站";
-      meta("apple-mobile-web-app-title", "台股觀測");
-      meta("apple-mobile-web-app-capable", "yes");
-      meta("theme-color", "#000000");
-      const m = {name: "台股觀測站", short_name: "台股觀測", start_url: top.location.href, display: "standalone",
-                 background_color: "#000000", theme_color: "#000000",
-                 icons: [{src: b + "icon-192.png", sizes: "192x192", type: "image/png", purpose: "any maskable"},
-                         {src: b + "icon-512.png", sizes: "512x512", type: "image/png", purpose: "any maskable"}]};
-      const e2 = d.createElement("link"); e2.rel = "manifest"; e2.href = URL.createObjectURL(new Blob([JSON.stringify(m)], {type: "application/manifest+json"})); h.appendChild(e2);
-    } catch (e) {}
-    </script>""", height=1)
-
-# ---------- 所有圖表統一包一層：手機關掉拖曳／縮放；日期軸、數字改成中文習慣 ----------
-if not hasattr(st, "_原始plotly"):  # 只記一次原本的 st.plotly_chart；之後每次重跑都換上最新版的包裝
-    st._原始plotly = getattr(st.plotly_chart, "_原圖表", st.plotly_chart)
-_原圖表 = st._原始plotly
-_日期格式 = [dict(dtickrange=[None, 86400000], value="%m/%d %H:%M"), dict(dtickrange=[86400000, 604800001], value="%m/%d"),
-           dict(dtickrange=[604800001, "M12"], value="%Y/%m"), dict(dtickrange=["M12", None], value="%Y")]
-
-
-def _是日期軸(圖):
-    for t in 圖.data[:3]:
-        x = getattr(t, "x", None)
-        if x is not None and len(x):
-            v = x[0]
-            if isinstance(v, (dt.date, pd.Timestamp, np.datetime64)):
-                return True
-            if isinstance(v, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}.*", v):
-                return True
-    return False
-
-
-def _圖表(圖=None, *a, **k):
-    if 圖 is not None and hasattr(圖, "update_layout"):
-        try:  # 日期軸用 11/13、2026/07；數字不用 50k 這種英文縮寫
-            if _是日期軸(圖):
-                圖.update_xaxes(tickformatstops=_日期格式, hoverformat="%Y/%m/%d", selector=lambda a: not a.tickformat)
-            圖.update_yaxes(exponentformat="none", selector=lambda a: not a.tickformat)
-        except Exception:
-            pass
-    if st.session_state.get("手機模式") and 圖 is not None and hasattr(圖, "update_layout"):
-        try:
-            圖.update_layout(dragmode=False)
-            圖.update_xaxes(fixedrange=True)
-            圖.update_yaxes(fixedrange=True)
-            圖.update_traces(arrangement="fixed", selector=dict(type="sankey"))  # 桑基圖節點不能被拖走
-        except Exception:
-            pass
-        設定 = dict(k.get("config") or {})
-        設定.update(scrollZoom=False, displayModeBar=False, doubleClick=False)
-        k["config"] = 設定
-    return _原圖表(圖, *a, **k)
-
-
-_圖表._原圖表 = _原圖表
-st.plotly_chart = _圖表
+st.set_page_config(page_title="TW//STOCK LAB", page_icon="◢", layout="wide")
 
 # ---------- 外觀：黑底前衛風格 ----------
 青 = "#00E5FF"
@@ -187,21 +40,11 @@ h1, h2, h3 {{ font-family: 'Space Grotesk', 'Noto Sans TC', sans-serif !importan
 .hero .kicker {{ font-family: 'JetBrains Mono'; color: {青}; font-size: 12px; letter-spacing: .3em; }}
 .hero .title {{ font-size: clamp(34px, 6vw, 72px); font-weight: 900; line-height: .95; margin: 8px 0 6px; }}
 .hero .title span {{ color: {青}; }}
-.hero .sub {{ font-family: 'JetBrains Mono'; color: {灰}; font-size: 12px; margin-top: 8px; }}
-@media (min-width: 769px) {{  /* 桌面首屏：標題壓成一行，下面的指數卡和走勢圖往上提 */
-  .hero {{ display: flex; align-items: baseline; flex-wrap: wrap; column-gap: 20px; row-gap: 2px; padding: 14px 22px 12px; margin-bottom: 12px; }}
-  .hero .title {{ font-size: clamp(30px, 3.2vw, 44px); margin: 0; order: -1; }}
-  .hero .sub {{ margin-top: 0; flex-basis: 100%; }}
-}}
+.hero .sub {{ font-family: 'JetBrains Mono'; color: {灰}; font-size: 12px; }}
 .card {{ border: 1px solid #1E1E1E; padding: 14px 16px; background: #070707; height: 100%; }}
 .card .k {{ font-family: 'JetBrains Mono'; font-size: 11px; color: {灰}; letter-spacing: .2em; text-transform: uppercase; }}
 .card .v {{ font-family: 'JetBrains Mono'; font-size: 28px; font-weight: 700; margin-top: 4px; }}
 .card .d {{ font-family: 'JetBrains Mono'; font-size: 12px; margin-top: 2px; }}
-.card {{ transition: border-color .15s, background .15s; }}
-a.cardlink {{ display: block; height: 100%; text-decoration: none !important; color: inherit !important; }}
-a.cardlink .card {{ cursor: pointer; }}
-a.cardlink .card .k::after {{ content: " ›"; color: {青}; letter-spacing: 0; }}
-a.cardlink:hover .card, a.cardlink:active .card {{ border-color: {青}; background: #0B1214; }}
 .sec {{ font-family: 'JetBrains Mono'; color: {青}; font-size: 12px; letter-spacing: .3em; margin: 22px 0 6px;
     border-bottom: 1px solid #1E1E1E; padding-bottom: 6px; }}
 .stTabs [data-baseweb="tab-list"] {{ gap: 0; border-bottom: 1px solid #1E1E1E; }}
@@ -209,11 +52,6 @@ a.cardlink:hover .card, a.cardlink:active .card {{ border-color: {青}; backgrou
 .stButton > button, .stDownloadButton > button {{ border-radius: 0; border: 1px solid {青}; color: {青};
     background: transparent; font-family: 'JetBrains Mono'; letter-spacing: .15em; }}
 .stButton > button:hover {{ background: {青}; color: #000; }}
-.grid2 {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 4px; }}
-.grid2 .card .v {{ font-size: clamp(18px, 5vw, 28px); }}
-.grid2 .card .k {{ font-size: clamp(9px, 2.4vw, 11px); letter-spacing: .1em; }}
-.grid2 .card .d {{ font-size: clamp(10px, 2.6vw, 12px); }}
-.grid2 .card {{ padding: 10px 10px; }}
 .grid3 {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }}
 .grid3 .card .v {{ font-size: clamp(17px, 4.6vw, 28px); }}
 .grid3 .card .k {{ font-size: clamp(9px, 2.4vw, 11px); letter-spacing: .1em; }}
@@ -221,9 +59,7 @@ a.cardlink:hover .card, a.cardlink:active .card {{ border-color: {青}; backgrou
 .grid3 .card {{ padding: 10px 10px; }}
 .rankwrap {{ overflow-x: auto; }}
 @media (max-width: 480px) {{ .rank td, .rank td.n {{ font-size: 14px; padding: 8px 6px; }} .rank th {{ padding: 8px 6px; }}
-    .rank td:nth-child(5), .rank th:nth-child(5) {{ display: none; }} }}
-.rank td.n em.why {{ display: block; font-style: normal; font-size: 11px; color: #8A8A8A; margin-top: 1px; white-space: normal; line-height: 1.3; }}
-.rank td.sp {{ padding: 4px 6px; text-align: center; }}
+    .rank td.n small, .rank td:nth-child(5), .rank th:nth-child(5) {{ display: none; }} }}
 .rank {{ width: 100%; border-collapse: collapse; font-family: 'Noto Sans TC', sans-serif; }}
 .rank th {{ background: #141414; color: #9A9A9A; font-weight: 400; padding: 8px 10px; text-align: right;
     font-size: 14px; }}
@@ -231,456 +67,44 @@ a.cardlink:hover .card, a.cardlink:active .card {{ border-color: {青}; backgrou
 .rank td {{ padding: 9px 10px; border-bottom: 1px solid #1E1E1E; text-align: right;
     font-family: 'JetBrains Mono', monospace; font-size: 16px; }}
 .rank td.n {{ font-family: 'Noto Sans TC', sans-serif; color: #EDEDED; font-size: 16px; white-space: nowrap; }}
-.rank td.n small {{ color: {灰}; font-size: 12px; margin-right: 5px; font-family: 'JetBrains Mono'; }}
+.rank td.n small {{ color: {灰}; font-size: 11px; margin-left: 4px; font-family: 'JetBrains Mono'; }}
 .rank td.n a {{ color: inherit; text-decoration: none; }}
-.rank td.t {{ color: #EDEDED; white-space: nowrap; font-size: 13px; }}
-.rank td.t small {{ color: {灰}; margin-left: 4px; font-size: 11px; }}
-.ticker {{ overflow: hidden; white-space: nowrap; border-top: 1px solid #1E1E1E; border-bottom: 1px solid #1E1E1E;
-    margin: -6px 0 14px; padding: 6px 0; }}
-.ticker .tr {{ display: inline-block; animation: tk 70s linear infinite; }}
-.ticker:hover .tr, .ticker:active .tr {{ animation-play-state: paused; }}
-.ticker span {{ font-family: 'JetBrains Mono', 'Noto Sans TC', monospace; font-size: 13px; margin-right: 30px; }}
-.skel {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; margin: 8px 0 16px; }}
-.skel .sk {{ height: 88px; border-radius: 12px; border: 1px solid #12232A;
-    background: linear-gradient(90deg, #070D10 0%, #0E1C22 40%, #070D10 80%) 0 0 / 300% 100%; animation: skel 1.4s ease-in-out infinite; }}
-.skel-note {{ color: #7FE9FF; font-family: 'Noto Sans TC', sans-serif; font-size: 15px; margin-top: 6px; }}
-@keyframes skel {{ 0% {{ background-position: 100% 0; }} 100% {{ background-position: 0 0; }} }}
-.ticker span b {{ color: #9A9A9A; font-weight: 400; margin-right: 6px; font-family: 'Noto Sans TC', sans-serif; }}
-@keyframes tk {{ from {{ transform: translateX(0); }} to {{ transform: translateX(-50%); }} }}
-/* 美化：段落標題加菱形記號、卡片上緣漸層、排行表滑過整列變亮、捲軸變細 */
-.sec::before {{ content: ""; display: inline-block; width: 7px; height: 7px; background: {青}; transform: rotate(45deg);
-    margin: 0 10px 1px 2px; box-shadow: 0 0 6px {青}; }}
-.card {{ background: linear-gradient(180deg, #0B0B0B 0%, #060606 100%); position: relative; }}
-.card::before {{ content: ""; position: absolute; left: 0; top: 0; right: 0; height: 1px;
-    background: linear-gradient(90deg, {青}55, transparent 70%); }}
-.rank tr:hover td {{ background: #0B1416; }}
-.rank tr:nth-child(even) td {{ background-color: #050505; }}
-::-webkit-scrollbar {{ width: 6px; height: 6px; }} ::-webkit-scrollbar-thumb {{ background: #2A2A2A; }}
-[data-testid="stExpander"] summary:hover {{ color: {青}; }}
-.stTabs [aria-selected="true"] {{ color: {青} !important; }}
-/* 全站一致：直角、提示框、表頭不換行 */
-.stMain {{ scroll-behavior: smooth; }}
-[data-testid="stExpander"] details, [data-testid="stPopoverBody"], [data-baseweb="select"] > div,
-[data-testid="stTextInput"] input, [data-testid="stNumberInput"] input {{ border-radius: 0 !important; }}
-[data-testid="stExpander"] details {{ border-color: #1E1E1E; background: #050505; }}
-[data-testid="stAlert"] > div {{ border-radius: 0; }}
-[data-testid="stAlertContainer"] {{ border-radius: 0; background: #0A0A0A; border-left: 3px solid {青}; }}
-.rank th {{ white-space: nowrap; }}
-[data-testid="stCaptionContainer"] {{ color: #8A8A8A; }}
-/* 第五批美化：框線容器、表格、分頁在手機可左右滑、隱藏 0 高度元件的空白 */
-[data-testid="stVerticalBlockBorderWrapper"] {{ border-radius: 0 !important; border-color: #1E1E1E !important;
-    background: linear-gradient(180deg, #080808 0%, #040404 100%); transition: border-color .15s; }}
-[data-testid="stVerticalBlockBorderWrapper"]:hover {{ border-color: #2E3F42 !important; }}
-[data-testid="stDataFrame"] {{ border: 1px solid #1A1A1A; }}
-.stTabs [data-baseweb="tab-list"] {{ overflow-x: auto; scrollbar-width: none; }}
-.stTabs [data-baseweb="tab-list"]::-webkit-scrollbar {{ display: none; }}
-.stTabs [data-baseweb="tab"] {{ white-space: nowrap; }}
-[data-testid="stAlertContainer"]:has([data-testid="stAlertContentWarning"]) {{ border-left-color: #FFC24B; }}
-[data-testid="stAlertContainer"]:has([data-testid="stAlertContentError"]) {{ border-left-color: {紅}; }}
-[data-testid="stAlertContainer"]:has([data-testid="stAlertContentSuccess"]) {{ border-left-color: {綠}; }}
-[data-testid="stElementContainer"]:has(iframe[srcdoc*="apple-touch-icon"]) {{ display: none; }}
-[data-testid="stMetricValue"] {{ font-family: 'JetBrains Mono'; }}
-@media (max-width: 640px) {{ .stTabs [data-baseweb="tab"] {{ padding: 8px 12px; letter-spacing: .05em; }}
-    .sec {{ letter-spacing: .15em; margin-top: 18px; }} }}
-/* 首頁快速跳轉列與回到頂端 */
-.jump {{ display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }}
-.jump a {{ font-family: 'Noto Sans TC', sans-serif; font-size: 13px; color: #BDBDBD; text-decoration: none;
-    border: 1px solid #1E1E1E; padding: 3px 10px; background: #070707; }}
-.jump a:hover {{ border-color: {青}; color: {青}; }}
-.anchor {{ position: relative; top: -70px; height: 0; }}
-[data-testid="stElementContainer"]:has(.anchor) {{ margin-bottom: -1rem; }}
-.fab {{ position: fixed; right: 14px; bottom: 18px; z-index: 999; display: flex; flex-direction: column; gap: 10px; }}
-.fab a {{ width: 46px; height: 46px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
-    background: rgba(4,16,20,.82); border: 1px solid rgba(0,229,255,.55); color: {青} !important; text-decoration: none !important;
-    box-shadow: 0 0 14px rgba(0,229,255,.28), inset 0 0 10px rgba(0,229,255,.12); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }}
-.fab a svg {{ width: 22px; height: 22px; }}
-.fab a:hover, .fab a:active {{ background: {青}; color: #000 !important; }}
-/* 關鍵價位：燈號卡、價位條 */
-.lamps {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 6px 0; }}
-.lamp {{ border: 1px solid #1E1E1E; background: #070707; padding: 10px 12px; }}
-.lamp .t {{ font-family: 'Noto Sans TC', sans-serif; font-size: 14px; color: #EDEDED; font-weight: 700; }}
-.lamp .t i {{ font-style: normal; margin-right: 6px; }}
-.lamp .s {{ font-family: 'JetBrains Mono', 'Noto Sans TC', monospace; font-size: 12px; color: #9A9A9A; margin-top: 4px; line-height: 1.5; }}
-.lamp.g {{ border-left: 3px solid {綠}; }} .lamp.y {{ border-left: 3px solid #FFC24B; }} .lamp.r {{ border-left: 3px solid {紅}; }}
-.verdict {{ border: 1px solid #1E1E1E; border-left: 3px solid {青}; background: #050505; padding: 10px 14px; margin: 8px 0;
-    font-family: 'Noto Sans TC', sans-serif; font-size: 15px; line-height: 1.7; color: #DADADA; }}
-.verdict.sub {{ border-left-color: #8F7CFF; font-size: 14px; padding: 8px 14px; }}
-.pv {{ display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; align-items: center; }}
-.pv span {{ font-family: 'JetBrains Mono', 'Noto Sans TC', monospace; font-size: 12px; padding: 3px 8px; border: 1px solid #222;
-    background: #080808; color: #9A9A9A; }}
-.pv span b {{ font-weight: 700; margin-left: 4px; }}
-.pv span.now {{ border-color: #8F7CFF; color: #EDEDED; }}
-.cross {{ display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }}
-.cross span {{ font-family: 'Noto Sans TC', sans-serif; font-size: 13px; padding: 4px 10px; border: 1px solid; font-weight: 700; }}
-.cross .dn {{ color: {綠}; border-color: {綠}; background: rgba(0,214,143,.08); }}
-.cross .up {{ color: {紅}; border-color: {紅}; background: rgba(255,59,92,.08); }}
-.thermo {{ position: relative; height: 12px; margin: 10px 0 4px;
-    background: linear-gradient(90deg, {紅} 0%, #555 45%, #555 55%, {綠} 100%); opacity: .9; }}
-.thermo i {{ position: absolute; top: -5px; width: 4px; height: 22px; background: #FFF; box-shadow: 0 0 6px #FFF; }}
-.thermo-l {{ display: flex; justify-content: space-between; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #777; }}
-@media (max-width: 640px) {{ .lamps {{ grid-template-columns: 1fr; gap: 6px; }} .verdict {{ font-size: 14px; }} }}
-/* 名詞小卡：❓ 懸停或點一下顯示 */
-.tip {{ position: relative; display: inline-block; margin-left: 4px; cursor: help; font-size: 10px; opacity: .55; letter-spacing: 0; text-transform: none; }}
-.tip:hover, .tip:focus {{ opacity: 1; outline: none; }}
-.tip .tipbox {{ display: none; position: absolute; z-index: 999; left: -8px; top: 18px; width: 260px; padding: 10px 12px;
-    background: #101418; border: 1px solid {青}; color: #EDEDED; font-family: 'Noto Sans TC', sans-serif; font-size: 12px;
-    line-height: 1.55; letter-spacing: 0; white-space: normal; box-shadow: 0 6px 24px rgba(0,0,0,.6); }}
-.tip .tipbox b {{ display: block; color: {青}; font-size: 13px; margin-bottom: 2px; }}
-.tip .tipbox i {{ display: block; font-style: normal; color: #FFB020; margin-top: 6px; font-size: 11px; }}
-.tip:hover .tipbox, .tip:focus .tipbox {{ display: block; }}
-.card {{ overflow: visible; }}
-/* 盤中報價跳動：只讓數字閃一下 */
-@keyframes flashup {{ 0% {{ background: rgba(255,59,92,.45); }} 100% {{ background: transparent; }} }}
-@keyframes flashdn {{ 0% {{ background: rgba(0,214,143,.45); }} 100% {{ background: transparent; }} }}
-.flash-up .v {{ animation: flashup 1.2s ease-out; }}
-.flash-dn .v {{ animation: flashdn 1.2s ease-out; }}
-/* 新手三步驟 */
-.steps {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 6px 0 14px; }}
-.steps a {{ text-decoration: none; color: inherit; border: 1px solid #1E1E1E; background: #070707; padding: 12px 14px; display: block; }}
-.steps a:hover {{ border-color: {青}; }}
-.steps b {{ color: {青}; display: block; margin-bottom: 4px; }}
-.steps span {{ font-size: 13px; color: #BDBDBD; }}
-@media (max-width: 640px) {{ .steps {{ grid-template-columns: 1fr; }} }}
-/* 手機大圖示選單 */
-.menu {{ display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid #1C2A30; border-left: 1px solid #1C2A30;
-    margin: 4px 0 10px; background: #071014; }}
-.menu a {{ display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; aspect-ratio: 1 / .92;
-    border-right: 1px solid #1C2A30; border-bottom: 1px solid #1C2A30; text-decoration: none !important; color: #EDEDED !important; }}
-.menu a svg {{ width: 46%; max-width: 64px; color: #7FE9FF; filter: drop-shadow(0 0 6px rgba(0,229,255,.45)); }}
-.menu a span {{ font-family: 'Noto Sans TC', sans-serif; font-size: 19px; font-weight: 700; letter-spacing: .04em; }}
-.menu a:active, .menu a:hover {{ background: #0C1C22; }}
-.menu a.on {{ background: #0B1A20; box-shadow: inset 0 -3px 0 {青}, 0 0 16px rgba(0,229,255,.3); }}
-.menu-s {{ display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; margin: 2px 0 8px; }}
-.menu-s::-webkit-scrollbar {{ display: none; }}
-.menu-s a {{ flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 4px; width: 68px; padding: 8px 2px 6px;
-    border: 1px solid #1C2A30; background: #071014; text-decoration: none !important; color: #BDBDBD !important; }}
-.menu-s a svg {{ width: 26px; height: 26px; color: #7FE9FF; }}
-.menu-s a span {{ font-family: 'Noto Sans TC', sans-serif; font-size: 13px; white-space: nowrap; }}
-.menu-s a.on {{ border-color: {青}; color: #FFF !important; background: #0B1A20; }}
-/* 個股價位尺 */
-.ruler {{ margin: 14px 0 2px; padding: 40px 18px 10px; border: 1px solid #1A262B; background: #05090B; border-radius: 10px; }}
-.rtrack {{ position: relative; height: 8px; border-radius: 4px; background: linear-gradient(90deg, #0D3A2C, #2A2A2A 50%, #4A1420); }}
-.rzone {{ position: absolute; top: -3px; height: 14px; border-radius: 7px; background: rgba(127,233,255,.16); border: 1px solid rgba(127,233,255,.35); }}
-.rnow {{ position: absolute; top: -9px; width: 4px; height: 26px; margin-left: -2px; background: #FFF; box-shadow: 0 0 10px #FFF; border-radius: 2px; z-index: 3; }}
-.rnow em {{ position: absolute; left: 50%; transform: translateX(-50%); top: -28px; font-style: normal; font-family: 'JetBrains Mono';
-    font-weight: 700; font-size: 14px; color: #000; background: #FFF; padding: 1px 6px; border-radius: 4px; white-space: nowrap; }}
-.rm {{ position: absolute; top: -4px; z-index: 2; }}
-.rm i {{ position: absolute; left: -5px; width: 10px; height: 10px; border-radius: 50%; background: var(--c); top: 3px; box-shadow: 0 0 0 2px #05090B; }}
-.rends {{ display: flex; justify-content: space-between; margin: 0 -6px; padding-top: 12px; font-family: 'JetBrains Mono', 'Noto Sans TC'; font-size: 11px; color: #777; }}
-.ladder {{ margin-top: 10px; border-top: 1px solid #141E22; }}
-.ladder div {{ display: flex; align-items: center; gap: 10px; padding: 7px 2px; border-bottom: 1px solid #0F171A;
-    font-family: 'Noto Sans TC', sans-serif; font-size: 14px; color: #BDBDBD; }}
-.ladder div:last-child {{ border-bottom: 0; }}
-.ladder i {{ width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }}
-.ladder b {{ font-weight: 400; min-width: 3.5em; }}
-.ladder span {{ font-family: 'JetBrains Mono'; color: #EDEDED; margin-left: auto; }}
-.ladder em {{ font-style: normal; font-family: 'JetBrains Mono'; font-size: 13px; color: #8A8A8A; min-width: 4.2em; text-align: right; }}
-.ladder div.now {{ background: rgba(255,255,255,.06); border-radius: 6px; }}
-.ladder div.now b, .ladder div.now span {{ color: #FFF; font-weight: 700; }}
-/* 滑卡 */
-.sw-tip {{ font-family: 'Noto Sans TC', sans-serif; font-size: 13px; color: #8A9AA0; margin: 4px 0 6px; }}
-.swipe {{ display: flex; gap: 12px; overflow-x: auto; scroll-snap-type: x mandatory; padding: 2px 2px 10px; scrollbar-width: none; }}
-.swipe::-webkit-scrollbar {{ display: none; }}
-.sw-card {{ flex: 0 0 82%; max-width: 340px; scroll-snap-align: center; border: 1px solid #16323A; border-radius: 16px; padding: 16px 16px 12px;
-    background: radial-gradient(120% 80% at 0% 0%, #0E2A31 0%, #061014 55%, #04080A 100%); text-decoration: none !important; color: #EDEDED !important; }}
-.sw-h {{ font-family: 'Noto Sans TC', sans-serif; font-size: 18px; }} .sw-h b {{ font-family: 'JetBrains Mono'; color: {青}; }}
-.sw-p {{ font-family: 'JetBrains Mono'; font-size: 30px; font-weight: 700; margin-top: 2px; }}
-.sw-p small {{ font-size: 16px; margin-left: 10px; }}
-.sw-s {{ position: relative; margin: 6px 0 4px; }} .sw-s svg {{ width: 100%; height: 56px; }}
-.sw-s span {{ position: absolute; right: 0; top: -2px; font-size: 11px; color: #667; font-family: 'Noto Sans TC'; }}
-.sw-v {{ font-family: 'Noto Sans TC', sans-serif; font-size: 16px; font-weight: 700; margin-top: 4px; }}
-.sw-card ul {{ list-style: none; padding: 0; margin: 6px 0 0; font-family: 'Noto Sans TC', sans-serif; font-size: 14px; line-height: 1.5; }}
-.sw-card li.g {{ color: #FF8FA3; }} .sw-card li.b {{ color: #6FE8BE; }}
-/* 區塊標題：英文 // 中文 */
-.sec .en {{ color: {青}; }} .sec b {{ font-family: 'Noto Sans TC', sans-serif; font-weight: 700; color: #EDEDED; font-size: 15px; letter-spacing: .08em; }}
-svg.spark {{ flex: 0 0 auto; align-self: center; margin-left: auto; }}
-/* 分析報告內文（AI 報告、投研報告、會診、辯論、盤勢解讀）：比一般文字大 2 階（16→20px），標題等比放大 */
-[class*="st-key-rpt"] [data-testid="stMarkdownContainer"] :is(p, li) {{ font-size: 20px; line-height: 1.75; }}
-[class*="st-key-rpt"] [data-testid="stMarkdownContainer"] h1 {{ font-size: 34px; }}
-[class*="st-key-rpt"] [data-testid="stMarkdownContainer"] h2 {{ font-size: 30px; }}
-[class*="st-key-rpt"] [data-testid="stMarkdownContainer"] h3 {{ font-size: 26px; }}
-[class*="st-key-rpt"] [data-testid="stMarkdownContainer"] :is(h4, h5, h6) {{ font-size: 23px; }}
-[class*="st-key-rpt"] [data-testid="stMarkdownContainer"] table {{ display: block; max-width: 100%; overflow-x: auto; }}
-[class*="st-key-rpt"] [data-testid="stMarkdownContainer"] table :is(td, th) {{ font-size: 18px; }}
-/* 今天必須知道 */
-.must {{ border: 1px solid #1E1E1E; border-left: 3px solid {青}; background: #050505; margin: 6px 0 4px; }}
-.must div {{ display: flex; gap: 10px; padding: 12px 14px; border-bottom: 1px solid #141414;
-    font-family: 'Noto Sans TC', sans-serif; font-size: 16px; line-height: 1.6; color: #E4E4E4; }}
-.must div:last-child {{ border-bottom: 0; }}
-.must div i {{ font-style: normal; flex: 0 0 auto; }}
-.must div b {{ color: #FFF; }}
-.must div.warn {{ background: rgba(255,176,32,.07); }}
-.must a {{ color: {青}; text-decoration: none; }}
-.flist a {{ display: block; padding: 10px 4px; border-bottom: 1px solid #141414; text-decoration: none; color: #E4E4E4;
-    font-family: 'Noto Sans TC', sans-serif; font-size: 16px; }}
-.flist a small {{ display: block; color: #9A9A9A; font-size: 13px; margin-top: 2px; line-height: 1.5; }}
-/* 站內導航（攔截連結、快捷鍵）不佔版面；足跡列小一點 */
-.st-key-navjs {{ position: absolute; width: 0; height: 0; overflow: hidden; }}
-.st-key-trail {{ margin-top: -8px; }}
-.st-key-trail button {{ min-height: 26px; padding: 0 10px; }}
-.st-key-trail button p {{ font-size: 12px; }}
-/* 手機：頁首縮小、頁面選單改成一排可左右滑 */
-@media (max-width: 640px) {{
-    .hero {{ padding: 16px 16px 12px; margin-bottom: 10px; }}
-    .hero::after {{ width: 120px; height: 120px; right: -40px; top: -40px; }}
-    .hero .kicker {{ font-size: 10px; letter-spacing: .15em; }}
-    .hero .title {{ font-size: 34px; margin: 4px 0 0; }}
-    .hero .sub, .hide-m {{ display: none; }}
-    .st-key-nav [data-testid="stButtonGroup"] > div {{ display: grid !important; grid-template-columns: repeat(3, 1fr); }}
-    .st-key-nav button {{ width: 100%; margin: 0 !important; border-radius: 0 !important; white-space: nowrap;
-        padding: 2px 4px; min-height: 32px; }}
-    .st-key-nav button p {{ font-size: 13px; }}
-    .jump {{ flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }}
-    .jump a {{ flex: 0 0 auto; }}
-    .sec {{ letter-spacing: .15em; margin-top: 18px; }}
-    .st-key-toolbar [data-testid="stHorizontalBlock"] {{ flex-wrap: wrap; gap: 4px 16px; }}
-    .st-key-toolbar [data-testid="stColumn"] {{ width: auto !important; flex: 0 0 auto !important; min-width: 0 !important; }}
-    .st-key-toolbar [data-testid="stColumn"]:first-child {{ flex: 1 0 100% !important; }}
-}}
-/* ===== 科技感：HUD 格線背景、掃描光、發光標題、卡片角框 ===== */
-.stApp {{ background:
-    radial-gradient(1200px 520px at 50% -180px, rgba(0,229,255,.13), transparent 70%),
-    linear-gradient(rgba(0,229,255,.045) 1px, transparent 1px) 0 0 / 100% 44px,
-    linear-gradient(90deg, rgba(0,229,255,.035) 1px, transparent 1px) 0 0 / 44px 100%,
-    #010407 !important; }}
-.stApp::after {{ content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0;
-    background: repeating-linear-gradient(180deg, rgba(255,255,255,.018) 0 1px, transparent 1px 3px); }}
-.hero {{ border: 1px solid rgba(0,229,255,.28); background: linear-gradient(120deg, rgba(0,40,52,.55), rgba(0,0,0,.2) 60%);
-    box-shadow: 0 0 24px rgba(0,229,255,.08), inset 0 0 40px rgba(0,229,255,.05); }}
-.hero::before {{ content: ""; position: absolute; top: 0; left: -40%; width: 40%; height: 100%; pointer-events: none;
-    background: linear-gradient(90deg, transparent, rgba(0,229,255,.16), transparent); animation: sweep 6s ease-in-out infinite; }}
-@keyframes sweep {{ 0% {{ left: -40%; }} 55%, 100% {{ left: 110%; }} }}
-.hero .title {{ text-shadow: 0 0 18px rgba(0,229,255,.25); }}
-.hero .title span {{ text-shadow: 0 0 14px rgba(0,229,255,.8), 0 0 32px rgba(0,229,255,.35); }}
-.hero .kicker::before {{ content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #00FF9C;
-    box-shadow: 0 0 8px #00FF9C; margin-right: 8px; vertical-align: 1px; animation: blink 2.4s ease-in-out infinite; }}
-@keyframes blink {{ 0%, 100% {{ opacity: 1; }} 50% {{ opacity: .25; }} }}
-.sec {{ border-bottom: 0 !important; position: relative; }}
-.sec::after {{ content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1px;
-    background: linear-gradient(90deg, {青}, rgba(0,229,255,.25) 35%, transparent 85%); box-shadow: 0 0 8px rgba(0,229,255,.5); }}
-.sec::before {{ animation: blink 3s ease-in-out infinite; }}
-.card {{ border-color: rgba(0,229,255,.16) !important; background: linear-gradient(180deg, rgba(6,22,28,.92), rgba(2,8,11,.92)) !important; }}
-.card::after {{ content: ""; position: absolute; inset: -1px; pointer-events: none; opacity: .85;
-    background: linear-gradient({青}, {青}) top left / 12px 1px no-repeat, linear-gradient({青}, {青}) top left / 1px 12px no-repeat,
-                linear-gradient({青}, {青}) bottom right / 12px 1px no-repeat, linear-gradient({青}, {青}) bottom right / 1px 12px no-repeat; }}
-.card .v {{ text-shadow: 0 0 12px currentColor; }}
-a.cardlink:hover .card, a.cardlink:active .card {{ box-shadow: 0 0 18px rgba(0,229,255,.25); }}
-[data-testid="stExpander"] details {{ border-color: rgba(0,229,255,.16) !important; background: rgba(3,12,15,.85) !important; }}
-[data-testid="stVerticalBlockBorderWrapper"] {{ border-color: rgba(0,229,255,.16) !important; }}
-/* 首頁指數卡列 */
-.idxrow {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 6px 0; }}
-.idxrow.two {{ grid-template-columns: 1fr 1fr; }}
-.card.idx {{ border-radius: 10px; border-color: #1A262B; }}
-.card.idx .v {{ font-size: 24px; }}
-.card.idx .sp svg {{ width: 100%; height: 40px; margin-top: 6px; }}
-.adv {{ display: flex; gap: 14px; align-items: baseline; margin-top: 4px; font-family: 'JetBrains Mono'; font-size: 22px; }}
-.adv small {{ font-family: 'Noto Sans TC'; font-size: 12px; color: #9A9A9A; }}
-.advbar {{ display: flex; height: 8px; border-radius: 4px; overflow: hidden; margin-top: 8px; }}
-.fg {{ position: relative; height: 8px; border-radius: 4px; margin-top: 10px; background: linear-gradient(90deg, {綠}, #FFB020 50%, {紅}); }}
-.fg i {{ position: absolute; top: -4px; width: 4px; height: 16px; margin-left: -2px; background: #FFF; border-radius: 2px; box-shadow: 0 0 6px #FFF; }}
-@media (max-width: 640px) {{ .idxrow {{ grid-template-columns: 1fr 1fr 1fr; gap: 5px; }} .card.idx {{ padding: 8px 7px; }}
-    .card.idx .v {{ font-size: clamp(14px, 4.2vw, 22px); }} .card.idx .k {{ font-size: 9px; letter-spacing: .05em; }}
-    .card.idx .d {{ font-size: 10px; }} .adv {{ font-size: 18px; gap: 10px; }} }}
-/* 一眼判斷：個股重點卡（三格、風險框、三方意見、估值刻度） */
-.ins {{ margin: 10px 0 6px; padding: 14px 16px; border: 1px solid #1A262B; background: #05090B; border-radius: 10px; }}
-.ins .sum {{ font-family: 'Noto Sans TC', sans-serif; font-size: 15px; color: #EDEDED; line-height: 1.6; }}
-.ins .sum small {{ color: #8A8A8A; font-size: 12px; margin-left: 6px; }}
-.tri {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 10px; }}
-.tri .tc {{ border: 1px solid #22303A; border-radius: 8px; padding: 9px 10px; background: #070B0D; }}
-.tri .tc.up {{ border-color: rgba(255,59,92,.55); box-shadow: inset 0 0 12px -6px {紅}; }}
-.tri .tc.dn {{ border-color: rgba(0,214,143,.55); box-shadow: inset 0 0 12px -6px {綠}; }}
-.tri .tc b {{ display: block; font-family: 'Noto Sans TC'; font-size: 12px; color: #8A8A8A; font-weight: 400; }}
-.tri .tc strong {{ display: block; font-family: 'Noto Sans TC'; font-size: 20px; margin: 2px 0; }}
-.tri .tc span {{ display: block; font-family: 'Noto Sans TC'; font-size: 12px; color: #9A9A9A; line-height: 1.45; }}
-.riskbox {{ margin-top: 10px; border: 1px solid rgba(255,176,32,.45); background: rgba(255,176,32,.05); border-radius: 8px; padding: 9px 12px; }}
-.riskbox .h {{ font-family: 'Noto Sans TC'; font-size: 13px; color: #FFB020; display: flex; justify-content: space-between; }}
-.riskbox ul {{ margin: 4px 0 0 0; padding-left: 18px; }}
-.riskbox li {{ font-family: 'Noto Sans TC'; font-size: 13px; color: #D8D8D8; line-height: 1.55; }}
-.riskbox li.hi::marker {{ color: {紅}; }}
-.riskbox .w {{ margin-top: 6px; font-family: 'Noto Sans TC'; font-size: 12.5px; color: #BFBFBF; border-top: 1px dashed rgba(255,176,32,.25); padding-top: 6px; }}
-.pty {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-top: 10px; }}
-.pty div {{ border: 1px solid #1E2A30; border-radius: 8px; padding: 7px 10px; font-family: 'Noto Sans TC'; }}
-.pty b {{ display: block; font-size: 12px; color: #8A8A8A; font-weight: 400; }}
-.pty strong {{ font-size: 16px; }}
-.pty span {{ display: block; font-size: 11.5px; color: #8A8A8A; line-height: 1.4; margin-top: 2px; }}
-.pty-h {{ margin-top: 10px; font-family: 'Noto Sans TC'; font-size: 13px; color: #BDBDBD; }}
-.vsc {{ margin: 12px 0 4px; padding: 14px 14px 2px; border: 1px solid #1A262B; background: #05090B; border-radius: 10px; }}
-.vsc .row {{ position: relative; margin: 0 0 26px; }}
-.vsc .lab {{ font-family: 'Noto Sans TC'; font-size: 12.5px; color: #9A9A9A; margin-bottom: 28px; }}
-.vsc .bar {{ display: flex; height: 10px; border-radius: 5px; overflow: hidden; }}
-.vsc .bar i {{ flex: 1; }}
-.vsc .ticks {{ display: flex; justify-content: space-between; font-family: 'JetBrains Mono'; font-size: 11px; color: #8A8A8A; margin-top: 5px; }}
-.vsc .ticks span {{ text-align: center; flex: 1; }}
-.vsc .ticks em {{ display: block; font-style: normal; font-family: 'Noto Sans TC'; font-size: 11px; }}
-.vsc .now {{ position: absolute; top: 40px; width: 4px; height: 20px; margin-left: -2px; background: #FFF; border-radius: 2px; box-shadow: 0 0 8px #FFF; }}
-.vsc .now em {{ position: absolute; top: -20px; left: 50%; transform: translateX(-50%); font-style: normal; font-family: 'JetBrains Mono'; font-size: 12px;
-    background: #FFF; color: #000; padding: 0 5px; border-radius: 3px; white-space: nowrap; }}
-.chk {{ display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }}
-.chk table, .chk tr, .chk td, .chk th {{ border: 0 !important; background: transparent !important; }}
-.chk table {{ width: 100%; border-collapse: collapse; font-family: 'Noto Sans TC'; font-size: 13.5px; }}
-.chk caption {{ text-align: left; color: {青}; font-size: 14px; padding: 4px 0; }}
-.chk td {{ padding: 5px 4px !important; border-bottom: 1px solid #12191C !important; color: #D0D0D0; }}
-.chk td.v {{ font-family: 'JetBrains Mono'; color: #EDEDED; text-align: right; white-space: nowrap; }}
-.chk td.g {{ width: 3.2em; text-align: center; }}
-.chk td.g i {{ display: inline-block; min-width: 2.2em; padding: 1px 0; border-radius: 4px; font-style: normal; font-size: 12.5px; }}
-.chk i.g1 {{ background: rgba(0,229,255,.22); color: #7FE9FF; }}
-.chk i.g2 {{ background: rgba(255,255,255,.08); color: #CFCFCF; }}
-.chk i.g3 {{ color: #555; }}
-@media (max-width: 640px) {{ .tri .tc strong {{ font-size: 17px; }} .tri .tc {{ padding: 8px 7px; }} .chk {{ grid-template-columns: 1fr; }} }}
-.verdict {{ border-color: rgba(0,229,255,.18); border-left-color: {青}; background: linear-gradient(90deg, rgba(0,229,255,.07), rgba(0,0,0,.3) 60%);
-    box-shadow: inset 3px 0 12px -6px {青}; }}
-[data-testid="stButtonGroup"] button[aria-checked="true"], [data-testid="stButtonGroup"] button[kind$="Active"] {{
-    box-shadow: 0 0 10px rgba(0,229,255,.35), inset 0 0 8px rgba(0,229,255,.15); }}
-.stButton > button {{ box-shadow: 0 0 10px rgba(0,229,255,.18); }}
-.ticker {{ border-color: rgba(0,229,255,.18); background: linear-gradient(90deg, transparent, rgba(0,229,255,.05), transparent); }}
-.must div {{ border-color: rgba(0,229,255,.16) !important; }}
-.must div i {{ box-shadow: 0 0 10px rgba(0,229,255,.25), inset 0 0 8px rgba(0,229,255,.18); }}
 </style>
 """, unsafe_allow_html=True)
 
 
-# 手機模式：只在打開時加上，字體整體放大、卡片改兩欄、說明文字變亮
-手機CSS = f"""<style>
-.bnav {{ position: fixed; left: 0; right: 0; bottom: 0; z-index: 998; display: grid; grid-template-columns: repeat(5, 1fr);
-    background: rgba(4,8,10,.96); border-top: 1px solid #1A262B; backdrop-filter: blur(8px); padding: 6px 0 calc(6px + env(safe-area-inset-bottom)); }}
-.bnav a {{ display: flex; flex-direction: column; align-items: center; gap: 2px; color: #8A9BA3 !important; text-decoration: none !important; }}
-.bnav a svg {{ width: 23px; height: 23px; }}
-.bnav a span {{ font-family: 'Noto Sans TC', sans-serif; font-size: 13px; }}
-.bnav a.on {{ color: {青} !important; }}
-.bnav a.on svg {{ filter: drop-shadow(0 0 6px rgba(0,229,255,.6)); }}
-.fab {{ bottom: 78px !important; }}
-[data-testid="stMainBlockContainer"], .block-container {{ padding-bottom: 96px !important; }}
-html {{ font-size: 20px; }}
-.hero {{ padding: 10px 14px 8px; margin-bottom: 8px; }}
-.hero::after, .hero .kicker, .hero .sub {{ display: none; }}
-.hero .title {{ font-size: 28px; margin: 0; }}
-.grid3, .grid2 {{ grid-template-columns: repeat(2, 1fr); gap: 8px; }}
-.grid3 .card, .grid2 .card {{ padding: 12px 12px; }}
-.grid3 > :last-child:nth-child(odd), .grid2 > :last-child:nth-child(odd) {{ grid-column: span 2; }}
-.grid3 .card .k, .grid2 .card .k {{ font-size: 15px; letter-spacing: .05em; color: #A0A0A0; }}
-.grid3 .card .v, .grid2 .card .v {{ font-size: clamp(22px, 7vw, 29px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
-.grid3 .card .d, .grid2 .card .d {{ font-size: 16px; line-height: 1.4; }}
-.sec {{ font-size: 12px; letter-spacing: .08em; margin-top: 28px; padding-bottom: 8px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }}
-.sec .en {{ font-size: 11px; opacity: .8; }}
-.sec b {{ font-family: 'Noto Sans TC', sans-serif; font-size: 24px; font-weight: 900; color: #FFF; letter-spacing: .02em; }}
-.hero {{ background: linear-gradient(120deg, #06161B 0%, #000 70%); border-color: #12313A; }}
-.must {{ border-left-width: 0; background: transparent; border: 0; display: grid; gap: 8px; }}
-.must div {{ border: 1px solid #1A262B !important; background: linear-gradient(180deg, #0A1013, #050708); border-radius: 10px; align-items: center; }}
-.must div i {{ width: 38px; height: 38px; border-radius: 50%; background: #0F1D22; display: flex; align-items: center; justify-content: center; font-size: 19px; }}
-.must div.warn {{ border-color: #4A3A12 !important; background: linear-gradient(180deg, #17130A, #0A0805); }}
-.grid3 .card, .grid2 .card {{ border-radius: 10px; }}
-.flist a {{ border: 1px solid #1A262B; border-radius: 10px; margin-bottom: 8px; padding: 12px 14px; background: #070B0D; }}
-.menu {{ border: 0; gap: 8px; background: transparent; }}
-.menu a {{ border: 1px solid #16323A !important; border-radius: 14px; background: radial-gradient(120% 90% at 50% 0%, #0E2A31 0%, #061014 60%, #04080A 100%); aspect-ratio: 1 / .95; }}
-.menu-s a {{ border-radius: 10px; }}
-[data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] li {{ font-size: 20px; line-height: 1.7; }}
-[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {{ font-size: 15px !important; color: #A8A8A8; line-height: 1.6; }}
-.verdict {{ font-size: 20px !important; line-height: 1.75; padding: 12px 14px; }}
-.verdict.sub {{ font-size: 18px !important; }}
-.ladder div {{ font-size: 19px; padding: 9px 2px; }} .ladder em {{ font-size: 17px; }}
-.rank td, .rank td.n {{ font-size: 19px !important; padding: 10px 6px !important; }}
-.rank td.n small {{ font-size: 15px; }}
-.rank th {{ font-size: 16px; }}
-.lamp .t {{ font-size: 19px; }} .lamp .s {{ font-size: 16px; }}
-.jump a {{ font-size: 17px; padding: 6px 12px; }}
-.ticker span {{ font-size: 17px; }}
-.st-key-nav {{ display: none; }}
-.js-plotly-plot, .js-plotly-plot .nsewdrag, .js-plotly-plot .draglayer, .js-plotly-plot svg {{ touch-action: pan-y !important; }}
-.stButton > button {{ min-height: 46px; }}
-.stTabs [data-baseweb="tab"] {{ padding: 12px 14px; }}
-.tip {{ font-size: 15px; }}
-.tip .tipbox {{ font-size: 17px; width: 240px; }}
-.st-key-toolbar [data-testid="stHorizontalBlock"] {{ flex-wrap: nowrap !important; gap: 6px !important; }}
-.st-key-toolbar [data-testid="stColumn"] {{ flex: 1 1 0 !important; width: auto !important; min-width: 0 !important; }}
-.st-key-toolbar [data-testid="stColumn"]:first-child {{ flex: 1.8 1 0 !important; }}
-.st-key-toolbar p {{ font-size: 15px !important; white-space: nowrap; }}
-.st-key-toolbar button {{ padding: 4px 6px !important; min-height: 40px; width: 100%; justify-content: center; }}
-.st-key-toolbar button [aria-hidden="true"] {{ display: none; }}
-.must div, .flist a {{ font-size: 20px; }}
-.flist a small {{ font-size: 17px; }}
-/* ---- 手機排版整理 ---- */
-.bnav details.more {{ position: relative; display: flex; justify-content: center; }}
-.bnav details.more summary {{ list-style: none; display: flex; flex-direction: column; align-items: center; gap: 2px; color: #8A9BA3; cursor: pointer; }}
-.bnav details.more summary::-webkit-details-marker {{ display: none; }}
-.bnav details.more summary svg {{ width: 23px; height: 23px; }}
-.bnav details.more summary span {{ font-family: 'Noto Sans TC', sans-serif; font-size: 13px; }}
-.bnav details.more.on summary, .bnav details.more[open] summary {{ color: {青}; }}
-.bnav .sheet {{ position: fixed; left: 10px; right: 10px; bottom: calc(64px + env(safe-area-inset-bottom)); display: grid;
-    grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 12px; border: 1px solid #16323A; border-radius: 16px;
-    background: rgba(5,12,15,.98); box-shadow: 0 -8px 30px rgba(0,0,0,.6), 0 0 18px rgba(0,229,255,.12); }}
-.bnav .sheet a {{ padding: 12px 4px; border: 1px solid #13262C; border-radius: 12px; background: #081216; }}
-.bnav .sheet a span {{ font-size: 16px; color: #DDE; }}
-.bnav .sheet a.on {{ border-color: {青}; }}
-.bnav {{ grid-template-columns: repeat(5, 1fr); z-index: 1000 !important; padding-right: 118px !important; }}
-/* 右下角留給 Streamlit 雲端的「Manage app」按鈕（只有網站擁有者登入時才看得到），選單往左縮避免被擋 */
-.fab .fab-home {{ display: none !important; }}
-.fab a {{ width: 42px; height: 42px; opacity: .85; }}
-.menu {{ gap: 6px; }}
-.menuwrap {{ margin: 2px 0 6px; }}
-.menuwrap summary {{ list-style: none; cursor: pointer; padding: 10px 14px; border: 1px solid #16323A; border-radius: 12px;
-    color: #7FE9FF; font-family: 'Noto Sans TC', sans-serif; font-size: 17px; background: #061014; }}
-.menuwrap summary::-webkit-details-marker {{ display: none; }}
-.menuwrap[open] summary {{ margin-bottom: 8px; }}
-/* 頁首瘦身：Streamlit 上方工具列透明變矮、日期併進行情列 */
-header[data-testid="stHeader"] {{ background: transparent !important; height: 2.4rem !important; }}
-[data-testid="stMainBlockContainer"], .block-container {{ padding-top: 2.6rem !important; }}
-.tkrow {{ display: flex; align-items: center; gap: 8px; }}
-.tkrow .tkd {{ flex: 0 0 auto; font-family: 'JetBrains Mono', monospace; font-size: 14px; color: #8A9BA3; }}
-.tkrow .ticker {{ flex: 1 1 auto; min-width: 0; margin-top: 0 !important; margin-bottom: 0 !important; }}
-.tkrow .tkd {{ line-height: 1; padding-top: 2px; }}
-.menu a {{ aspect-ratio: auto !important; padding: 12px 4px 10px; gap: 6px; }}
-.menu a svg {{ width: 30px; height: 30px; }}
-.menu a span {{ font-size: 17px; }}
-[data-testid="stButtonGroup"] > div {{ flex-wrap: nowrap !important; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }}
-[data-testid="stButtonGroup"] > div::-webkit-scrollbar {{ display: none; }}
-[data-testid="stButtonGroup"] button {{ flex: 0 0 auto; white-space: nowrap; }}
-[data-testid="stButtonGroup"] button p {{ font-size: 17px !important; }}
-.idxrow {{ grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }} .idxrow.two {{ grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }}
-.idxrow > * {{ min-width: 0; }}
-.card.idx .k {{ font-size: 12px !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; letter-spacing: 0 !important; }}
-.card.idx .d {{ font-size: 12.5px !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
-.card.idx .v {{ font-size: clamp(16px, 4.5vw, 22px) !important; white-space: nowrap; overflow: hidden; text-overflow: clip; }}
-.sec {{ margin-top: 22px; }}
-[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {{ font-size: 16px !important; line-height: 1.6; }}
-.stExpander summary p {{ font-size: 19px !important; }}
-.st-key-toolbar {{ margin-bottom: -4px; }}
-[data-testid="stWidgetLabel"] p {{ font-size: 18px !important; }}
-.stTabs [data-baseweb="tab"] p {{ font-size: 18px !important; }}
-[data-testid="stDataFrame"] {{ font-size: 16px; }}
-.must div i {{ font-size: 21px; }}
-.sec .en {{ display: none; }}  /* 手機上英文小標只是裝飾，拿掉讓標題更乾淨 */
-.tipbox i {{ font-size: 13px !important; }}
-/* 手機字級下限 13px：表格、小字說明不再小到要放大才看得到 */
-[data-testid="stMarkdownContainer"] :is(span, small, td, th, li, em, div, b, a) {{ font-size: max(13px, 1em); }}
-[data-testid="stMarkdownContainer"] table :is(td, th) {{ font-size: 14px !important; }}
-/* 手機的分析報告內文：一般文字 20px 再大 2 階到 24px；表格可左右滑，字只加到 16px 避免爆版 */
-body [class*="st-key-rpt"] [data-testid="stMarkdownContainer"] :is(p, li) {{ font-size: 24px; line-height: 1.7; }}
-body [class*="st-key-rpt"] [data-testid="stMarkdownContainer"] h1 {{ font-size: 34px; }}
-body [class*="st-key-rpt"] [data-testid="stMarkdownContainer"] h2 {{ font-size: 31px; }}
-body [class*="st-key-rpt"] [data-testid="stMarkdownContainer"] h3 {{ font-size: 28px; }}
-body [class*="st-key-rpt"] [data-testid="stMarkdownContainer"] :is(h4, h5, h6) {{ font-size: 26px; }}
-body [class*="st-key-rpt"] [data-testid="stMarkdownContainer"] table :is(td, th) {{ font-size: 16px !important; }}
-</style>"""
+def 卡片(標題, 數值, 小字="", 顏色="#EDEDED"):
+    return (f'<div class="card"><div class="k">{標題}</div>'
+            f'<div class="v" style="color:{顏色}">{數值}</div><div class="d" style="color:{顏色}">{小字}</div></div>')
 
 
-def 卡片(標題, 數值, 小字="", 顏色="#EDEDED", 連結=None):
-    """連結：點卡片要去的地方，例如 #h-加權指數（首頁區塊）、?s=2330（個股）、?p=07（換頁）。"""
-    詞 = beginner.找名詞(標題)
-    if 詞:  # 專有名詞旁邊加 ❓：滑鼠移過去（手機點一下）看白話說明
-        標題 = f"{標題}{beginner.小卡HTML(詞)}"
-    內 = (f'<div class="card"><div class="k">{標題}</div>'
-          f'<div class="v" style="color:{顏色}">{數值}</div><div class="d" style="color:{顏色}">{小字}</div></div>')
-    return f'<a class="cardlink" href="{連結}" target="_self">{內}</a>' if 連結 else 內
-
-
-def 報告區(鍵, **參數):
-    """分析報告內文的容器：裡面的 Markdown 字體比一般文字大 2 階（CSS 看 st-key-rpt 開頭的 class）。"""
-    return st.container(key=f"rpt_{鍵}", **參數)
+def 卡片列(卡們):
+    for 欄, 卡 in zip(st.columns(len(卡們)), 卡們):
+        欄.markdown(卡, unsafe_allow_html=True)
 
 
 def 卡片格(卡們):
     """固定一排三格，手機上也維持兩排三欄。"""
     st.markdown(f'<div class="grid3">{"".join(卡們)}</div>', unsafe_allow_html=True)
+
+
+def 排行表(表):
+    列們 = []
+    for _, r in 表.iterrows():
+        色 = 漲跌色(r["change"])
+        底 = ""
+        if r["幅度"] >= 9.5:
+            底 = f"background:#9B0000;color:#FFF"
+        elif r["幅度"] <= -9.5:
+            底 = f"background:#006B3C;color:#FFF"
+        列們.append(
+            f'<tr><td class="n"><a href="?s={r["code"]}" target="_self">{r["name"]}<small>{r["code"]}</small></a></td>'
+            f'<td style="{底 or "color:" + 色}">{r["close"]:,.2f}</td>'
+            f'<td style="color:{色}">{r["change"]:+,.2f}</td>'
+            f'<td style="color:{色}">{r["幅度"]:+.2f}%</td>'
+            f'<td style="color:#BDBDBD">{r["張數"]:,.0f}</td></tr>')
+    st.markdown('<div class="rankwrap"><table class="rank"><tr><th>商品</th><th>成交</th><th>漲跌</th><th>幅度</th><th>張數</th></tr>'
+                + "".join(列們) + "</table></div>", unsafe_allow_html=True)
 
 
 def 漲跌色(值):
@@ -690,85 +114,13 @@ def 漲跌色(值):
 
 
 def 段落(文字):
-    英, 分, 中 = str(文字).partition(" // ")
-    內 = f'<span class="en">{英} //</span> <b>{中}</b>' if 分 else 文字  # 手機模式：英文小字、中文大字
-    st.markdown(f'<div class="sec">{內}</div>', unsafe_allow_html=True)
-
-
-def 迷你線(值們, 顏色=None, 寬=64, 高=26):
-    """一行字旁邊的小走勢線（SVG），最後一點加圓點；顏色預設依頭尾漲跌（紅漲綠跌）。"""
-    v = [float(x) for x in 值們 if pd.notna(x)]
-    if len(v) < 2:
-        return ""
-    lo, hi = min(v), max(v)
-    hi = hi if hi > lo else lo + 1
-    xs = [2 + i * (寬 - 6) / (len(v) - 1) for i in range(len(v))]
-    ys = [高 - 3 - (x - lo) / (hi - lo) * (高 - 6) for x in v]
-    色 = 顏色 or (紅 if v[-1] >= v[0] else 綠)
-    點 = " ".join(f"{x:.1f},{y:.1f}" for x, y in zip(xs, ys))
-    return (f'<svg class="spark" width="{寬}" height="{高}" viewBox="0 0 {寬} {高}"><polyline points="{點}" fill="none" '
-            f'stroke="{色}" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>'
-            f'<circle cx="{xs[-1]:.1f}" cy="{ys[-1]:.1f}" r="2.6" fill="{色}"/></svg>')
-
-
-
-@st.cache_data(ttl=3600, show_spinner=False, max_entries=20)
-def 近期收盤(代號們, 版本鍵, 天數=20):
-    """{代號: 近 N 個交易日收盤 list}，滑卡的迷你走勢用。"""
-    日們 = sorted(指標["date"].unique())[-天數:]
-    t = 指標[指標["date"].isin(日們) & 指標["代號"].isin(代號們)]
-    return {c: g.sort_values("date")["收盤"].tolist() for c, g in t.groupby("代號")}
-
-
-def 滑卡(代號們, 標題="左右滑看下一檔"):
-    """手機像看限時動態一樣左右滑：一張卡一檔股票（漲跌、迷你走勢、規則判讀、利多利空第一條），點卡片到個股頁。"""
-    表 = 今日.set_index("代號")
-    代號們 = [c for c in dict.fromkeys(代號們) if c in 表.index][:30]
-    if not 代號們:
-        return
-    線 = 近期收盤(tuple(代號們), _版本)
-    卡們 = []
-    for c in 代號們:
-        r = 表.loc[c]
-        try:
-            判 = engine.規則判讀(r.rename({"代號": c}) if "代號" not in r else r)
-        except Exception:
-            判 = None
-        幅 = r.get("漲跌幅")
-        色 = 漲跌色(幅)
-        看 = "" if not 判 else f'<div class="sw-v" style="color:{紅 if 判["分數"] >= 30 else (綠 if 判["分數"] <= -30 else "#BDBDBD")}">{判["看法"]}（{判["分數"]:+d}）</div>'
-        點 = ""
-        if 判:
-            if 判["利多"]:
-                點 += f'<li class="g">▲ {html.escape(str(判["利多"][0]))}</li>'
-            if 判["利空"]:
-                點 += f'<li class="b">▼ {html.escape(str(判["利空"][0]))}</li>'
-        卡們.append(
-            f'<a class="sw-card" href="?s={c}" target="_self"><div class="sw-h"><b>{c}</b> {html.escape(str(r["名稱"]))}</div>'
-            f'<div class="sw-p" style="color:{色}">{r["收盤"]:,.2f}<small>{"" if pd.isna(幅) else f"{幅:+.2f}%"}</small></div>'
-            f'<div class="sw-s">{迷你線(線.get(c, []), 寬=260, 高=56)}<span>近 20 日</span></div>{看}<ul>{點}</ul></a>')
-    st.markdown(f'<div class="sw-tip">👉 {標題}（共 {len(卡們)} 檔）</div><div class="swipe">{"".join(卡們)}</div>',
-                unsafe_allow_html=True)
-
-def 迷你柱(值們, 寬=64, 高=26):
-    """正負小柱狀（紅正綠負），例如外資每日買賣超。"""
-    v = [0.0 if pd.isna(x) else float(x) for x in 值們]
-    if not v:
-        return ""
-    m = max(abs(x) for x in v) or 1
-    w = (寬 - 2) / len(v)
-    中 = 高 / 2
-    柱 = "".join(f'<rect x="{1 + i * w + 1:.1f}" y="{(中 - x / m * (中 - 2)) if x > 0 else 中:.1f}" width="{max(w - 2, 1):.1f}" '
-                f'height="{max(abs(x) / m * (中 - 2), 1):.1f}" rx="1" fill="{紅 if x > 0 else 綠}"/>' for i, x in enumerate(v))
-    return (f'<svg class="spark" width="{寬}" height="{高}" viewBox="0 0 {寬} {高}">'
-            f'<line x1="0" y1="{中}" x2="{寬}" y2="{中}" stroke="#333" stroke-width="1"/>{柱}</svg>')
+    st.markdown(f'<div class="sec">{文字}</div>', unsafe_allow_html=True)
 
 
 def 圖表外觀(圖, 高=380):
     圖.update_layout(
         template="plotly_dark", height=高, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=10, r=10, t=10, b=10), font=dict(family="JetBrains Mono, Noto Sans TC, sans-serif", size=14 if st.session_state.get("手機模式") else 11),
-        hoverlabel=dict(bgcolor="#0A0A0A", bordercolor="#333", font=dict(family="JetBrains Mono, Noto Sans TC")),
+        margin=dict(l=10, r=10, t=10, b=10), font=dict(family="JetBrains Mono", size=11),
         legend=dict(orientation="h", y=1.08, x=0), hovermode="x unified",
         xaxis=dict(gridcolor="#151515"), yaxis=dict(gridcolor="#151515"),
     )
@@ -776,73 +128,35 @@ def 圖表外觀(圖, 高=380):
 
 
 def 上色(表):
-    欄們 = [c for c in ["漲跌幅", "5日漲幅", "20日漲幅", "報酬率(%)", "含息報酬%", "加入至今%", "報告後漲跌%", "今日損益", "總損益", "法人(張)"] if c in 表.columns]
-    整數 = {"成交張數", "報告次數", "今日損益", "總損益", "股數", "總成本", "法人(張)", "市值億", "注意"}
+    欄們 = [c for c in ["漲跌幅", "20日漲幅", "報酬率(%)", "今日損益", "總損益"] if c in 表.columns]
+    整數 = {"成交張數", "今日損益", "總損益", "股數", "總成本"}
     格式 = {c: ("{:,.0f}" if c in 整數 else "{:,.2f}") for c in 表.select_dtypes("number").columns}
-    格式.update({c: f for c, f in (("總分", "{:.1f}"), ("較昨日", "{:+.1f}")) if c in 格式})
     return 表.style.map(lambda v: f"color:{漲跌色(v)}", subset=欄們).format(格式, na_rep="—")
 
 
 # ---------- 讀資料 ----------
-常駐天數 = 300  # 52 週高點要 240 天，多留一點
-
-
-@st.cache_data(max_entries=30, ttl=43200, show_spinner=False)
-def 個股全史(代號, 資料版本=None):
-    """這一檔完整 5 年的指標（K 線週月季、本益比河流圖、個股回測用），只讀這檔所以很快、也不佔記憶體。"""
-    原始 = engine.讀取資料庫(代號=代號)
-    return None if 原始 is None else engine.計算指標(原始)
-
-
 @st.cache_resource(max_entries=1, show_spinner="讀取資料庫中…")  # 不複製資料，省一半記憶體
 def 載入(資料版本):
     # 資料版本變了（每天更新後）就會重新讀取，不會一直用舊的暫存
-    原始 = engine.讀取資料庫(最近天數=常駐天數)  # 平常只放近一年多，完整 5 年要用時再臨時讀
+    原始 = engine.讀取資料庫()
     if 原始 is None:
         return None, None
-    指標 = engine.計算指標(原始)
-    del 原始
-    engine.釋放記憶體()
-    return 指標, engine.讀取加權指數()
+    return engine.計算指標(原始), engine.讀取加權指數()
 
 
 def 資料版本():
     紀錄們 = list((engine.資料夾 / "status").glob("*.txt")) + list(engine.資料夾.glob("dates.txt"))
-    最新 = max((f.stat().st_mtime for f in 紀錄們 + list(engine.資料夾.glob("updated.txt"))), default=0)
+    最新 = max((f.stat().st_mtime for f in 紀錄們), default=0)
     檔數 = len(list((engine.資料夾 / "prices").glob("**/*.csv.gz")))
     return f"{最新}-{檔數}"
 
 
-@st.cache_resource
-def _目前版本():
-    return {"版本": None}
+指標, 加權 = 載入(資料版本())
 
-
-_版本 = 資料版本()
-if _目前版本()["版本"] not in (None, _版本):
-    # 資料更新了：先丟掉舊資料再讀新的，避免新舊兩份同時佔記憶體
-    載入.clear()
-    engine.釋放記憶體()
-_目前版本()["版本"] = _版本
-_骨架 = None
-if not st.session_state.get("_已載入過"):  # 第一次開站（網站剛睡醒要讀 20 秒資料）：先畫灰色卡片骨架，不讓畫面空白
-    _骨架 = st.empty()
-    _骨架.markdown('<div class="skel-note">資料讀取中，第一次開站約需 20 秒…</div><div class="skel">'
-                 + '<div class="sk"></div>' * 6 + '</div>', unsafe_allow_html=True)
-指標, 加權 = 載入(_版本)
-if _骨架 is not None:
-    _骨架.empty()
-    st.session_state["_已載入過"] = True
-
-st.markdown("""<div id="top"></div><div class="fab"><a class="fab-home" href="?p=01" target="_self" title="回首頁"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h5v-6h4v6h5V10"/></svg></a><a class="totop" href="#top" target="_self" title="回到頂端"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg></a></div><div class="hero"><div class="kicker">TAIWAN STOCK EXCHANGE // PERSONAL LAB</div>
+st.markdown("""<div class="hero"><div class="kicker">TAIWAN STOCK EXCHANGE // PERSONAL LAB</div>
 <div class="title">台股<span>觀測</span>實驗室</div>
 <div class="sub">SCREEN · BACKTEST · OBSERVE — 資料來源：臺灣證券交易所、證券櫃檯買賣中心</div></div>""",
             unsafe_allow_html=True)
-
-def 最後更新():
-    f = engine.資料夾 / "updated.txt"
-    return f.read_text().strip() if f.exists() else "（下次自動更新後顯示）"
-
 
 if 指標 is None:
     載入.clear()
@@ -851,335 +165,64 @@ if 指標 is None:
     st.stop()
 
 最新日 = 指標["date"].max()
-def 是手機():
-    try:
-        return "Mobile" in st.context.headers.get("User-Agent", "")
-    except Exception:
-        return False
-
-
-if "精簡表格" not in st.session_state:  # 手機預設精簡
-    st.session_state["精簡表格"] = 是手機()
-if "新手模式" not in st.session_state:  # 網址 ?n=1 記住新手模式
-    st.session_state["新手模式"] = st.query_params.get("n") == "1"
-if "手機模式" not in st.session_state:  # 網址 ?m=1／m=0 記住；沒指定時，用手機打開自動開啟
-    _m = st.query_params.get("m")
-    st.session_state["手機模式"] = _m == "1" if _m in ("0", "1") else 是手機()
-    if st.session_state["手機模式"]:
-        st.session_state["精簡表格"] = True
-
-
-def _切換手機():
-    if st.session_state.get("手機模式"):  # 開手機模式時表格一併精簡，不用左右滑
-        st.session_state["精簡表格"] = True
-    st.session_state.pop("首頁版面", None)  # 首頁版面回到該模式的預設（手機版面／新手版面）
-    st.query_params.pop("layout", None)
-
-
-手機說明 = "字體放大、卡片改兩欄；首頁先給「今天必須知道」重點摘要，個股頁直接攤開白話結論。關掉就回到完整版面。"
-_手 = bool(st.session_state.get("手機模式"))
-with st.container(key="toolbar"):
-    if _手:  # 手機模式：日期一行，按鈕一排，較少用的開關收進「⚙️ 設定」
-        m, s, d, b = st.columns([1.8, 1, 1, 1], vertical_alignment="center")
-        m.toggle(":material/smartphone: 手機", key="手機模式", on_change=_切換手機)
-        with s.popover(":material/tune: 設定"):
-            n, c, e = st, st, st
-            n.toggle(":material/school: 新手模式", key="新手模式", help="打開後：首頁顯示三步驟看盤教學、個股頁先給白話一句話結論並收起進階指標；專有名詞旁的 ❓ 可看白話說明")
-            c.toggle(":material/view_agenda: 精簡表格", key="精簡表格", help="表格只留名稱、股價、漲跌等重點欄位，手機不用左右滑")
-            e.toggle(":material/download: 下載表格", key="顯示下載", help="打開後，每個表格下面會多一個「下載 Excel」按鈕")
-            st.caption(f":material/calendar_today: 資料日期 {最新日:%Y/%m/%d}　·　資料庫最後更新 {最後更新()}")
-    else:
-        st.caption(f":material/calendar_today: 資料日期 {最新日:%Y/%m/%d}　·　資料庫最後更新 {最後更新()}"
-                  '<span class="hide-m">（每個交易日約 18:00 自動更新）</span>', unsafe_allow_html=True)
-        m, n, c, e, d, b = st.columns([1.15, 1.15, 1.15, 1.15, .7, .7], vertical_alignment="center")
-        m.toggle(":material/smartphone: 手機模式", key="手機模式", on_change=_切換手機, help=手機說明)
-        n.toggle(":material/school: 新手模式", key="新手模式", help="打開後：首頁顯示三步驟看盤教學、個股頁先給白話一句話結論並收起進階指標；專有名詞旁的 ❓ 可看白話說明")
-        c.toggle(":material/view_agenda: 精簡表格", key="精簡表格", help="表格只留名稱、股價、漲跌等重點欄位，手機不用左右滑")
-        e.toggle(":material/download: 下載表格", key="顯示下載", help="打開後，每個表格下面會多一個「下載 Excel」按鈕")
-新手 = bool(st.session_state.get("新手模式"))
-if (st.query_params.get("n") == "1") != 新手:
-    if 新手:
-        st.query_params["n"] = "1"
-    else:
-        del st.query_params["n"]
-手機 = bool(st.session_state.get("手機模式"))
-_預設m = 是手機()
-if 手機 == _預設m:  # 跟自動判斷一樣就不寫進網址
-    st.query_params.pop("m", None)
-else:
-    st.query_params["m"] = "1" if 手機 else "0"
-if 手機:
-    st.markdown(手機CSS, unsafe_allow_html=True)
-with d.popover(":material/menu_book: 名詞"):
-    找 = st.text_input("查名詞", placeholder="例如：共振區、Beta、融資維持率", key="查名詞", label_visibility="collapsed")
-    全部 = st.checkbox(f"列出全部 {len(beginner.名詞卡) + len(engine.名詞表)} 個名詞", key="名詞全列")
-    if not 找 and not 全部:
-        st.caption("輸入關鍵字查詢，或勾選上面列出全部。")
-    for 詞, (白, 用, 坑) in (beginner.名詞卡.items() if 找 or 全部 else []):
-        if not 找 or 找.lower() in 詞.lower() or 找 in 白 + 用 + 坑:
-            st.markdown(f"**{詞}**\n- 白話是什麼：{白}\n- 這數字怎麼用：{用}\n- 新手常見陷阱：{坑}")
-    for 詞, 說明 in (engine.名詞表.items() if 找 or 全部 else []):
-        if 詞 in beginner.名詞卡:
-            continue
-        if not 找 or 找.lower() in 詞.lower() or 找 in 說明:
-            st.markdown(f"**{詞}**　{說明}")
-with b.popover(":material/sync: 更新"):
-    st.markdown("**重新載入**：資料庫已經更新、但網站顯示的還是舊資料時按。")
-    if st.button("🔄 重新載入網站資料", key="重新載入"):
-        try:
-            _有密碼 = bool(st.secrets.get("password"))
-        except Exception:
-            _有密碼 = False
-        if _有密碼 and not st.session_state.get("已解鎖"):  # 清全站暫存會讓所有訪客都重等約 20 秒，只給站長按
-            st.warning("重新載入會清掉全站暫存，請先到「02 / 我的股票」輸入密碼解鎖。")
-        else:
-            載入.clear()
-            st.cache_data.clear()
-            for k in ("自選股", "到價提醒", "交易日記", "研究筆記"):
-                st.session_state.pop(k, None)
-            engine.釋放記憶體()
-            st.rerun()
-    st.markdown("**重新執行更新**：請 GitHub 立刻再抓一次交易所資料（約 5～15 分鐘），完成後再按上面的重新載入。")
-    if st.button("⚡ 重新執行資料更新", key="觸發更新"):
-        try:
-            秘密 = dict(st.secrets)
-        except Exception:
-            秘密 = {}
-        if 秘密.get("password") and not st.session_state.get("已解鎖"):
-            st.warning("請先到「02 / 我的股票」輸入密碼解鎖。")
-        else:
-            成功, 說明 = engine.觸發更新(秘密)
-            (st.success if 成功 else st.error)(說明)
-
-
-@st.cache_data(ttl=3600, show_spinner=False, max_entries=1)
-def 補充欄位(版本鍵):
-    """外資持股比、當沖比率、投信 60 日買超佔股本、負債比、流動比、近四季現金流、合約負債、預估 EPS（每天更新一次）。"""
-    表 = engine.籌碼補充表(指標)
-    for 補 in (engine.財報體質表(), engine.合約負債表(), engine.預估EPS表()):
-        if 補 is not None:
-            表 = 表.join(補, how="outer")
-    return 表
-
-
-@st.cache_data(max_entries=2, show_spinner=False)
-def 基本面資料(版本鍵):
-    return engine.讀取基本面()
-
-
-@st.cache_data(max_entries=2, show_spinner=False)
-def 今日資料(版本鍵):
-    """最新一天的行情＋基本面＋籌碼補充欄位。以前每點一下都重算（約 1.4 秒），現在每天只算一次。"""
-    return engine.加預估本益比(engine.加融資佔股本(engine.加基本面(指標[指標["date"] == 最新日], 基本面資料(版本鍵)).join(補充欄位(版本鍵), on="代號")))
-
-
-@st.cache_data(ttl=3600, max_entries=64, show_spinner=False)
-def 讀檔(函式名, 版本鍵, *參數):
-    """engine 的「讀取○○」函式加快取：每天的資料檔一天只讀一次，不用每點一下就重讀。"""
-    return getattr(engine, 函式名)(*參數)
-
-
-今日 = 今日資料(_版本)
-市場名稱 = dict(zip(今日["代號"], 今日["名稱"]))
+今日 = engine.加基本面(指標[指標["date"] == 最新日], engine.讀取基本面())
+市場對照 = dict(zip(今日["代號"], 今日["市場"]))
 有籌碼 = "法人買超" in 指標.columns
 
-
-@st.cache_data(ttl=300, show_spinner=False)
-def 抓國際():
-    return engine.國際行情(), engine.台指期()
-
-
-@st.cache_data(ttl=3600)
-def _規則體檢表(版本鍵):
-    try:
-        歷 = feedback.讀取規則體檢().get("歷史", [])
-        return {r["規則"]: r for r in (歷[-1]["規則"] if 歷 else [])}, (歷[-1]["計算日"] if 歷 else "")
-    except Exception:
-        return {}, ""
-
-
-def 可信度(規則, 只要圖示=False):
-    """訊號旁的可信度標記，依每月規則體檢（data/rule_health.json）：✅ 回測有效、➖ 沒有優勢、⚠️ 反向、❔ 還沒驗證。"""
-    表, 日 = _規則體檢表(_版本)
-    r = 表.get(規則)
-    判 = r["判定"] if r else "還沒驗證"
-    圖 = {"有效": "✅", "沒有優勢": "➖", "反向": "⚠️"}.get(判, "❔")
-    if 只要圖示:
-        return 圖
-    return f"{圖} {判}" + (f"（{r['天數']} 日超額 {r['超額%']:+.1f}%）" if r and r.get("超額%") is not None else "")
-
-
-def 已驗證(規則):
-    """規則體檢判定「有效」才算；首頁必知只放這種訊號。"""
-    return _規則體檢表(_版本)[0].get(規則, {}).get("判定") == "有效"
-
-
-def 漲跌家數(表=None):
-    """全站統一的漲跌家數：上市櫃普通股（4 碼、不含 0 開頭的 ETF），回傳 (漲, 平, 跌)。
-    以前頁首、指數卡、市場判讀各用不同範圍，同一頁出現三組數字。"""
-    t = 今日 if 表 is None else 表
-    t = t[t["代號"].astype(str).str.fullmatch(r"[1-9]\d{3}") & (t["收盤"] > 0)]
-    return int((t["漲跌"] > 0).sum()), int((t["漲跌"] == 0).sum()), int((t["漲跌"] < 0).sum())
-
-
-def 跑馬燈():
-    """頁首一條會捲動的行情：加權、漲跌家數、台指期、美股、匯率。手指按住（滑鼠移上去）會暫停。"""
-    項們 = []
-    def 加(名, 價, 漲跌, 幅度=None, 格式="{:,.2f}"):
-        色 = 漲跌色(漲跌)
-        尾 = f"{漲跌:+,.2f}" + (f"（{幅度:+.2f}%）" if 幅度 is not None and pd.notna(幅度) else "")
-        項們.append(f'<span><b>{名}</b><font color="{色}">{格式.format(價)} {尾}</font></span>')
-    if 加權 is not None and len(加權):
-        r = 加權.iloc[-1]
-        加("加權", r["close"], r["change"], r["change"] / (r["close"] - r["change"]) * 100)
-    上, _, 下 = 漲跌家數()
-    項們.append(f'<span><b>漲跌家數</b><font color="{紅}">▲{上}</font> <font color="{綠}">▼{下}</font></span>')
-    項們.append(f'<span><b>成交金額</b>{今日["成交值億"].sum():,.0f} 億</span>')
-    try:
-        國際, 期貨 = 抓國際()
-    except Exception:
-        國際, 期貨 = {}, {}
-    for 盤 in ("日盤", "夜盤"):
-        q = 期貨.get(盤)
-        if q:
-            加(f"台指期{盤}", q["價"], q["漲跌"], q["幅度"], "{:,.0f}")
-    for 名 in ("費城半導體", "那斯達克", "道瓊", "S&P 500", "台積電 ADR", "日經 225", "美元/台幣"):
-        q = 國際.get(名)
-        if q:
-            加(名, q["價"], q["漲跌"], q["幅度"], "{:,.3f}" if 名 == "美元/台幣" else "{:,.2f}")
-    內容 = "".join(項們)
-    if 手機:  # 手機：資料日期放在行情列左邊，不再獨佔一行
-        st.markdown(f'<div class="tkrow"><span class="tkd">{最新日:%m/%d}</span><div class="ticker"><div class="tr">{內容}{內容}</div></div></div>',
-                    unsafe_allow_html=True)
-    else:
-        st.markdown(f'<div class="ticker"><div class="tr">{內容}{內容}</div></div>', unsafe_allow_html=True)
-
-
-跑馬燈()
-
-# ---------- 選股條件（04 選股與 08 組合回測共用，原本在左側欄） ----------
-def 選股條件區():
-    """畫出選股條件，回傳 (條件, 範本)。換頁時 Streamlit 會清掉沒顯示的元件狀態，所以另外記一份。"""
-    記憶 = st.session_state.setdefault("_條件記憶", {})
-    for k, v in 記憶.items():
-        if k not in st.session_state:
-            st.session_state[k] = v
-    條件 = {}
-    條件["市場"] = st.multiselect("市場", ["上市", "上櫃"], default=["上市", "上櫃"], key="條_市場")
-    範本 = st.selectbox("策略範本", ["自訂條件"] + list(engine.烏賊條件), key="條_策略範本",
-                      help="烏賊 0530 課程的五組選股條件，選了之後下面的自訂條件會暫停使用")
-    if 範本 == "自訂條件":
-        格 = st.columns(2)
-        with 格[0].container(border=True):
-            st.markdown("**基本面**")
-            if st.checkbox("本益比上限", True, key="條_本益比上限"):
-                條件["本益比上限"] = st.number_input("本益比 ≤", value=15.0, step=1.0, key="條_本益比 ≤")
-            if st.checkbox("殖利率下限", True, key="條_殖利率下限"):
-                條件["殖利率下限"] = st.number_input("殖利率(%) ≥", value=4.0, step=0.5, key="條_殖利率(%) ≥")
-            if st.checkbox("股價淨值比上限", key="條_股價淨值比上限"):
-                條件["淨值比上限"] = st.number_input("淨值比 ≤", value=2.0, step=0.1, key="條_淨值比 ≤")
-            if st.checkbox("月營收年增率下限", key="條_月營收年增率下限"):
-                條件["營收年增率下限"] = st.number_input("營收年增率(%) ≥", value=20.0, step=5.0, key="條_營收年增率(%) ≥")
-            if st.checkbox("月營收月增率下限", key="條_月營收月增率下限"):
-                條件["營收月增率下限"] = st.number_input("營收月增率(%) ≥", value=0.0, step=5.0, key="條_營收月增率(%) ≥")
-            if st.checkbox("累計營收年增率下限", key="條_累計營收年增率下限"):
-                條件["累計營收年增率下限"] = st.number_input("累計營收年增率(%) ≥", value=10.0, step=5.0, key="條_累計營收年增率(%) ≥")
-            if st.checkbox("最新一季 EPS 下限", key="條_最新一季 EPS 下限"):
-                條件["EPS下限"] = st.number_input("EPS(元) ≥", value=1.0, step=0.5, key="條_EPS(元) ≥")
-            if st.checkbox("負債比上限", key="條_負債比上限"):
-                條件["負債比上限"] = st.number_input("負債比(%) ≤", value=50.0, step=5.0, key="條_負債比(%) ≤")
-            if st.checkbox("近四季自由現金流為正", key="條_近四季自由現金流為正"):
-                條件["自由現金流為正"] = True
-            if st.checkbox("合約負債年增率下限", key="條_合約負債年增率下限",
-                           help="合約負債＝已收款、還沒交貨的預收款，常是未來一兩季營收的領先指標。金額不到 1 億的公司不算年增率。"):
-                條件["合約負債年增下限"] = st.number_input("合約負債年增率(%) ≥", value=30.0, step=10.0, key="條_合約負債年增率(%) ≥")
-            if st.checkbox("合約負債能見度下限", key="條_合約負債能見度下限",
-                           help="合約負債 ÷ 近四季營收 × 12，約等於手上預收款夠做幾個月營收。"):
-                條件["能見度月下限"] = st.number_input("能見度(月) ≥", value=3.0, step=0.5, key="條_能見度(月) ≥")
-            if st.checkbox("預估本益比上限（今年）", key="條_預估本益比上限",
-                           help="今年預估 EPS（使用者匯出的全市場預估，A、B 兩源中位數）÷ 今天收盤。預估 EPS ≤ 0 的股票會被排除。"):
-                條件["預估本益比上限"] = st.number_input("預估本益比 ≤", value=15.0, step=1.0, key="條_預估本益比 ≤")
-            if st.checkbox("明年預估本益比上限", key="條_明年預估本益比上限",
-                           help="明年預估 EPS 只有約 500 檔有（多半是有法人研究的中大型股）。"):
-                條件["明年預估本益比上限"] = st.number_input("明年預估本益比 ≤", value=12.0, step=1.0, key="條_明年預估本益比 ≤")
-            if st.checkbox("明年 EPS 成長率下限", key="條_明年EPS成長下限"):
-                條件["明年EPS成長下限"] = st.number_input("明年 EPS 成長(%) ≥", value=20.0, step=5.0, key="條_明年EPS成長(%) ≥")
-            if st.checkbox("預估 EPS 上修下限（跟上一份快照比）", key="條_預估上修下限",
-                           help="要上傳過至少兩份預估 EPS 快照（04 選股的「📐 預估 EPS」分頁）才有資料。"):
-                條件["預估修正下限"] = st.number_input("今年預估上修(%) ≥", value=5.0, step=1.0, key="條_預估上修(%) ≥")
-            if st.checkbox("預估業外占比上限（要本業賺錢）", key="條_預估業外占比上限",
-                           help="（A、B 共識 − Vera 本業 EPS）÷ 共識。業外（匯兌、投資、處分利益）不容易預估也不一定會再出現，占比越低越看本業。"):
-                條件["預估業外占比上限"] = st.number_input("預估業外占比(%) ≤", value=20.0, step=5.0, key="條_預估業外占比(%) ≤")
-            if st.checkbox("排除預估分歧大的股票", key="條_排除預估分歧",
-                           help="A、B 兩個來源的今年預估差超過 30% 就排除（只有一個來源的不受影響）。"):
-                條件["排除預估分歧"] = True
-            st.caption("月營收、EPS、負債比、現金流、合約負債、預估 EPS 只有最新一期，組合回測時不會套用。")
-        with 格[1].container(border=True):
-            st.markdown("**籌碼面**")
-            if st.checkbox("外資連續買超", key="條_外資連續買超"):
-                條件["外資連買下限"] = st.number_input("外資連買天數 ≥", value=3, step=1, key="條_外資連買天數 ≥")
-            if st.checkbox("投信連續買超", key="條_投信連續買超"):
-                條件["投信連買下限"] = st.number_input("投信連買天數 ≥", value=3, step=1, key="條_投信連買天數 ≥")
-            if st.checkbox("外資連續賣超", key="條_外資連續賣超"):
-                條件["外資連賣下限"] = st.number_input("外資連賣天數 ≥", value=5, step=1, key="條_外資連賣天數 ≥")
-            if st.checkbox("土洋對作（外資賣、投信買）", key="條_土洋對作"):
-                條件["土洋對作下限"] = st.number_input("連續天數 ≥", value=3, step=1, key="條_土洋對作天數 ≥")
-            if st.checkbox("三大法人 5 日合計買超", key="條_三大法人 5 日合計買超"):
-                條件["法人5日買超下限"] = st.number_input("法人 5 日買超(張) ≥", value=1000, step=500, key="條_法人 5 日買超(張) ≥")
-            if st.checkbox("融資 5 日增減上限", key="條_融資 5 日增減上限"):
-                條件["融資5日增減上限"] = st.number_input("融資 5 日增減(%) ≤", value=0.0, step=1.0, key="條_融資 5 日增減(%) ≤")
-            if st.checkbox("跌深＋融資洗完", key="條_融資洗完",
-                           help="距 52 週高點跌超過 30%，且融資 20 日減少超過 15% 或維持率 20 日內跌破過 130%。"
-                                "實測比單純跌深好，但仍不如強勢股（2023～2026 每月挑 10 檔組合回測總報酬約 −1%，0050 +307%）；"
-                                "跌深但融資還在增加的（接刀風險）最差"):
-                條件["融資洗完"] = True
-            if st.checkbox("個股融資維持率上限（估算）", key="條_融資維持率上限"):
-                條件["融資維持率上限"] = st.number_input("融資維持率(%) ≤", value=150.0, step=5.0, key="條_融資維持率(%) ≤",
-                                                    help="網站自己估算，可能偏高 2～15 個百分點；130% 以下券商會追繳")
-            if st.checkbox("排除融資佔股本最高的股票（籌碼不安定）", key="條_融資佔股本排除",
-                           help="融資佔股本＝融資餘額 × 1,000 ÷ 發行股數。網路評論：融資高的標的殺盤時是重災區；"
-                                "2026-11 回測 9 次急跌，融資佔股本最高 1/5 平均多跌約 5 個百分點（但大多是高波動股的另一面）"):
-                條件["融資佔股本排名上限"] = st.slider("保留融資佔股本排名百分位 ≤（80＝排除最高的 20%）", 50, 100, 80, 5,
-                                                key="條_融資佔股本排名上限")
-            if st.checkbox("外資持股比下限", key="條_外資持股比下限"):
-                條件["外資持股比下限"] = st.number_input("外資持股比(%) ≥", value=30.0, step=5.0, key="條_外資持股比(%) ≥")
-            if st.checkbox("外資持股比 20 日增加", key="條_外資持股比 20 日增加"):
-                條件["外資持股20日變化下限"] = st.number_input("增加(百分點) ≥", value=1.0, step=0.5, key="條_外資持股增加 ≥")
-            if st.checkbox("當沖比率上限（避開當沖股）", key="條_當沖比率上限"):
-                條件["當沖比率上限"] = st.number_input("近 5 日當沖比率(%) ≤", value=30.0, step=5.0, key="條_當沖比率(%) ≤")
-                st.caption("當沖比率只有上市股票，上櫃股票會被排除。")
-        with 格[0].container(border=True):
-            st.markdown("**技術面**")
-            if st.checkbox("站上均線", key="條_站上均線"):
-                條件["站上均線"] = st.selectbox("收盤價站上", [5, 20, 60], index=1, format_func=lambda n: f"{n} 日均線", key="條_收盤價站上")
-            條件["均線多頭排列"] = st.checkbox("均線多頭排列（5 > 20 > 60 日）", key="條_均線多頭排列（5 > 20 > 60 日）")
-            條件["MACD翻紅多頭"] = st.checkbox("MACD 今天翻紅＋多頭排列（5 > 10 > 20 > 60）", key="條_MACD翻紅多頭",
-                                             help="基礎撐壓講義的規則，用 2022～2026 資料實測：之後 20 日平均比大盤多 1.03%（單獨 MACD 翻紅沒有優勢）")
-            條件["排除均線糾結"] = st.checkbox("排除均線糾結（四條均線差距 < 2%）", key="條_排除均線糾結",
-                                           help="實測均線糾結的股票之後 20 日平均比大盤少 0.79%，糾結後突破也沒有比較好")
-            if st.checkbox("20 日漲幅下限", key="條_20 日漲幅下限"):
-                條件["20日漲幅下限"] = st.number_input("20 日漲幅(%) ≥", value=5.0, step=1.0, key="條_20 日漲幅(%) ≥")
-            if st.checkbox("RSI 區間", key="條_RSI 區間"):
-                條件["RSI區間"] = st.slider("RSI(14)", 0, 100, (30, 70), key="條_RSI(14)")
-            if st.checkbox("量比下限（今日量 ÷ 20 日均量）", key="條_量比下限（今日量 ÷ 20 日均量）"):
-                條件["量比下限"] = st.number_input("量比 ≥", value=1.5, step=0.1, key="條_量比 ≥")
-        with 格[1].container(border=True):
-            st.markdown("**流動性與價格**")
-            條件["成交張數下限"] = st.number_input("成交張數 ≥", value=500, step=100, key="條_成交張數 ≥")
-            條件["股價區間"] = st.slider("收盤價", 0, 3000, (10, 1000), key="條_收盤價")
-            條件["排除ETF"] = st.checkbox("排除 ETF", True, key="條_排除 ETF")
-        條件["排序"] = st.selectbox("排序依據", list(engine.排序方式), key="條_排序依據")
-    else:
-        st.info(engine.烏賊條件[範本]["說明"])
-        條件.update(engine.烏賊條件[範本]["條件"])
-        條件["排除ETF"] = True
-    st.session_state["_條件記憶"] = {k: v for k, v in st.session_state.items() if str(k).startswith("條_")}
-    return 條件, 範本
-
+# ---------- 側邊欄：選股條件（選股與回測共用） ----------
+st.sidebar.markdown(f'<div class="sec">SCREEN RULES</div>', unsafe_allow_html=True)
+條件 = {}
+條件["市場"] = st.sidebar.multiselect("市場", ["上市", "上櫃"], default=["上市", "上櫃"])
+範本 = st.sidebar.selectbox("策略範本", ["自訂條件"] + list(engine.烏賊條件),
+                          help="烏賊 0530 課程的五組選股條件，選了之後下面的自訂條件會暫停使用")
+if 範本 == "自訂條件":
+    with st.sidebar.expander("基本面", expanded=True):
+        if st.checkbox("本益比上限", True):
+            條件["本益比上限"] = st.number_input("本益比 ≤", value=15.0, step=1.0)
+        if st.checkbox("殖利率下限", True):
+            條件["殖利率下限"] = st.number_input("殖利率(%) ≥", value=4.0, step=0.5)
+        if st.checkbox("股價淨值比上限"):
+            條件["淨值比上限"] = st.number_input("淨值比 ≤", value=2.0, step=0.1)
+        if st.checkbox("月營收年增率下限"):
+            條件["營收年增率下限"] = st.number_input("營收年增率(%) ≥", value=20.0, step=5.0)
+        if st.checkbox("月營收月增率下限"):
+            條件["營收月增率下限"] = st.number_input("營收月增率(%) ≥", value=0.0, step=5.0)
+        if st.checkbox("累計營收年增率下限"):
+            條件["累計營收年增率下限"] = st.number_input("累計營收年增率(%) ≥", value=10.0, step=5.0)
+        if st.checkbox("最新一季 EPS 下限"):
+            條件["EPS下限"] = st.number_input("EPS(元) ≥", value=1.0, step=0.5)
+        st.caption("月營收與 EPS 只有最新一期，組合回測時不會套用。")
+    with st.sidebar.expander("籌碼面", expanded=True):
+        if st.checkbox("外資連續買超"):
+            條件["外資連買下限"] = st.number_input("外資連買天數 ≥", value=3, step=1)
+        if st.checkbox("投信連續買超"):
+            條件["投信連買下限"] = st.number_input("投信連買天數 ≥", value=3, step=1)
+        if st.checkbox("三大法人 5 日合計買超"):
+            條件["法人5日買超下限"] = st.number_input("法人 5 日買超(張) ≥", value=1000, step=500)
+        if st.checkbox("融資 5 日增減上限"):
+            條件["融資5日增減上限"] = st.number_input("融資 5 日增減(%) ≤", value=0.0, step=1.0)
+    with st.sidebar.expander("技術面", expanded=True):
+        if st.checkbox("站上均線"):
+            條件["站上均線"] = st.selectbox("收盤價站上", [5, 20, 60], index=1, format_func=lambda n: f"{n} 日均線")
+        條件["均線多頭排列"] = st.checkbox("均線多頭排列（5 > 20 > 60 日）")
+        if st.checkbox("20 日漲幅下限"):
+            條件["20日漲幅下限"] = st.number_input("20 日漲幅(%) ≥", value=5.0, step=1.0)
+        if st.checkbox("RSI 區間"):
+            條件["RSI區間"] = st.slider("RSI(14)", 0, 100, (30, 70))
+        if st.checkbox("量比下限（今日量 ÷ 20 日均量）"):
+            條件["量比下限"] = st.number_input("量比 ≥", value=1.5, step=0.1)
+    with st.sidebar.expander("流動性與價格", expanded=True):
+        條件["成交張數下限"] = st.number_input("成交張數 ≥", value=500, step=100)
+        條件["股價區間"] = st.slider("收盤價", 0, 3000, (10, 1000))
+        條件["排除ETF"] = st.checkbox("排除 ETF", True)
+    條件["排序"] = st.sidebar.selectbox("排序依據", list(engine.排序方式))
+else:
+    st.sidebar.info(engine.烏賊條件[範本]["說明"])
+    條件.update(engine.烏賊條件[範本]["條件"])
+    條件["排除ETF"] = True
 
 # ---------- 頁面切換（用按鈕列代替分頁，才能點股票後直接跳到個股查詢） ----------
-頁面檔 = ['p01_market', 'p02_mystocks', 'p03_stock', 'p04_screener', 'p05_revenue', 'p06_etf', 'p07_score', 'p08_backtest', 'p09_stats']
-頁面們 = ["01 / 市場總覽", "02 / 我的股票", "03 / 個股查詢", "04 / 選股", "05 / 月營收", "06 / 主動式 ETF", "07 / 每日評分", "08 / 回測", "09 / 使用統計"]
+頁面們 = ["01 / 市場總覽", "02 / 個股查詢", "03 / 選股", "04 / 回測"]
 股票選項 = (今日["代號"] + " " + 今日["名稱"]).tolist()
 
 
@@ -1188,448 +231,30 @@ def 前往(代號):
     選項 = next((v for v in 股票選項 if v.split()[0] == str(代號)), None)
     if 選項:
         st.session_state["個股查詢"] = 選項
-        st.session_state["頁面"] = 頁面們[2]
+        st.session_state["頁面"] = 頁面們[1]
         st.session_state["要跳轉"] = True
 
 
-def 登入參數():
-    """站內連結要帶著的網址參數（登入通行證、首頁版面、最近看過），點了才不會被登出或重設。"""
-    版 = st.query_params.get("layout")
-    近 = st.query_params.get("r")
-    return (f"&layout={urllib.parse.quote(版)}" if 版 else "") + (f"&r={urllib.parse.quote(近)}" if 近 else "")
-
-
-def 股連結(代號):
-    return f"?s={代號}{登入參數()}"
-
-
-def 頁連結(頁碼):
-    return f"?p={頁碼}{登入參數()}"
-
-
-def _密碼():
-    try:
-        return str(st.secrets.get("password", ""))
-    except Exception:
-        return ""
-
-
-def 登入憑證(天數=None):
-    """密碼通過後發一張有期限的通行證放在網址（?k=...），重新整理或點排行榜連結都不用再輸入密碼。"""
-    try:
-        天數 = 天數 or int(st.secrets.get("LOGIN_DAYS", 30))
-    except Exception:
-        天數 = 30
-    到期 = int(dt.datetime.now().timestamp()) + 天數 * 86400
-    簽 = hmac.new(_密碼().encode(), str(到期).encode(), "sha256").hexdigest()[:24]
-    return f"{到期}.{簽}"
-
-
-def 憑證有效(k):
-    try:
-        到期, 簽 = str(k).split(".")
-        對 = hmac.new(_密碼().encode(), 到期.encode(), "sha256").hexdigest()[:24]
-        return bool(_密碼()) and hmac.compare_digest(簽, 對) and int(到期) > dt.datetime.now().timestamp()
-    except Exception:
-        return False
-
-
-@st.cache_resource
-def _密碼錯誤紀錄():
-    return {}
-
-
-def 核對密碼(輸入, 上限=5, 鎖秒=600):
-    """比對密碼；同一個來源（IP）10 分鐘內錯 5 次就先鎖住，防止有人一直猜。錯誤訊息直接顯示在輸入框下面。
-    同一個錯誤密碼在重新整理畫面時不會重複計次。"""
-    密碼 = _密碼()
-    try:
-        來源 = (st.context.headers.get("X-Forwarded-For", "").split(",")[0].strip() or st.context.ip_address or "?")
-    except Exception:
-        來源 = "?"
-    紀錄, 現 = _密碼錯誤紀錄(), time.time()
-    次, 起 = 紀錄.get(來源, (0, 現))
-    if 現 - 起 > 鎖秒:
-        次, 起 = 0, 現
-    if 次 >= 上限:
-        st.error(f"密碼錯太多次，請約 {int((鎖秒 - (現 - 起)) // 60) + 1} 分鐘後再試。")
-        return False
-    if 密碼 and hmac.compare_digest(str(輸入).encode(), 密碼.encode()):  # 轉成位元組，輸入中文也不會出錯
-        紀錄.pop(來源, None)
-        return True
-    指紋 = hashlib.sha256(str(輸入).encode()).hexdigest()[:12]
-    if st.session_state.get("_上次錯誤密碼") != 指紋:  # 畫面重跑時同一個錯誤值不重複算
-        st.session_state["_上次錯誤密碼"] = 指紋
-        紀錄[來源] = (次 + 1, 起 if 次 else 現)
-    st.error("密碼不正確")
-    return False
-
-
-def 記住登入():
-    """解鎖後把通行證存在這台瀏覽器的 cookie（30 天），網址不再帶 k=，分享網址也不會把登入一起分享出去。"""
-    st.session_state["已解鎖"] = True
-    st.session_state["_cookie指令"] = {"cookie": 登入憑證(), "n": time.time()}
-
-
-def 忘記登入():
-    st.session_state["已解鎖"] = False
-    st.session_state["_cookie指令"] = {"cookie": "", "n": time.time()}
-
-
-if "k" in st.query_params:  # 舊書籤、舊連結的 ?k=：有效就換成 cookie，並從網址拿掉
-    if 憑證有效(st.query_params["k"]):
-        記住登入()
-    del st.query_params["k"]
-elif not st.session_state.get("已解鎖") and "_cookie登入" not in st.session_state:
-    st.session_state["_cookie登入"] = True  # 每個瀏覽階段只看一次 cookie（登出後不會又自動登入）
-    try:
-        _餅 = st.context.cookies.get("twk", "")
-    except Exception:
-        _餅 = ""
-    if _餅 and 憑證有效(_餅):
-        st.session_state["已解鎖"] = True
-
-if "已計來訪" not in st.session_state:  # 每個瀏覽階段記一次來客數（背景存檔，不拖慢網頁）
-    st.session_state["已計來訪"] = True
-    try:
-        # 依序用：真實 IP（經過 Streamlit 的轉送標頭）、連線 IP、瀏覽器的 cookie
-        _ip = (st.context.headers.get("X-Forwarded-For", "").split(",")[0].strip() or st.context.ip_address
-               or st.context.cookies.get("_streamlit_xsrf", ""))
-    except Exception:
-        _ip = ""
-    try:
-        _秘 = dict(st.secrets)
-    except Exception:
-        _秘 = {}
-    _碼 = hashlib.sha256(f"{_秘.get('password', '')}|{_ip}".encode()).hexdigest()[:8] if _ip else ""
-    threading.Thread(target=engine.記錄來訪, args=(_秘, bool(st.session_state.get("已解鎖")), _碼), daemon=True).start()
-
-# ---------- 網址記住目前頁面與股票（?p=03&s=2330）：重新整理、加書籤、分享連結都會回到同一個畫面 ----------
-_網址股 = st.query_params.get("s")
-if _網址股 and _網址股 != st.session_state.get("_網址s"):  # 排行榜、LINE 的連結：?s=2330
-    st.session_state["_網址s"] = _網址股
-    前往(_網址股)
-_網址頁 = st.query_params.get("p")
-if _網址頁 and _網址頁 != st.session_state.get("_網址p"):  # 卡片換頁的連結：?p=07
-    st.session_state["_網址p"] = _網址頁
-    st.session_state["頁面"] = next((x for x in 頁面們 if x.startswith(str(_網址頁))), 頁面們[0])
+if "s" in st.query_params:  # 排行榜的連結：?s=2330
+    前往(st.query_params["s"])
+    del st.query_params["s"]
 st.session_state.pop("要跳轉", None)
 if st.session_state.get("頁面") not in 頁面們:
     st.session_state["頁面"] = 頁面們[0]
-
-個股分頁們 = ["📋 總覽", "💰 籌碼", "📊 基本面", "📈 技術", "🤖 AI 分析", "⚖️ 比較"]
-
-
-def _搜尋跳轉():
-    選 = st.session_state.get("全站搜尋")
-    if 選:
-        前往(選.split()[0])
-    st.session_state["全站搜尋"] = None
+頁面 = st.segmented_control("頁面", 頁面們, key="頁面", label_visibility="collapsed") or 頁面們[0]
 
 
-def 切換清單():
-    """↑ ↓ 快捷鍵依序切換的股票：自選股 → 最近看過 → 今天成交值前 30 檔。"""
-    清單 = []
-    try:
-        if "自選股" in st.session_state or 可編輯():
-            清單 = [c for v in 自選股清單().values() for c in v]
-    except Exception:
-        清單 = []
-    if not 清單:
-        清單 = [c for c in st.query_params.get("r", "").split(",") if c]
-    if not 清單:
-        值欄 = "成交值億" if "成交值億" in 今日 else "成交張數"
-        清單 = 今日.nlargest(30, 值欄)["代號"].tolist()
-    return list(dict.fromkeys(清單))
-
-
-def _站內導航():
-    """瀏覽器那邊攔下來的站內連結點擊與快捷鍵（不重新載入整頁，畫面與登入狀態都保留）。"""
-    值 = st.session_state.get("站內導航") or {}
-    去, 鍵 = 值.get("go"), 值.get("key")
-    if 去:
-        類, _, 碼 = str(去).partition("=")
-        if 類 == "s":
-            前往(碼)
-        elif 類 == "p":
-            st.session_state["頁面"] = next((x for x in 頁面們 if x.startswith(碼)), st.session_state.get("頁面"))
-        return
-    if not 鍵 or st.session_state.get("頁面") != 頁面們[2]:
-        return
-    動作 = str(鍵).split("|")[0]
-    if 動作 in ("next", "prev"):
-        目前 = str(st.session_state.get("個股查詢") or "").split(" ")[0]
-        清單 = st.session_state.get("_切換清單") or []
-        if 目前 not in 清單:  # 清單固定下來，「最近看過」重新排序也不會來回跳
-            有 = {v.split()[0] for v in 股票選項}
-            清單 = st.session_state["_切換清單"] = [c for c in 切換清單() if c in 有]
-        if 清單:
-            i = 清單.index(目前) if 目前 in 清單 else -1
-            前往(清單[(i + (1 if 動作 == "next" else -1)) % len(清單)] if i >= 0 else 清單[0])
-    elif 動作 in ("tab+", "tab-"):
-        目前 = st.session_state.get("個股分頁") if st.session_state.get("個股分頁") in 個股分頁們 else 個股分頁們[0]
-        st.session_state["個股分頁"] = 個股分頁們[(個股分頁們.index(目前) + (1 if 動作 == "tab+" else -1)) % len(個股分頁們)]
-    elif 動作 in ("日", "週", "月"):
-        st.session_state["個股週期"] = 動作
-        st.session_state["個股分頁"] = "📈 技術"
-
-
-_導航程式 = r"""
-export default function(component) {
-  const { setTriggerValue, data } = component;
-  window.__twNav = setTriggerValue;          // 每次重畫都換成最新的回傳函式
-  // 登入通行證存在 cookie（網址不再帶 k=）；n 是這次指令的編號，同一個指令只執行一次
-  if (data && data.n && data.n !== window.__twCookieN) {
-    window.__twCookieN = data.n;
-    const 安 = location.protocol === "https:" ? "; Secure" : "";
-    document.cookie = data.cookie
-      ? `twk=${data.cookie}; Max-Age=${30 * 86400}; Path=/; SameSite=Lax${安}`
-      : `twk=; Max-Age=0; Path=/; SameSite=Lax${安}`;
-  }
-  if (window.__twNavInit) return;
-  window.__twNavInit = true;
-  // 斷線提示：手機訊號不好時，上方出現一條「連線中斷」，恢復後自動消失
-  const 橫幅 = () => {
-    let b = document.getElementById("tw-offline");
-    if (!b) {
-      b = document.createElement("div");
-      b.id = "tw-offline";
-      b.textContent = "⚠️ 連線中斷，正在重新連線…（畫面上的資料暫時不會更新）";
-      b.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:100000;padding:8px 12px;background:#3A2A00;color:#FFD27A;" +
-        "font:15px 'Noto Sans TC',sans-serif;text-align:center;border-bottom:1px solid #FFB020;display:none";
-      document.body.appendChild(b);
-    }
-    return b;
-  };
-  const 檢查連線 = () => {
-    const w = document.querySelector('[data-testid="stStatusWidget"]');
-    const 斷 = !navigator.onLine || !!(w && /Connecting|Reconnecting|Offline/i.test(w.innerText || ""));
-    橫幅().style.display = 斷 ? "block" : "none";
-  };
-  window.addEventListener("offline", 檢查連線);
-  window.addEventListener("online", 檢查連線);
-  setInterval(檢查連線, 2000);
-  const 送 = (名, 值) => { try { window.__twNav(名, 值); } catch (e) {} };
-  // 1. 站內連結（?s=2330、?p=07）改成站內切換，不重新載入整頁；按住 Ctrl／⌘ 點仍然另開分頁
-  document.addEventListener('click', (e) => {
-    if (e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
-    const a = e.target.closest && e.target.closest('a[href]');
-    if (!a || (a.target && a.target !== '_self')) return;
-    const href = a.getAttribute('href') || '';
-    if (!href.startsWith('?')) return;
-    const q = new URLSearchParams(href.slice(1));
-    const s = q.get('s'), p = q.get('p');
-    if (!s && !p) return;
-    e.preventDefault(); e.stopPropagation();
-    送('go', s ? 's=' + s : 'p=' + p);
-    if (p) { const m = document.querySelector('[data-testid="stMain"]'); (m || window).scrollTo({top: 0, behavior: 'smooth'}); }  // 換頁回到最上面
-  }, true);
-  // 2. 快捷鍵：/ 搜尋、↑ ↓ 切換股票、[ ] 切換分頁、1 2 3 日週月 K（打字中不作用）
-  document.addEventListener('keydown', (e) => {
-    const t = e.target || {}, tag = (t.tagName || '').toLowerCase();
-    if (tag === 'input' || tag === 'textarea' || tag === 'select' || t.isContentEditable || e.ctrlKey || e.metaKey || e.altKey) return;
-    if (e.key === '/') {
-      const i = document.querySelector('input[aria-label*="搜尋股票"], input[aria-label*="輸入代號或名稱查詢"]');
-      if (i) { e.preventDefault(); i.focus(); i.click && i.click(); }
-      return;
-    }
-    const 對照 = {ArrowUp: 'prev', ArrowDown: 'next', '[': 'tab-', ']': 'tab+', '1': '日', '2': '週', '3': '月'};
-    const 動作 = 對照[e.key];
-    if (!動作) return;
-    if ((動作 === 'prev' || 動作 === 'next') && !document.querySelector('input[aria-label*="輸入代號或名稱查詢"]')) return;  // 只在個股頁，其他頁照常捲動
-    e.preventDefault();
-    送('key', 動作 + '|' + Date.now());
-  });
-  // 3. 族群熱力圖：點個股方塊直接切到那檔
-  const 掛 = () => document.querySelectorAll('.js-plotly-plot').forEach((g) => {
-    if (g.__twHooked || typeof g.on !== 'function') return;
-    g.__twHooked = true;
-    g.on('plotly_click', (ev) => {
-      const pt = ev && ev.points && ev.points[0];
-      const m = pt && typeof pt.id === 'string' && /\/([0-9A-Z]{4,6})$/.exec(pt.id);
-      if (m) 送('go', 's=' + m[1]);
-    });
-  });
-  new MutationObserver(掛).observe(document.body, {childList: true, subtree: true});
-  掛();
-}
-"""
-_導航元件 = st.components.v2.component("tw_nav", js=_導航程式)
-with st.container(key="navjs"):
-    _導航元件(key="站內導航", data=st.session_state.get("_cookie指令"), on_go_change=_站內導航, on_key_change=_站內導航)
-
-if st.session_state.get("頁面") != 頁面們[2]:  # 個股查詢頁本身就有搜尋框
-    st.selectbox("搜尋股票", 股票選項, index=None, key="全站搜尋", on_change=_搜尋跳轉, label_visibility="collapsed",
-                 placeholder="🔍 輸入代號或名稱，直接跳到個股查詢（例如 2330、台積電；電腦可按 / 快速搜尋）")
-with st.container(key="nav"):
-    頁面 = st.segmented_control("頁面", 頁面們, key="頁面", label_visibility="collapsed") or 頁面們[0]
-if st.query_params.get("p") != 頁面[:2]:
-    st.query_params["p"] = 頁面[:2]
-
-# ---------- 手機模式：大圖示選單（首頁一排三格大圖示；其他頁上方一排小圖示可左右滑） ----------
-_圖示路徑 = {  # 自繪線條圖示（24×24）
-    "01": '<polyline points="2,13 6,13 8.5,6 11.5,19 14.5,9 16.5,13 22,13"/>',
-    "02": '<rect x="3" y="6" width="18" height="14" rx="2"/><path d="M8 6V4h8v2"/><polygon points="12,9.5 13.2,12 15.9,12.3 13.9,14.1 14.4,16.8 12,15.4 9.6,16.8 10.1,14.1 8.1,12.3 10.8,12"/>',
-    "03": '<circle cx="10.5" cy="10.5" r="6.5"/><line x1="15.3" y1="15.3" x2="21" y2="21"/><line x1="8" y1="8" x2="8" y2="13"/><line x1="10.5" y1="7" x2="10.5" y2="14"/><line x1="13" y1="9" x2="13" y2="12"/>',
-    "04": '<path d="M3 4h18l-7 8.5V19l-4 2v-8.5z"/>',
-    "05": '<line x1="3" y1="21" x2="21" y2="21"/><rect x="4.5" y="13" width="3" height="6"/><rect x="10.5" y="9" width="3" height="10"/><rect x="16.5" y="5" width="3" height="14"/><polyline points="4,9 10,5 14,7 20,2"/>',
-    "06": '<circle cx="12" cy="12" r="9"/><path d="M12 3v9l7.5 5"/><path d="M12 12L4.5 17"/>',
-    "07": '<path d="M3.5 17a9 9 0 1 1 17 0"/><line x1="12" y1="15" x2="16.5" y2="9"/><circle cx="12" cy="15" r="1.4"/><line x1="5" y1="12" x2="6.5" y2="12.4"/><line x1="19" y1="12" x2="17.5" y2="12.4"/>',
-    "08": '<path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"/><polyline points="3,3.5 3.5,8 8,7.5"/><polyline points="12,7.5 12,12 15,14"/>',
-    "09": '<circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.6 2.7-6 6-6s6 2.4 6 6"/><circle cx="17" cy="9" r="2.4"/><path d="M15.5 14.3c3.2-.6 5.5 1.6 5.5 5"/>',
-}
-_圖示名 = {"01": "大盤總覽", "02": "我的股票", "03": "個股查詢", "04": "選股", "05": "月營收", "06": "主動 ETF",
-         "07": "每日評分", "08": "回測", "09": "使用統計"}
-
-
-def 圖示選單(小=False):
-    格 = "".join(
-        f'<a href="?p={碼}" target="_self" class="{"on" if 頁面.startswith(碼) else ""}">'
-        f'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">{路}</svg>'
-        f'<span>{_圖示名[碼]}</span></a>' for 碼, 路 in _圖示路徑.items())
-    if 小:
-        st.markdown(f'<div class="menu-s">{格}</div>', unsafe_allow_html=True)
-    else:  # 手機首頁：預設收起成一列，點開才看 3×3 大圖示（底部選單已經能換頁，第一屏留給重點）
-        st.markdown(f'<details class="menuwrap"><summary>▦ 全部功能（9 頁）</summary><div class="menu">{格}</div></details>',
-                    unsafe_allow_html=True)
-
-
-if 手機 and 頁面 == 頁面們[0]:   # 其他頁面用底部選單換頁，不再重複一排小圖示
-    圖示選單()
-
-
-def 底部選單():
-    """手機模式：畫面最下面固定一排（大盤、我的股票、個股、選股、評分），滑到哪裡都能直接換頁。"""
-    名 = {"01": "大盤", "02": "我的", "03": "個股", "04": "選股"}
-
-    def 格子(碼, 字):
-        return (f'<a href="?p={碼}" target="_self" class="{"on" if 頁面.startswith(碼) else ""}">'
-                f'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">{_圖示路徑[碼]}</svg>'
-                f'<span>{字}</span></a>')
-    格 = "".join(格子(碼, 字) for 碼, 字 in 名.items() if 碼 in _圖示路徑)
-    其他 = [碼 for 碼 in _圖示路徑 if 碼 not in 名]
-    更多亮 = " on" if any(頁面.startswith(碼) for 碼 in 其他) else ""
-    # 「更多」：點一下往上展開其他頁面（月營收、主動 ETF、評分、回測、統計），不用 JavaScript
-    更多 = (f'<details class="more{更多亮}"><summary><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" '
-           f'stroke-linecap="round"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>'
-           f'<span>更多</span></summary><div class="sheet">{"".join(格子(碼, _圖示名[碼]) for 碼 in 其他)}</div></details>')
-    st.markdown(f'<nav class="bnav">{格}{更多}</nav>', unsafe_allow_html=True)
-
-
-if 手機:
-    底部選單()
-    if 頁面 != 頁面們[0]:  # 手機上其他頁面不放大標題，第一屏直接看到該頁內容
-        st.markdown("<style>.hero { display: none !important; }</style>", unsafe_allow_html=True)
-st.session_state["_網址p"] = 頁面[:2]
-
-
-# ---------- 足跡列：最近去過的頁面與股票，一點就回去（取代上一頁） ----------
-def _目前位置():
-    if 頁面 == 頁面們[2]:
-        股 = st.session_state.get("個股查詢")
-        股 = 股 if 股 in 股票選項 else next((v for v in 股票選項 if v.startswith("2330 ")), 股票選項[0])
-        return f"📈 {股}"
-    return f"📄 {頁面.replace(' / ', ' ')}"
-
-
-def _回足跡():
-    選 = st.session_state.get("足跡")
-    st.session_state["足跡"] = None
-    if not 選:
-        return
-    選 = 選.removeprefix("↩ ")
-    if 選.startswith("📈 "):
-        前往(選[2:].split()[0])
-    else:
-        st.session_state["頁面"] = next((x for x in 頁面們 if x.startswith(選[2:4])), 頁面們[0])
-
-
-_足跡 = [x for x in st.session_state.get("_足跡", []) if x != _目前位置()] + [_目前位置()]
-st.session_state["_足跡"] = _足跡[-8:]
-_回去 = [x for x in reversed(_足跡[:-1]) if 頁面 != 頁面們[2] or x.startswith("📄")][:5]
-if _回去:
-    with st.container(key="trail"):
-        st.pills("剛剛去過", [f"↩ {x}" for x in _回去], key="足跡", on_change=_回足跡, label_visibility="collapsed")
-
-
-def 加代號(資料, 參數):
-    """明細的「名稱」前面加上代號（例如「2330 台積電」），手機精簡表格藏掉代號欄時也看得到；合併後代號欄就不重複顯示。"""
-    表 = 資料.data if isinstance(資料, Styler) else 資料
-    if not isinstance(表, pd.DataFrame) or "名稱" not in 表.columns:
-        return 資料
-    if "代號" in 表.columns:
-        碼們 = 表["代號"]
-    elif 表.index.name == "代號":
-        碼們 = 表.index
-    else:
-        return 資料
-    名們 = [f"{c} {n}" if isinstance(n, str) and isinstance(c, str) and c and not n.startswith(c) else n
-          for c, n in zip(碼們, 表["名稱"])]
-    表 = 表.copy()
-    表["名稱"] = 名們
-    if "代號" in 表.columns:
-        參數["column_config"] = {"代號": None, **(參數.get("column_config") or {})}
-    if isinstance(資料, Styler):
-        資料.data = 表
-        return 資料
-    return 表
-
-
-_表格序 = [0]  # 每次重跑從 0 數，給下載按鈕不重複的 key
-
-
-def 表格(資料, **參數):
-    """st.dataframe，名稱前面自動加代號；上方開了「⬇️ 下載表格」時，下面多一個下載 Excel 按鈕。"""
-    資料 = 加代號(資料, 參數)
-    結果 = st.dataframe(資料, **參數)
-    if st.session_state.get("顯示下載"):
-        表 = 資料.data if isinstance(資料, Styler) else 資料
-        if isinstance(表, pd.DataFrame) and len(表):
-            藏 = [k for k, v in (參數.get("column_config") or {}).items() if v is None and k in 表.columns]
-            檔 = io.BytesIO()
-            try:
-                出 = 表.drop(columns=藏)
-                for 欄 in 出.columns:  # Excel 不收有時區的時間
-                    if isinstance(出[欄].dtype, pd.DatetimeTZDtype):
-                        出[欄] = 出[欄].dt.tz_localize(None)
-                出.to_excel(檔, index=not 參數.get("hide_index", False))
-            except Exception:
-                return 結果
-            _表格序[0] += 1
-            st.download_button("⬇️ 下載 Excel", 檔.getvalue(), file_name=f"台股觀測_{最新日:%Y%m%d}_{_表格序[0]}.xlsx",
-                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               key=f"下載表格_{參數.get('key') or _表格序[0]}")
-    return 結果
-
-
-def 點選表(表, 樣式, key, 動作=None, **參數):
-    """可以點選列的表格：點一下就跳到那檔股票的個股查詢（或改做 動作(代號)）。"""
+def 點選表(表, 樣式, key, **參數):
+    """可以點選列的表格：點一下就跳到那檔股票的個股查詢。"""
     def 點了():
         列們 = st.session_state[key].selection.rows
         if 列們:
-            (動作 or 前往)(表.iloc[列們[0]]["代號"])
-    if st.session_state.get("精簡表格"):
-        顯欄 = list(樣式.data.columns if isinstance(樣式, Styler) else getattr(樣式, "columns", 表.columns))
-        留 = [c for c in 顯欄 if c in 精簡欄位]
-        if len(留) >= 3:
-            藏 = {c: None for c in 顯欄 if c not in 留}
-            參數["column_config"] = {**{k: v for k, v in 參數.get("column_config", {}).items() if k not in 藏}, **藏}
-    表格(樣式, key=key, on_select=點了, selection_mode="single-row", hide_index=True, width="stretch", **參數)
+            前往(表.iloc[列們[0]]["代號"])
+    st.dataframe(樣式, key=key, on_select=點了, selection_mode="single-row", hide_index=True, width="stretch", **參數)
 
-
-# 手機精簡表格只留這些欄（有的才顯示）
-精簡欄位 = {"名稱", "股票", "健檢", "估值", "注意理由", "股價", "收盤", "漲跌幅", "今日損益", "總損益", "報酬率(%)", "總分", "較昨日", "看法",
-          "加入至今%", "驗收", "距目標價%", "20日漲幅", "符合策略", "市值億", "規模", "營收(億)", "年增%",
-          "理由", "金額(億)", "貢獻點數", "投信(張)"}
-
-@st.cache_data(show_spinner=False)
-def 警示表(版本鍵):
-    return engine.讀取警示()
-
-
-@st.cache_data(show_spinner=False)
-def 日程資料(代號們, 版本鍵, 天數=30):
-    return engine.重要日程(代號們, 天數)
+@st.cache_data(ttl=3600, show_spinner=False, max_entries=100)
+def 抓新聞(代號, 名稱):
+    return engine.個股新聞(代號, 名稱)
 
 
 @st.cache_resource
@@ -1647,876 +272,671 @@ def AI紀錄快取(代號, _權杖):
     return engine.讀取AI紀錄(代號, 設定)
 
 
-
-# ---------- 每日評分（規則打分數，網站與 LINE 收盤摘要共用 engine 的規則） ----------
-@st.cache_resource(max_entries=1, show_spinner="計算每日評分中…")
-def 評分資料(版本鍵):
-    return engine.今昨評分(指標[指標["date"] >= 指標["date"].max() - pd.Timedelta(days=20)],
-                         基本面資料(版本鍵), 加權)
-
-
-def 崩跌模式提示():
-    """崩跌模式（加權 20 日跌 ≥ 8%）時，在評分頁、選股明細上方顯示黃色提示，說明外資連買加分已調降。"""
+# ---------- 01 市場總覽 ----------
+def 我的庫存():
+    """庫存放在 Streamlit 的 Secrets（不會出現在公開的 GitHub）。"""
     try:
-        說明 = engine.崩跌模式說明(評分資料(_版本)[2])
+        設定 = dict(st.secrets)
     except Exception:
-        說明 = ""
-    if 說明:
-        st.warning("⚠️ " + 說明 + "。")
-    try:
-        勢 = engine.盤勢權重說明(評分資料(_版本)[2])
-    except Exception:
-        勢 = ""
-    if 勢:
-        st.caption("🧭 " + 勢 + "。")
-    return bool(說明)
-
-
-@st.cache_resource(max_entries=1, show_spinner="計算評分 3、5 日變化中…")
-def 評分累計資料(版本鍵):
-    return engine.評分累計變化(指標[指標["date"] >= 指標["date"].max() - pd.Timedelta(days=20)],
-                             基本面資料(版本鍵), 加權)
-
-
-@st.cache_resource(max_entries=1, show_spinner="重播烏賊高分訊號、計算追蹤績效中（約 15 秒）…")
-def 烏賊高分績效資料(版本鍵):
-    return engine.烏賊高分績效(指標, 基本面資料(版本鍵), engine.讀取指數K線("TAIEX"))
-
-
-# ---------- 順勢做多（RS、均線多頭、VCP 突破、法人連買、交易計畫）：全市場最新一天，所有人共用 ----------
-@st.cache_resource(max_entries=1, show_spinner="計算順勢做多訊號中…")
-def 動能資料(版本鍵):
-    欄 = ["date", "代號", "名稱", "市場", "open", "high", "low", "收盤", "還原價", "volume", "成交值億", "漲跌幅",
-         "MA10", "MA20", "外資連買", "投信連買", "法人5日買超", "產業"]
-    t = momentum.加上動能欄位(指標[[c for c in 欄 if c in 指標.columns]])
-    今, 遮 = momentum.今日訊號(t, 最新日, 加權)
-    del t
-    for k, v in 遮.items():
-        今[k] = v
-    計畫們 = [momentum.交易計畫(列) for _, 列 in 今.iterrows()]
-    for 欄名 in ("買點", "停損", "停損%", "目標1", "目標2", "已突破"):
-        今[欄名] = [c.get(欄名) if c else None for c in 計畫們]
-    engine.釋放記憶體()
-    return 今.set_index("代號")
-
-
-def 訊號回測表(實測):
-    """momentum_backtest.json → 顯示用表格（含全部樣本當基準）。"""
-    if not 實測:
-        return None
-    列們 = [dict(實測["基準"], 訊號="（基準）全部股票")] + 實測["訊號"]
-    表 = pd.DataFrame(列們)
-    表["說明"] = 表["訊號"].map(momentum.訊號說明).fillna("同期間所有股票隨便買的平均")
-    return 表[["訊號", "次數", "5日勝率%", "5日平均%", "20日勝率%", "20日平均%", "20日超額%", "20日內平均最大回撤%", "說明"]]
-
-
-def ETF版本():
-    檔們 = sorted(etf_data.持股資料夾.glob("*/*.csv.gz"))
-    return f"{檔們[-1].name}-{檔們[-1].stat().st_mtime}-{len(檔們)}" if 檔們 else ""
-
-
-@st.cache_data(max_entries=2, ttl=43200, show_spinner="讀取主動式 ETF 持股中…")
-def ETF資料(版本):
-    持股 = etf_data.讀持股(70)
-    資訊 = etf_data.讀資訊()
-    return 持股, 資訊, etf_data.每日變化(持股, 資訊)
-
-
-def 分數色(分):
-    if pd.isna(分):
-        return 灰
-    return 紅 if 分 >= 58 else (綠 if 分 <= 42 else 灰)
-
-
-def 評分卡片(代號):
-    """個股的總分與四個面向分數卡片，加上加分、扣分理由。"""
-    分, d, _ = 評分資料(_版本)
-    if 代號 not in 分.index or pd.isna(分.at[代號, "總分"]):
-        st.caption("這檔沒有足夠資料可以評分。")
+        設定 = {}
+    if "holdings" not in 設定:
+        段落("PORTFOLIO // 我的庫存")
+        st.info("尚未設定庫存。到 Streamlit 的 App settings →「Secrets」貼上庫存清單即可顯示。")
         return
-    r = 分.loc[代號]
-    變 = r["較昨日"]
-    卡們 = [卡片("總分", f"{r['總分']:.1f}", f"{r['看法']}" + ("" if pd.isna(變) else f" · 較昨日 {變:+.1f}"), 分數色(r["總分"]))]
-    權 = engine.盤勢權重(評分資料(_版本)[2])
-    for 面 in 權:
-        卡們.append(卡片(f"{面}面 · 佔 {權[面]:.0%}", "—" if pd.isna(r[面]) else f"{r[面]:.0f}",
-                       "", 分數色(r[面])))
-    名次 = int((分["總分"] > r["總分"]).sum()) + 1
-    卡們.append(卡片("全市場排名", f"{名次:,}", f"共 {分['總分'].notna().sum():,} 檔"))
-    卡片格(卡們)
-    明細 = engine.評分明細(d, 代號)
-    with st.expander("看加分、扣分理由"):
-        for 面, 項 in 明細.items():
-            if pd.isna(r[面]):
-                st.markdown(f"**{面}面**：沒有資料，不計分")
-                continue
-            理由 = [f"🔴 {x}" for x in 項["利多"]] + [f"🟢 {x}" for x in 項["利空"]]
-            st.markdown(f"**{面}面 {r[面]:.0f} 分**" + ("".join(f"\n- {x}" for x in 理由) or "\n- 沒有加減分（50 分＝中性）"))
+    密碼 = str(設定.get("password", ""))
+    if 密碼 and not st.session_state.get("已解鎖"):
+        段落("PORTFOLIO // 我的庫存")
+        輸入 = st.text_input("輸入密碼查看庫存", type="password")
+        if 輸入 and hmac.compare_digest(輸入, 密碼):
+            st.session_state["已解鎖"] = True
+            st.rerun()
+        elif 輸入:
+            st.error("密碼不正確")
+        return
+
+    持股 = pd.read_csv(io.StringIO(str(設定["holdings"]).strip()), dtype={"代號": str})
+    庫存區(持股)
 
 
-# ---------- 一眼判斷：清單的表情、徽章、估值位階（glance.py；自選股、庫存、選股共用） ----------
-@st.cache_data(ttl=43200, show_spinner=False, max_entries=1)
-def 徽章底稿(版本鍵):
-    """每天算一次：連續配息年數、連續獲利季數、配息資料起年、個股期貨標的、本益比 5 年位階、規則體檢。"""
-    夾 = engine.資料夾 / "fundamental"
-    try:
-        股利 = pd.read_csv(夾 / "dividend.csv", dtype={"code": str})
-    except Exception:
-        股利 = None
-    try:
-        損益 = pd.read_csv(夾 / "income.csv", dtype={"code": str}, usecols=["code", "quarter", "eps"])
-    except Exception:
-        損益 = None
-    起 = glance.配息資料起年(股利) if 股利 is not None else None
-    上限 = (pd.Timestamp.now().year - 起 + 1) if 起 else None
-    return (glance.連續配息年數(股利), glance.連續獲利季數(損益), 上限, glance.讀期貨標的(),
-            glance.讀本益比位階(), glance.讀規則體檢())
-
-
-def 健檢欄(代號們, 動能=True):
-    """代號們 → 以代號為索引的 表情、徽章、估值、位階、預估估值、預估位階。評分、順勢訊號算不出來就略過那部分。"""
-    配, 獲, 上限, 期, 位, 體 = 徽章底稿(_版本)
-    try:
-        分 = 評分資料(_版本)[0]
-    except Exception:
-        分 = None
-    動 = None
-    if 動能:
+@st.fragment(run_every=30 if engine.盤中時間() else None)
+def 庫存區(持股):
+    """盤中每 30 秒自動抓一次即時報價；收盤後用資料庫的收盤價。"""
+    即時 = None
+    if engine.盤中時間():
         try:
-            動 = 動能資料(_版本)
+            即時 = engine.即時報價(持股["代號"].astype(str).str.strip().tolist(), 市場對照)
         except Exception:
-            動 = None
-    return glance.徽章表(list(代號們), 今日, 分數=分, 動能=動, 警示=警示表(_版本), 配息=配, 獲利=獲, 期貨=期,
-                       位階表=位, 體檢=體, 配息上限=上限)
+            st.caption("即時報價暫時抓不到，先顯示最近收盤價。")
+    明細, 合計 = engine.計算庫存(持股, 今日, engine.讀取上櫃最新(), engine.讀取興櫃最新(), 即時)
+    日期 = 合計["日期"].strftime("%Y/%m/%d") if pd.notna(合計["日期"]) else "—"
+    if 即時 is not None and not 即時.empty:
+        日期 += f" {即時['time'].dropna().max()} 即時"
+    段落(f"PORTFOLIO // 我的庫存　{日期}")
+    卡片列([
+        卡片(f"今日損益 · {日期}", f"{合計['今日損益']:+,.0f}", f"{合計['今日損益(%)']:+.2f}%",
+           漲跌色(合計["今日損益"])),
+        卡片("累積損益", f"{合計['累積損益']:+,.0f}", f"{合計['累積損益(%)']:+.2f}%", 漲跌色(合計["累積損益"])),
+        卡片("股票市值", f"{合計['股票市值']:,.0f}", f"成本 {合計['總成本']:,.0f}"),
+    ])
+    a, b = st.columns([4, 1])
+    依據 = a.segmented_control("排序", ["今日損益", "漲跌幅", "總損益", "報酬率(%)", "股價", "總成本"],
+                              default="今日損益", key="庫存排序")
+    方向 = b.segmented_control("順序", ["大→小", "小→大"], default="大→小", key="庫存順序")
+    明細 = 明細.sort_values(依據 or "今日損益", ascending=(方向 == "小→大"), na_position="last")
+    點選表(明細, 上色(明細), "庫存表", height=35 * (len(明細) + 1) + 3)
+    if st.session_state.get("要跳轉"):
+        st.rerun(scope="app")  # 這裡在自動更新區塊裡，要整頁重跑才會切到個股查詢
+    st.caption("點一下股票可看個股查詢，也可以直接點表格標題排序。")
+    if 合計["缺報價"]:
+        st.caption(f"以下代號暫時沒有報價，未計入合計：{'、'.join(合計['缺報價'])}")
 
 
-健檢欄設定 = {
-    "健檢": st.column_config.TextColumn("健檢", help="表情＝基本面分數（😀 ≥ 58、😟 ≤ 42），↑↓＝總分比昨天變動 3 分以上", width="small"),
-    "徽章": st.column_config.TextColumn("徽章", help="連配N 連續配息、賺 近 8 季都賺、期 有個股期貨、營收高、順勢訊號（回測有效才顯示）、⚠處置／注意、融資危"),
-    "估值": st.column_config.TextColumn("估值", help="本益比在這檔過去 5 年的位置：特價／便宜／合理／偏貴／昂貴；括號是用券商預估 EPS 算的", width="medium"),
-    "注意": st.column_config.NumberColumn("注意", help="越高越該先處理：處置 3、破 10 日線 3、破 5 日線 2、虧 15% 2、評分降 5 分、基本面弱、融資危、估值昂貴、今天跌 5% 各 1", width="small"),
-    "注意理由": st.column_config.TextColumn("該注意", width="medium"),
-    "位階": st.column_config.ProgressColumn("本益比位階", help="0＝5 年最便宜、100＝5 年最貴", min_value=0, max_value=100, format="%.0f"),
-}
-
-
-def 加健檢欄(表, 動能=True):
-    """在「名稱」後面插入 健檢、徽章、估值、位階 四欄（表要有 代號 欄）。"""
-    if 表 is None or not len(表) or "代號" not in 表.columns:
-        return 表
+@st.cache_data(ttl=30, show_spinner=False)
+def 分鐘線(代號, 市場="上市", 間隔="1m", 範圍="5d"):
     try:
-        b = 健檢欄(tuple(表["代號"].astype(str)), 動能)
+        return engine.盤中K線(代號, 市場, 間隔, 範圍)
     except Exception:
-        return 表
-    t = 表.copy()
-    c = t["代號"].astype(str)
-    t["健檢"] = c.map(b["表情"]).fillna("·")
-    t["徽章"] = c.map(b["徽章"]).fillna("")
-    估, 預 = c.map(b["估值"]).fillna("—"), c.map(b["預估估值"]).fillna("—")
-    t["估值"] = [a if p in ("—", a) else f"{a}→預估{p}" for a, p in zip(估, 預)]
-    t["位階"] = c.map(b["位階"]).astype(float)
-    欄 = list(表.columns)
-    i = 欄.index("名稱") + 1 if "名稱" in 欄 else 0
-    return t[欄[:i] + ["健檢", "徽章", "估值", "位階"] + 欄[i:]]
+        return None
 
 
-def 加總分欄(表):
-    """在「名稱」後面插入每日評分的「總分」「較昨日」（表要有 代號 欄；已有總分或算不出來就原樣回傳）。"""
-    if 表 is None or not len(表) or "代號" not in 表.columns or "總分" in 表.columns:
-        return 表
-    try:
-        分 = 評分資料(_版本)[0]
-    except Exception:
-        return 表
-    t = 表.copy()
-    c = t["代號"].astype(str)
-    t["總分"] = c.map(分["總分"]).astype(float)
-    t["較昨日"] = c.map(分["較昨日"]).astype(float)
-    欄 = list(表.columns)
-    i = 欄.index("名稱") + 1 if "名稱" in 欄 else 0
-    return t[欄[:i] + ["總分", "較昨日"] + 欄[i:]]
-
-
-def 健檢圖例():
-    _, _, _, _, _, 體 = 徽章底稿(_版本)
-    st.caption("🩺 " + glance.徽章圖例(體))
-
-
-def 交易日記():
-    """{"交易": [...], "當作庫存": bool}，每個瀏覽階段從 GitHub 讀一次（有密碼時是加密存放）。"""
-    if "交易日記" not in st.session_state:
+@st.fragment(run_every=30 if engine.盤中時間() else None)
+def 加權圖():
+    段落("TAIEX // 加權指數走勢")
+    區間 = st.segmented_control("區間", ["當日", "5日", "1月", "1季", "半年", "1年", "3年", "5年"],
+                              default="當日", key="加權區間", label_visibility="collapsed") or "當日"
+    分時 = engine.讀取分時()
+    即時點 = None
+    if engine.盤中時間():
         try:
-            st.session_state["交易日記"] = engine.讀取日記(_設定())
-        except Exception as e:
-            st.session_state["交易日記讀取錯誤"] = f"{type(e).__name__}：{e}"
-            return {"交易": [], "當作庫存": False}
-    return st.session_state["交易日記"]
-
-
-def 存交易日記(日記):
-    st.session_state["交易日記"] = 日記
-    try:
-        if engine.儲存日記(日記, _設定()):
-            st.toast("交易日記已儲存" + ("（已加密）" if _密碼() else ""))
-        else:
-            st.toast("已暫存（網站重新啟動會消失；在 Secrets 設定 GITHUB_TOKEN 就能永久保存）")
-    except Exception as e:
-        st.error(f"交易日記存檔失敗：{e}")
-
-
-def 目前持股():
-    """回傳 (持股表[代號, 股數, 總成本], 來源)。順序：交易日記勾了「當作庫存」→ 在網站上新增／移除過的庫存清單
-    → Secrets 的 holdings → 交易日記推算。"""
-    設定 = _設定()
-    if not 可編輯():
-        return None, ""
-    日記 = 交易日記()
-    日記庫存 = engine.交易日記統計(日記["交易"])[1] if 日記["交易"] else None
-    if 日記.get("當作庫存") and 日記庫存 is not None and len(日記庫存):
-        return 日記庫存, "交易日記"
-    if 日記.get("庫存清單") is not None:
-        清單 = pd.DataFrame(日記["庫存清單"], columns=["代號", "股數", "總成本"])
-        return 清單.astype({"代號": str}), "網站"
-    if "holdings" in 設定:
-        try:
-            return pd.read_csv(io.StringIO(str(設定["holdings"]).strip()), dtype={"代號": str}), "Secrets"
+            即時點 = engine.即時報價(["t00"], {})
         except Exception:
             pass
-    if 日記庫存 is not None and len(日記庫存):
-        return 日記庫存, "交易日記"
-    return None, ""
-
-
-def 庫存代號():
-    """有設定庫存、而且已解鎖（或沒設密碼）時，回傳庫存的代號清單。"""
-    持股, _ = 目前持股()
-    if 持股 is None:
-        return []
-    return list(dict.fromkeys(持股["代號"].astype(str).str.strip()))
-
-
-def 前後期表(歷史, 欄位, 比較們, 期名, 反向=(), 即時=None):
-    """本期跟前幾期的數字並排，附上增減。歷史：以日期/月份為索引；欄位：{欄: (中文名, 格式)}；
-    比較們：[(名稱, 往前幾期)]；反向：數字變大代表籌碼變分散的欄位（散戶、股東人數），顏色反過來。
-    即時：(欄名, {欄: 盤中數字})，盤中多一欄即時數字和較本期的漲跌（沒有即時數字的項目顯示 —）。"""
-    本 = 歷史.iloc[-1]
-    列們 = []
-    for 欄, (名, 式) in 欄位.items():
-        列 = {"項目": 名}
-        if 即時:
-            值 = 即時[1].get(欄)
-            差 = None if 值 is None or pd.isna(本[欄]) else 值 - 本[欄]
-            列[即時[0]] = "—" if 值 is None else 式.format(值)
-            列["較本期"] = "—" if 差 is None else f"{'🔴' if 差 > 0 else ('🟢' if 差 < 0 else '⚪')} {('+' if 差 > 0 else '')}{式.format(差)}"
-        if pd.isna(本[欄]):  # 這一項今天還沒公布（例如融資在晚上 9 點後才有），先不比較
-            列[f"本期 {期名(歷史.index[-1])}"] = "尚未公布"
-            列們.append(列)
-            continue
-        列[f"本期 {期名(歷史.index[-1])}"] = 式.format(本[欄])
-        for 比名, n in 比較們:
-            if len(歷史) > n:
-                舊 = 歷史.iloc[-1 - n]
-                if pd.isna(舊[欄]):
-                    列[f"{比名} {期名(歷史.index[-1 - n])}"], 列[f"較{比名}"] = "—", "—"
-                    continue
-                差 = 本[欄] - 舊[欄]
-                色 = "🔴" if (差 > 0) != (欄 in 反向) and 差 != 0 else ("🟢" if 差 != 0 else "⚪")
-                列[f"{比名} {期名(歷史.index[-1 - n])}"] = 式.format(舊[欄])
-                列[f"較{比名}"] = f"{色} {('+' if 差 > 0 else '')}{式.format(差)}"
-        列們.append(列)
-    表格(pd.DataFrame(列們), hide_index=True, width="stretch")
-
-
-# ---------- 盤中自動更新與外部資料快取（盤中 30 秒、盤前 60 秒、收盤後停；抓不到時先顯示上一筆） ----------
-@st.cache_data(ttl=3600, show_spinner=False)
-def _休市日(月份):
-    """證交所確認休市的日子（data/status/YYYY-MM.txt 標 closed 的），平日颱風假、國定假日就不會一直抓即時資料。"""
-    f = engine.資料夾 / "status" / f"{月份}.txt"
-    try:
-        return {行.split(",")[0] for 行 in f.read_text().split() if 行.endswith(",closed")}
-    except Exception:
-        return set()
-
-
-def 盤中階段():
-    """台灣時間的交易階段：盤前（08:30～09:00）、盤中（09:00～13:35）、盤後、休市（週末或已確認休市）。"""
-    現在 = pd.Timestamp.now(tz="Asia/Taipei")
-    if 現在.weekday() >= 5 or f"{現在:%Y%m%d}" in _休市日(f"{現在:%Y-%m}"):
-        return "休市"
-    if engine.盤中時間():
-        return "盤中"
-    return "盤前" if (8, 30) <= (現在.hour, 現在.minute) < (9, 0) else "盤後"
-
-
-def 刷新秒(秒=30):
-    """給 @st.fragment(run_every=…) 用：盤中每 秒 秒、盤前每 60 秒（等開盤）、收盤後與休市不自動更新。"""
-    階段 = 盤中階段()
-    return 秒 if 階段 == "盤中" else (60 if 階段 == "盤前" else None)
-
-
-def 輪詢檢查():
-    """放在會自動更新的區塊開頭：開盤或收盤那一刻整頁重跑一次，自動更新的頻率才會跟著換（收盤後就停止抓）。"""
-    if st.session_state.get("_輪詢階段") not in (None, 盤中階段()):
-        st.rerun()
-
-
-st.session_state["_輪詢階段"] = 盤中階段()
-
-
-@st.cache_resource
-def _留底():
-    """每個外部資料最後一次成功抓到的結果（所有人共用），抓不到時先拿出來顯示。"""
-    return {}
-
-
-def 抓取留底(鍵, 抓, 冷卻秒=60):
-    """先試著抓新的；失敗（429 太頻繁、逾時、空資料）就回傳上一次成功的資料，並標記 attrs["過期"]=抓到的時間。
-    失敗後 冷卻秒 內不再重抓，避免被對方網站擋得更久。"""
-    底 = _留底()
-    舊 = 底.get(鍵) or {}
-    值 = None
-    if not (舊.get("失敗") and time.time() - 舊["失敗"] < 冷卻秒):
-        try:
-            值 = 抓()
-        except Exception:
-            值 = None
-    if 值 is not None and len(值):
-        底[鍵] = {"值": 值, "時間": time.time()}
-        if len(底) > 300:  # 只留最近 300 筆，避免記憶體越長越大
-            for k in sorted(底, key=lambda k: 底[k].get("時間", 0))[:50]:
-                底.pop(k, None)
-        return 值
-    底[鍵] = {**舊, "失敗": time.time()}
-    if 舊.get("值") is None:
-        return None
-    值 = 舊["值"].copy()
-    值.attrs = {**舊["值"].attrs, "過期": pd.Timestamp(舊["時間"], unit="s", tz="UTC").tz_convert("Asia/Taipei").strftime("%H:%M")}
-    return 值
-
-
-def 時段鍵(秒=30):
-    """快取分段：盤中每 秒 秒換一段（資料會更新）；其他時間整段一樣（盤後資料不會變，不用 30 秒就重抓）。"""
-    階段 = 盤中階段()
-    return int(time.time() // 秒) if 階段 == "盤中" else f"{pd.Timestamp.now():%Y%m%d}{階段}"
-
-
-@st.cache_data(ttl=6 * 3600, show_spinner=False, max_entries=300)
-def _分鐘線(代號, 市場, 間隔, 範圍, 時段):
-    表 = engine.盤中K線(代號, 市場, 間隔, 範圍)
-    if 表 is None or 表.empty:
-        raise ValueError("沒有分鐘線")  # 失敗不快取，下次再試
-    return 表
-
-
-def 分鐘線(代號, 市場="上市", 間隔="1m", 範圍="5d"):
-    """Yahoo 分鐘線；抓不到時回傳上一次成功的資料（attrs["過期"] 有值），都沒有才回傳 None。"""
-    return 抓取留底(("分鐘線", 代號, 市場, 間隔, 範圍), lambda: _分鐘線(代號, 市場, 間隔, 範圍, 時段鍵()))
-
-
-def 過期提示(表):
-    """資料是先前留底的就提醒一下。"""
-    if 表 is not None and getattr(表, "attrs", {}).get("過期"):
-        st.caption(f"⚠️ 即時資料暫時抓不到（可能是對方網站限制次數），先顯示 {表.attrs['過期']} 抓到的資料，稍後會自動重試。")
-
-
-class 區塊防護:
-    """with 區塊防護("籌碼")：裡面出錯只在這一塊顯示提示並記錄，同一頁其他區塊照常顯示。
-    （st.rerun、st.stop 不是 Exception，會照常往外傳。）"""
-
-    def __init__(self, 名稱):
-        self.名稱 = 名稱
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, 類, 值, 追):
-        if 類 is None or not issubclass(類, Exception):
-            return False
-        import traceback
-        st.warning(f"「{self.名稱}」這一塊暫時無法顯示（{類.__name__}），已自動記錄；其他區塊不受影響，可稍後重新整理再試。")
-        threading.Thread(target=engine.記錄錯誤, daemon=True,
-                         args=(_設定(), f"{st.session_state.get('頁面', '')} {self.名稱}", 值,
-                               "".join(traceback.format_exception(類, 值, 追)))).start()
-        return True
-
-
-def _設定():
-    try:
-        return dict(st.secrets)
-    except Exception:
-        return {}
-
-
-def 可編輯():
-    """有設密碼時，要先解鎖才能看/改自選股。"""
-    return not _密碼() or st.session_state.get("已解鎖")
-
-
-自選紀錄鍵 = "_加入紀錄"  # watchlist.json 裡記每檔加入的日期與當天收盤價（不是群組）
-
-
-def 自選股清單():
-    """{群組名: [代號, ...]}，每個瀏覽階段只從 GitHub 讀一次。"""
-    if "自選股" not in st.session_state:
-        try:
-            全部 = engine.讀取自選股(_設定()) or {}
-        except Exception as e:
-            st.caption(f"自選股暫時讀不到（{type(e).__name__}），稍後重新整理再試。")
-            return {"自選股": []}
-        st.session_state["自選紀錄"] = 全部.pop(自選紀錄鍵, {})
-        st.session_state["自選股"] = 全部 or {"自選股": []}
-    return st.session_state["自選股"]
-
-
-def 自選紀錄():
-    自選股清單()
-    return st.session_state.get("自選紀錄", {})
-
-
-def 存自選股(自選):
-    舊 = {c for v in 自選股清單().values() for c in v}
-    新 = {c for v in 自選.values() for c in v}
-    紀錄 = {c: v for c, v in 自選紀錄().items() if c in 新}  # 移除的股票就不記了，之後重新加入會重新起算
-    收盤 = 今日.set_index("代號")["收盤"]
-    for c in 新 - 舊:
-        if c not in 紀錄:
-            紀錄[c] = {"日期": f"{dt.datetime.now(dt.timezone(dt.timedelta(hours=8))):%Y-%m-%d}",
-                      "收盤": float(收盤.get(c, np.nan)) if pd.notna(收盤.get(c, np.nan)) else None,
-                      "收盤日": f"{最新日:%Y-%m-%d}"}
-    st.session_state["自選股"] = 自選
-    st.session_state["自選紀錄"] = 紀錄
-    try:
-        if engine.儲存自選股({**自選, 自選紀錄鍵: 紀錄}, _設定()):
-            st.toast("自選股已儲存")
+        if 即時點 is not None and not 即時點.empty:
+            r = 即時點.iloc[0]
+            st.markdown(卡片(f"TAIEX 盤中即時 · {r['time']}", f"{r['close']:,.2f}",
+                           f"{r['change']:+,.2f}（{r['change'] / (r['close'] - r['change']) * 100:+.2f}%）",
+                           漲跌色(r["change"])), unsafe_allow_html=True)
+    if 區間 in ("當日", "5日"):
+        # 先用 Yahoo 的分鐘線（盤中也會更新），抓不到再用每天收盤後存下來的分時資料
+        線 = 分鐘線("t00", "", "1m" if 區間 == "當日" else "5m", "5d")
+        if 線 is not None and len(線):
+            線 = 線.assign(day=線["datetime"].dt.normalize())
+            天們 = sorted(線["day"].unique())[-1:] if 區間 == "當日" else sorted(線["day"].unique())[-5:]
+            資料 = 線[線["day"].isin(天們)]
+            x, y = 資料["datetime"], 資料["close"]
+        elif 分時:
+            天們 = list(分時)[-1:] if 區間 == "當日" else list(分時)[-5:]
+            資料 = pd.concat([分時[d] for d in 天們])
+            x, y = 資料["datetime"], 資料["taiex"]
         else:
-            st.toast("已暫存（網站重新啟動會消失；在 Secrets 設定 GITHUB_TOKEN 就能永久保存）")
-    except Exception as e:
-        st.error(f"自選股存檔失敗：{e}")
-
-
-def 提醒清單():
-    if "到價提醒" not in st.session_state:
-        try:
-            st.session_state["到價提醒"] = engine.讀取提醒(_設定())
-        except Exception:
-            return {}
-    return st.session_state["到價提醒"]
-
-
-def 提醒文字(設):
-    部分 = []
-    if 設.get("上"):
-        部分.append(f"≥{設['上']:g}")
-    if 設.get("下"):
-        部分.append(f"≤{設['下']:g}")
-    return " ".join(部分)
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def 指數K線(代號, 版本鍵):
-    return engine.讀取指數K線(代號)
-
-
-def 跌破站回條(項們):
-    if 項們:
-        st.markdown('<div class="cross">' + "".join(
-            f'<span class="{"dn" if 動 == "跌破" else "up"}">{"⚠️" if 動 == "跌破" else "✅"} 今天{動}{名}'
-            f'{"" if 價 is None or "共振區" in 名 else f" {價:,.2f}"}</span>'
-            for 動, 名, 價 in 項們) + "</div>", unsafe_allow_html=True)
-
-
-價位色 = {"回檔": "#FFC24B", "缺口": "#FF8A3D", "前高低": "#BDBDBD", "整數": "#555555", "分價量": "#8F7CFF"}
-
-
-def 支撐壓力圖(K, sr, 區們, 天數=120, 高=440, 均線們=((20, 青, "月線"), (60, "#FF00E5", "季線"), (120, "#FFC24B", "半年線")),
-             摘要=None):
-    """K 線＋均線＋自動畫的支撐壓力線：黃＝費波那契回檔、橘＝未回補缺口、白＝前高前低、灰＝整數關卡，青色色帶＝共振區。
-    有回測摘要時，過去守住率不比隨機價位好的線畫淡一點。"""
-    k = K.tail(天數 + 240).reset_index(drop=True)
-    for n, _, _ in 均線們:
-        k[f"MA{n}"] = k["close"].rolling(n).mean()
-    k = k.tail(天數)
-    收 = sr["收盤"]
-    小數 = 0 if 收 > 1000 else 2
-    有K = engine.有開高低(k)
-    圖 = go.Figure()
-    if 有K:
-        圖.add_trace(go.Candlestick(x=k["date"], open=k["open"], high=k["high"], low=k["low"], close=k["close"], name="K 線",
-                                    increasing=dict(line=dict(color=紅, width=1), fillcolor=紅),
-                                    decreasing=dict(line=dict(color=綠, width=1), fillcolor=綠)))
+            st.info("分時資料暫時抓不到。")
+            return
+        基準 = 加權[加權["date"] < pd.Timestamp(天們[0])]["close"]
+        昨收 = 基準.iloc[-1] if len(基準) else y.iloc[0]
+        st.caption(f"{pd.Timestamp(天們[-1]):%Y/%m/%d} 走勢" + ("（盤中約每 30 秒更新）" if engine.盤中時間() else ""))
     else:
-        圖.add_trace(go.Scatter(x=k["date"], y=k["close"], name="收盤", line=dict(color="#EDEDED", width=1.4)))
-    for n, 色, 名 in 均線們:
-        圖.add_trace(go.Scatter(x=k["date"], y=k[f"MA{n}"], name=名, line=dict(color=色, width=1.1), hoverinfo="skip"))
-    低, 高_ = float(k["low"].min()), float(k["high"].max())
-    下界, 上界 = min(低, 收 * 0.94), max(高_, 收 * 1.06)
-    for z in 區們:
-        if z["上"] >= 下界 and z["下"] <= 上界:
-            寬 = max(z["上"] - z["下"], 收 * 0.002)
-            圖.add_hrect(y0=z["中"] - 寬 / 2 - 收 * 0.001, y1=z["中"] + 寬 / 2 + 收 * 0.001, fillcolor=青, opacity=0.13,
-                         line_width=0, layer="below")
-    for 下, 上, 日, 向 in sr["缺口"]:
-        if 上 >= 下界 and 下 <= 上界:
-            圖.add_shape(type="rect", x0=日, x1=k["date"].iloc[-1], y0=下, y1=上, fillcolor="#FF8A3D", opacity=0.12,
-                         line_width=0, layer="below")
-    _, 比隨機 = engine.價位可靠度(sr["價位"], 摘要, 區們)
-    線們 = sr["價位"].assign(比隨機=比隨機)
-    線們 = 線們[(線們["類別"] != "均線") & 線們["價位"].between(下界, 上界)].sort_values("價位")
-    標籤們 = []   # 很靠近的價位合併成一個標籤，避免字疊在一起
-    for _, r in 線們.iterrows():
-        色 = 價位色.get(r["類別"], 灰)
-        弱 = pd.notna(r["比隨機"]) and r["比隨機"] < 0   # 過去守住率不比隨便畫的線好
-        圖.add_hline(y=r["價位"], opacity=0.35 if 弱 else 1,
-                     line=dict(color=色, width=1 if 弱 else 1.4, dash="dot" if r["類別"] in ("整數", "前高低") else "dash"))
-        if 標籤們 and r["價位"] - 標籤們[-1]["價"] < (上界 - 下界) * 0.05:
-            標籤們[-1]["名"].append(r["名稱"])
-        else:
-            標籤們.append({"價": r["價位"], "名": [r["名稱"]], "色": 色})
-    for t in 標籤們:
-        圖.add_annotation(x=1, xref="paper", xanchor="right", y=t["價"], yanchor="bottom", showarrow=False,
-                          text=f"{'／'.join(t['名'])} {t['價']:,.{小數}f}", font=dict(size=10, color=t["色"]),
-                          bgcolor="rgba(0,0,0,0.55)")
-    分量 = sr.get("分價量")
-    if 分量:   # 左側橫條＝分價量（近 120 日每個價位累積的成交金額），條越長越多人在這裡買賣
-        t = 分量["表"]
-        圖.add_trace(go.Bar(x=t["量"], y=t["中"], orientation="h", xaxis="x2", width=(t["上"] - t["下"]) * 0.9,
-                            marker=dict(color=["#8F7CFF" if 分量["VAL"] <= y <= 分量["VAH"] else "#3A3550" for y in t["中"]]),
-                            opacity=0.35, name="分價量", hovertemplate="%{y:,.0f} 附近<br>成交 %{x:,.0f} 億<extra>分價量</extra>"))
-        圖.update_layout(xaxis2=dict(overlaying="x", side="top", range=[0, float(t["量"].max()) * 4], visible=False,
-                                     fixedrange=True))
-    圖.add_hline(y=收, line=dict(color="#FFFFFF", width=1), opacity=0.35)
-    缺日 = pd.bdate_range(k["date"].min(), k["date"].max()).difference(pd.DatetimeIndex(k["date"]))
-    圖.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"]), dict(values=list(缺日))])
-    圖.update_yaxes(range=[下界 * 0.995, 上界 * 1.005], side="right")
-    圖.update_layout(xaxis_rangeslider_visible=False, legend=dict(orientation="h", y=1.06, x=0))
-    return 圖表外觀(圖, 高)
+        天數 = {"1月": 31, "1季": 92, "半年": 183, "1年": 365, "3年": 365 * 3, "5年": 365 * 5}[區間]
+        資料 = 加權[加權["date"] >= 加權["date"].max() - pd.Timedelta(days=天數)]
+        x, y = 資料["date"], 資料["close"]
+        昨收 = y.iloc[0]
+    色 = 紅 if y.iloc[-1] >= 昨收 else 綠
+    填色 = "rgba(255,59,92,0.08)" if 色 == 紅 else "rgba(0,214,143,0.08)"
+    圖 = go.Figure(go.Scatter(x=x, y=y, line=dict(color=色, width=1.6), fill="tozeroy",
+                              fillcolor=填色, name="加權指數"))
+    圖.add_hline(y=昨收, line=dict(color=灰, width=1, dash="dot"))
+    圖.update_yaxes(range=[min(y.min(), 昨收) * 0.995, max(y.max(), 昨收) * 1.005])
+    if 區間 in ("當日", "5日"):
+        # 跳過收盤後與週末的空白時段
+        圖.update_xaxes(rangebreaks=[dict(bounds=[13.6, 9], pattern="hour"), dict(bounds=["sat", "mon"])])
+    漲跌 = y.iloc[-1] - 昨收
+    st.caption(f"{區間}漲跌：{漲跌:+,.2f}（{漲跌 / 昨收 * 100:+.2f}%）")
+    st.plotly_chart(圖表外觀(圖, 300), width="stretch")
 
 
-def 量價條(量價):
-    """最近 5 天的量價標籤，最後一個是今天，附白話。"""
-    if not 量價:
-        return
-    色 = lambda 標: 紅 if 標.startswith("價漲") else (綠 if 標.startswith("價跌") else "#BDBDBD")
-    片們 = [f'<span class="{"now" if i == len(量價) - 1 else ""}">{d:%m/%d}<b style="color:{色(標)}">{標}</b></span>'
-           for i, (d, 標, 比) in enumerate(量價)]
-    d, 標, 比 = 量價[-1]
-    st.markdown(f'<div class="pv"><span style="border:0;background:none;padding-left:0">量價</span>{"".join(片們)}</div>'
-                f'<div class="verdict sub">{d:%m/%d} {標}：{engine.量價說明[標]}（成交金額是前 5 日平均的 {比:.2f} 倍）</div>',
-                unsafe_allow_html=True)
+if 頁面 == 頁面們[0]:
+    我的庫存()
+    段落("MARKET // 市場")
+    上漲 = (今日["漲跌"] > 0).sum()
+    下跌 = (今日["漲跌"] < 0).sum()
+    卡們 = []
+    if 加權 is not None and not 加權.empty:
+        最後 = 加權.iloc[-1]
+        漲幅 = 最後["change"] / (最後["close"] - 最後["change"]) * 100
+        卡們.append(卡片(f"TAIEX 加權指數 · {最後['date']:%m/%d}", f"{最後['close']:,.0f}",
+                       f"{最後['change']:+,.2f}  ({漲幅:+.2f}%)", 漲跌色(最後["change"])))
+    卡們 += [
+        卡片("資料日期", 最新日.strftime("%m/%d"), 最新日.strftime("%Y")),
+        卡片("成交金額", f"{今日['成交值億'].sum():,.0f}", "億元"),
+        卡片("上漲家數", f"{上漲}", "▲", 紅),
+        卡片("下跌家數", f"{下跌}", "▼", 綠),
+    ]
+    匯率 = engine.讀取匯率()
+    if 匯率 is not None and len(匯率) >= 2:
+        今, 昨 = 匯率["usdtwd"].iloc[-1], 匯率["usdtwd"].iloc[-2]
+        差 = 今 - 昨
+        # 美元兌台幣數字變小 = 台幣升值（紅），變大 = 台幣貶值（綠）
+        狀態, 色 = ("台幣升值 ▲", 紅) if 差 < 0 else (("台幣貶值 ▼", 綠) if 差 > 0 else ("持平", "#EDEDED"))
+        卡們.append(卡片(f"美元/台幣 · {匯率['date'].iloc[-1]:%m/%d}", f"{今:.3f}", f"{差:+.3f} {狀態}", 色))
+    else:
+        卡們.append(卡片("美元/台幣", "—", "下次更新後提供"))
+    卡片格(卡們)
 
+    if 加權 is not None and len(加權) > 1:
+        加權圖()
 
-def 黑K卡(黑):
-    類 = {"🟢": "g", "🟡": "y", "🔴": "r"}.get(黑["燈"], "y")
-    return (f'<div class="lamp {類}" style="margin:6px 0"><div class="t"><i>{黑["燈"]}</i>黑 K 一半規則</div>'
-            f'<div class="s">{黑["日期"]:%m/%d} 大黑 K（開 {黑["開"]:,.2f}／收 {黑["收"]:,.2f}）：{黑["狀態"]}</div></div>')
+    段落("RANKING // 排行（前 20 檔，含上市櫃）")
+    排行 = engine.排行資料(今日)
+    榜 = st.tabs(["漲幅排行", "跌幅排行", "成交量排行", "成交值排行"])
+    with 榜[0]:
+        排行表(排行.nlargest(20, "幅度"))
+    with 榜[1]:
+        排行表(排行.nsmallest(20, "幅度"))
+    with 榜[2]:
+        排行表(排行.nlargest(20, "張數"))
+    with 榜[3]:
+        排行表(排行.nlargest(20, "value"))
 
+# ---------- 02 選股 ----------
+if 頁面 == 頁面們[2]:
+  選股分頁 = st.tabs(["條件選股", "烏賊每日功課", "烏賊策略總覽"])
+  with 選股分頁[2]:
+    總表, 名單, 重複 = engine.烏賊總覽(今日)
+    多 = 總表[總表["多空"] == "多"]["符合檔數"].sum()
+    空 = 總表[總表["多空"] == "空"]["符合檔數"].sum()
+    卡片格([卡片("多方策略符合", f"{多}", "檔次（可能重複）", 紅), 卡片("空方策略符合", f"{空}", "檔次（可能重複）", 綠),
+           卡片("同時符合 2 個以上", f"{len(重複)}", "檔", 青)])
+    st.caption("多＝適合找買點（講義：強勢股買拉回、盤整突破）；空＝轉弱、避開或減碼（講義：跌破十日線、弱勢股）。"
+               "資料日期 " + 最新日.strftime("%Y-%m-%d"))
+    段落("SUMMARY // 各策略符合檔數")
+    st.dataframe(總表.style.map(lambda v: f"color:{紅 if v == '多' else 綠}", subset=["多空"]),
+                 hide_index=True, width="stretch",
+                 column_config={"說明": st.column_config.TextColumn(width="large")})
+    段落("OVERLAP // 同時符合多個策略")
+    if 重複.empty:
+        st.write("今天沒有股票同時符合 2 個以上的策略。")
+    else:
+        點選表(重複, 上色(重複).map(lambda v: f"color:{紅 if v == '多' else (綠 if v == '空' else '#FFC24B')}",
+                                subset=["多空"]), "重複表")
+    段落("DETAIL // 各策略名單")
+    清單欄 = ["代號", "名稱", "市場", "收盤", "漲跌幅", "成交張數", "量對5日均", "3日漲幅", "5日漲幅", "20日漲幅",
+             "40日漲幅", "週轉率", "股本億", "法人5日買超", "法人10日買超", "營收年增率", "近三季EPS"]
+    for 名, 結果 in 名單.items():
+        方向 = engine.烏賊條件[名]["方向"]
+        with st.expander(f"{'🔴 多' if 方向 == '多' else '🟢 空'}｜{名.replace('烏賊', '')}｜{len(結果)} 檔"):
+            st.caption(engine.烏賊條件[名]["說明"])
+            if len(結果):
+                點選表(結果, 上色(結果[[c for c in 清單欄 if c in 結果.columns]]), f"策略表{名}")
+  with 選股分頁[1]:
+    st.caption("講義「每天的功課」：每天看這六張榜，熟悉股性。三&五日強勢股的重點是找貼近 5 日或 10 日線、"
+               "均線剛勾起來的股票（★）；股本小、量大、有題材最好。")
+    功課 = engine.每日功課(今日)
+    功課欄 = [c for c in ["代號", "名稱", "市場", "收盤", "漲跌幅", "3日漲幅", "5日漲幅", "振幅", "成交張數",
+                        "量對5日均", "股本億", "外資買超", "投信買超", "重點"] if c in 今日.columns or c == "重點"]
+    for 標籤, 分頁表 in zip(功課, st.tabs(list(功課))):
+        with 分頁表:
+            表 = 功課[標籤]
+            if "股本億" not in 表.columns:
+                表 = 表.join(engine._股本表(), on="代號")
+            點選表(表, 上色(表[[c for c in 功課欄 if c in 表.columns]]), f"功課表{標籤}", height=420)
+    with st.expander("課程重點：盤整、上升、下降趨勢怎麼操作"):
+        st.markdown("""
+- **盤整格局**：找出最高點與最低點畫成箱型（框框），注意箱子左右兩邊爆量的日子；**收盤突破箱頂**、量放大是轉強訊號。
+- **上升趨勢**：沿著 5 日、10 日線走，突破前波高點後一路墊高；**怎麼買？靠近昨天高點買**，強勢股別人追高，你買拉回點。
+- **下降趨勢**：**跌破十日線後**轉弱，反彈到壓力就該小心；弱勢股別人追空，你買反彈點。
+- **五分 K**：用盤中 5 分鐘 K 線找當日進出場點，避免看到大單就追或被嚇跑（本站目前只有日線資料）。
+- **烏賊的話**：勇於嘗試＋嚴格停損；隔日沖反應不如預期就砍；小波段請把握反轉點或跌破關鍵價位。
 
-def 燈號卡(項們):
-    類 = {"🟢": "g", "🟡": "y", "🔴": "r"}
-    return '<div class="lamps">' + "".join(
-        f'<div class="lamp {類.get(燈, "y")}"><div class="t"><i>{燈}</i>{名}</div><div class="s">{說}</div></div>'
-        for 名, 燈, 說 in 項們) + "</div>"
+這些規則已做成「個股回測」裡的 **盤整突破（烏賊）** 與 **均線勾起（烏賊）** 兩個策略，左側「策略範本」可直接套用五組選股條件。
+""")
+  with 選股分頁[0]:
+    結果 = engine.選股(今日, 條件)
+    卡片列([
+        卡片("符合條件", f"{len(結果)}", "檔", 青),
+        卡片("資料日期", 最新日.strftime("%Y-%m-%d")),
+        卡片("排序", 條件["排序"]),
+    ])
+    段落("RESULT // 選股結果")
+    顯示欄 = [c for c in ["代號", "名稱", "市場", "收盤", "漲跌幅", "本益比", "殖利率", "淨值比",
+                        "營收年增率", "營收月增率", "累計營收年增率", "EPS", "成交張數",
+                        "外資買超", "投信買超", "法人5日買超", "外資連買", "投信連買", "融資5日增減",
+                        "20日漲幅", "RSI", "量比", "距52週高點"] if c in 結果.columns]
+    if 範本 != "自訂條件":  # 烏賊條件多看幾個相關欄位
+        顯示欄[3:3] = [c for c in ["週轉率", "股本億", "量對5日均", "5日均量", "10日漲幅", "30日漲幅", "40日漲幅",
+                                 "法人10日買超", "近三季EPS"] if c in 結果.columns]
+    點選表(結果, 上色(結果[顯示欄]), "選股表", height=420)
+    st.caption("點一下任何一列，就會跳到那檔股票的個股查詢。")
+    st.download_button("下載 CSV", 結果[顯示欄].to_csv(index=False).encode("utf-8-sig"),
+                       file_name=f"選股_{最新日:%Y%m%d}.csv")
 
+    段落("CHART // 個股走勢")
+    選項 = (結果["代號"] + " " + 結果["名稱"]).tolist() or (今日["代號"] + " " + 今日["名稱"]).tolist()
+    選擇 = st.selectbox("選一檔股票", 選項)
+    個股 = 指標[指標["代號"] == 選擇.split()[0]].tail(250)
+    圖 = go.Figure(go.Candlestick(
+        x=個股["date"], open=個股["open"], high=個股["high"], low=個股["low"], close=個股["收盤"],
+        increasing=dict(line=dict(color=紅), fillcolor=紅),
+        decreasing=dict(line=dict(color=綠), fillcolor=綠), name="K 線"))
+    # 均線用還原價算，換算回原始股價的比例來畫
+    比例 = 個股["收盤"] / 個股["還原價"]
+    for 天數, 色 in ((5, "#FFFFFF"), (20, 青), (60, "#FF00E5")):
+        圖.add_trace(go.Scatter(x=個股["date"], y=個股[f"MA{天數}"] * 比例, name=f"MA{天數}",
+                                line=dict(color=色, width=1)))
+    圖.update_layout(xaxis_rangeslider_visible=False)
+    st.plotly_chart(圖表外觀(圖, 420), width="stretch")
 
-def 年線反彈區(K, 是大盤=False):
-    """年線測試（距年線、過去碰年線之後）＋ 反彈尺（大小兩段 0.382／0.5／0.618）＋ 全市場歷史達成率（data/level_stats.json）。
-    01 加權／櫃買、03 個股共用。K：date、open、high、low、close。"""
-    if K is None or len(K) < 300:
-        return
-    統 = 讀檔("讀取價位統計", _版本)
-    目, 事 = engine.年線事件(K)
-    尺 = engine.反彈尺(K)
-    項們 = []
-    if 目:
-        燈 = "🟢" if 目["距年線%"] >= 0 else "🔴"
-        說 = (f"年線 {目['年線']:,.2f}（{目['年線方向']}），收盤距年線 {目['距年線%']:+.1f}%、今天低點 {目['低點距年線%']:+.1f}%")
-        if 統:
-            y = 統["年線"]
-            說 += (f"。過去 5 年個股第一次碰年線 {y['20日']['次數']:,} 次：20 日超額 {y['20日']['超額%']:+.1f}%"
-                  f"（一般日子 {y['20日']['一般日超額%']:+.1f}%），但 {y['20日內跌破5%比率']:.0f}% 會在 20 天內跌破年線 5% 以上，算弱支撐")
-        項們.append(("年線測試", 燈, 說))
-    if 尺:
-        達 = (統 or {}).get("反彈", {}).get("達成%", {})
-        段們 = [("大段", 尺["大段"])] + ([("小段", 尺["小段"])] if "小段" in 尺 else [])
-        說 = f"從 {尺['低日']:%m/%d} 低點 {尺['低']:,.2f} 起算；" + "；".join(
-            f"{名}（{s['高日']:%m/%d} 高 {s['高']:,.2f}）已反彈 {s['已反彈%']:.0f}%："
-            + "、".join(f"{k} 在 {v:,.0f}" for k, v in s["價位"].items()) for 名, s in 段們)
-        if 達:
-            說 += (f"。歷史上個股跌 20% 以上後 40 天內反彈到 0.382／0.5／0.618 的比率約 {達.get('0.382', 0):.0f}%／"
-                  f"{達.get('0.5', 0):.0f}%／{達.get('0.618', 0):.0f}%，但反彈高點不會特別停在這三個比例，當刻度看，不是牆")
-        項們.append(("反彈尺", "🟡", 說))
-    if not 項們:
-        return
-    st.markdown(燈號卡(項們), unsafe_allow_html=True)
-    if 是大盤 and len(事):
-        with st.expander("📏 過去碰到年線之後怎麼走"):
-            表格(事.assign(日期=lambda d: d["日期"].dt.strftime("%Y/%m/%d")), hide_index=True, width="stretch",
-                 column_config={c: st.column_config.NumberColumn(format="%+.1f") for c in 事.columns if c.endswith("%")})
-            st.caption("條件：前 60 天收盤都在年線（240 日均線）上，第一次盤中碰到年線 1% 以內。指數只有 5 年資料，樣本很少，"
-                       "所以另外附上全市場個股的統計（每月重算）。")
-
-
-def K棒解讀區(K, 量=None, 標題="今天的 K 棒怎麼看", 是大盤=False):
-    """基礎撐壓講義的 K 棒四價＋均線三態白話解讀，附上歷史實測。K：date、open、high、low、close（原始價）；量：同列數的成交量或 None。"""
-    if K is None or len(K) < 61 or K["high"].iloc[-1] == K["low"].iloc[-1] == K["close"].iloc[-1]:
-        return
-    K = K.reset_index(drop=True)
-    c = K["close"]
-    均 = [c.rolling(n).mean().iloc[-1] for n in (5, 10, 20, 60)]
-    狀, 燈, 說 = engine.均線狀態(*均)
-    量比 = None
-    if 量 is not None:
-        量 = pd.Series(量).reset_index(drop=True)
-        前 = 量.iloc[-21:-1].mean()
-        量比 = float(量.iloc[-1] / 前) if 前 and pd.notna(前) else None
-    句, 鍵 = engine.K棒解讀(K.iloc[-1], K.iloc[-2], K["high"].iloc[-21:-1].max(), K["low"].iloc[-21:-1].min(), 量比)
-    if 狀 in ("多頭排列", "空頭排列", "均線糾結"):
-        鍵 = [狀] + 鍵
-    實 = engine.規則實測句(讀檔("讀取規則實測", _版本), 鍵)
-    with st.container(border=True):
-        st.markdown(f"**🕯️ {標題}**（{pd.Timestamp(K['date'].iloc[-1]):%m/%d}）")
-        st.markdown(燈號卡([(f"均線：{狀 or '資料不足'}", 燈, 說)]), unsafe_allow_html=True)
-        st.markdown("\n".join(f"- {x}" for x in 句))
-        if 實:
-            st.caption("📊 講義規則的歷史實測" + ("（樣本是 2022 年起上市櫃個股，不是大盤本身）" if 是大盤 else "（2022 年起上市櫃個股，不只這一檔）")
-                       + "：\n" + "\n".join(f"- {x}" for x in 實))
-        st.caption("單根 K 棒的預測力很弱：實測「創高長上影線」之後並沒有比較差、「突破沒帶量」反而比帶量還好（完整結果在 08 回測頁最下方）。看 K 棒當作描述今天發生什麼，不要當成買賣訊號。")
-
-
-def 價位卡片(sr, 解, 昨收=None):
-    收 = sr["收盤"]
-    小數 = 0 if 收 > 1000 else 2
-    漲 = 收 - 昨收 if 昨收 else None
-    卡們 = [卡片(f"收盤 · {sr['日期']:%m/%d}", f"{收:,.{小數}f}",
-                (f"{漲:+,.{小數}f}（{漲 / 昨收 * 100:+.2f}%）・" if 漲 is not None else "")
-                + f"站上 {len(解['站上'])}／跌破 {len(解['跌破'])} 條均線", 漲跌色(漲) if 漲 is not None else "#EDEDED")]
-    for 名, r, 色 in (("最近支撐", 解["最近支撐"], 綠), ("最近壓力", 解["最近壓力"], 紅)):
-        卡們.append(卡片(名, "—" if r is None else f"{r['價位']:,.{小數}f}",
-                       "" if r is None else f"{r['名稱']}・{r['距離%']:+.1f}%", 色))
+# ---------- 03 回測 ----------
+def 績效卡(績, 基準名, 基準鍵):
+    卡們 = [
+        卡片("總報酬", f"{績['總報酬(%)']:+.1f}%", "", 漲跌色(績["總報酬(%)"])),
+        卡片("年化報酬", f"{績['年化報酬(%)']:+.1f}%", "", 漲跌色(績["年化報酬(%)"])),
+        卡片("最大回撤", f"{績['最大回撤(%)']:.1f}%", "", 綠),
+        卡片("勝率", f"{績['勝率(%)']:.0f}%", f"{績['交易次數']} 筆交易"),
+        卡片("夏普值", f"{績['夏普值']:.2f}"),
+    ]
+    if 基準鍵 in 績:
+        卡們.append(卡片(基準名, f"{績[基準鍵]:+.1f}%", "買進持有", 漲跌色(績[基準鍵])))
     卡片格(卡們)
 
 
-def 價位明細(sr, 區們, key, 摘要=None):
-    t = sr["價位"].copy()
-    共 = {n for z in 區們 for n in z["成員"]}
-    t["共振"] = t["名稱"].map(lambda n: "◆" if n in 共 else "")
-    t["過去守住%"], t["比隨機"] = engine.價位可靠度(t, 摘要, 區們)
-    欄 = ["角色", "名稱", "價位", "距離%", "共振"] + (["過去守住%", "比隨機"] if t["過去守住%"].notna().any() else []) + ["說明"]
-    t = t[欄]
-    樣式 = t.style.map(lambda v: f"color:{紅 if v == '壓力' else 綠}", subset=["角色"])
-    if "比隨機" in t:
-        樣式 = 樣式.map(lambda v: "" if pd.isna(v) else f"color:{紅 if v >= 3 else (綠 if v < 0 else '#BDBDBD')}", subset=["比隨機"])
-    表格(樣式.format({"價位": "{:,.2f}", "距離%": "{:+.2f}", "過去守住%": "{:.0f}", "比隨機": "{:+.0f}"}, na_rep="—"),
-         hide_index=True, width="stretch", height=min(35 * (len(t) + 1) + 3, 520), key=key,
-         column_config={"說明": st.column_config.TextColumn(width="large")})
-    if "比隨機" in t:
-        st.caption("過去守住%＝這一類價位在回測裡碰到後守住的比例（支撐看有沒有跌破、壓力看有沒有突破）；"
-                   "比隨機＝跟隨便畫的價位比，正的越多越可靠，負的代表跟亂畫差不多，圖上會畫淡一點。")
+if 頁面 == 頁面們[3]:
+    回測分頁 = st.tabs(["組合回測", "個股回測"])
+    with 回測分頁[0]:
+        st.caption("規則：每期最後一個交易日收盤後用左側條件選股，隔日收盤價買進前 N 檔，每檔投入總資產 ÷ N；"
+                   "沒入選的賣出；觸發停損停利當天收盤賣出。已計入手續費 0.1425% 與證交稅 0.3%。"
+                   "月營收與 EPS 條件只有最新一期，回測時不套用。")
+        最早 = 指標["date"].min().date()
+        a, b, c, d, e = st.columns(5)
+        開始 = a.date_input("開始日期", max(最早, 最新日.date() - dt.timedelta(days=730)), min_value=最早,
+                         max_value=最新日.date())
+        結束 = b.date_input("結束日期", 最新日.date(), min_value=最早, max_value=最新日.date())
+        調倉 = c.selectbox("調倉頻率", ["每月", "每週", "每日"])
+        檔數 = d.number_input("最多持有檔數", 1, 50, 10)
+        資金 = e.number_input("初始資金", 100_000, 100_000_000, 1_000_000, step=100_000)
+        a, b = st.columns(2)
+        停損 = a.number_input("停損 %（0 代表不設）", 0.0, 50.0, 10.0, step=1.0)
+        停利 = b.number_input("停利 %（0 代表不設）", 0.0, 500.0, 0.0, step=5.0)
 
+        if st.button("▶ 開始回測"):
+            with st.spinner("回測計算中…"):
+                st.session_state["回測"] = engine.回測(
+                    指標, 條件, pd.Timestamp(開始), pd.Timestamp(結束), 檔數, 調倉,
+                    停損 or None, 停利 or None, 資金)
 
-def 回測顯示(t):
-    """支撐壓力回測摘要：一句結論＋各方法守住率表（跟隨機對照比較上色）。"""
-    基 = t.set_index("方法")
-    自動 = 基.loc["全部自動價位", "守住率%"] if "全部自動價位" in 基.index else np.nan
-    隨機 = 基.loc["隨機對照", "守住率%"] if "隨機對照" in 基.index else np.nan
-    最好 = t[~t["方法"].isin(["全部自動價位", "隨機對照"]) & (t["測試次數"] >= 20)].nlargest(1, "支撐守住%")
-    話 = (f"全部自動價位守住率 {自動:.0f}%，任意畫的價位（隨機對照）是 {隨機:.0f}%，"
-         + ("差不多，所以<b>單一條線不要太迷信</b>，要配合量價、燈號一起看。" if abs(自動 - 隨機) < 5 else
-            ("自動價位明顯比較有用。" if 自動 > 隨機 else "自動價位反而比較差，要更謹慎。")))
-    if len(最好):
-        r = 最好.iloc[0]
-        話 += f"當支撐最可靠的是「{r['方法']}」（守住 {r['支撐守住%']:.0f}%）。"
-    st.markdown(f'<div class="verdict sub">{話}</div>', unsafe_allow_html=True)
-    樣式 = t.style
-    for c in ("守住率%", "支撐守住%", "壓力守住%"):   # 跟隨機對照比：比較好越紅、比較差越綠
-        b = 基.loc["隨機對照", c] if "隨機對照" in 基.index else 50
-        樣式 = 樣式.map(lambda v, b=b: "" if pd.isna(v) or abs(v - b) < 2 else
-                        f"background-color:rgba({'255,59,92' if v > b else '0,214,143'},{min(abs(v - b) / 15, 1) * 0.5 + 0.08:.2f})",
-                        subset=[c])
-    表格(樣式.format({"守住率%": "{:.0f}", "支撐守住%": "{:.0f}", "壓力守住%": "{:.0f}"}, na_rep="—"),
-         hide_index=True, width="stretch", height=35 * (len(t) + 1) + 3)
-    st.caption("回測方法：近 5 年每隔 5 個交易日，只用「當時」以前的資料畫價位，看之後 20 天有沒有碰到（差 0.3% 內）；"
-               "碰到後 3 天內收盤都沒有跌破（壓力是突破）1% 以上就算守住。隨機對照＝離收盤 1～4% 的任意價位，"
-               "用來比較：如果自動價位跟隨機差不多，代表那類價位沒有特別神奇。紅底＝比隨機對照好、綠底＝比隨機差。"
-               "測試次數少於 20 次的方法參考價值低（分價量只有近一年多的成交資料）。")
-
-
-def 缺口表(K, key):
-    t = engine.缺口清單(K)
-    if t.empty:
-        st.caption("目前沒有還沒回補的缺口。")
-        return
-    表格(t.style.map(lambda v: f"color:{綠 if '支撐' in v else 紅}", subset=["方向"])
-                 .format({"日期": "{:%Y/%m/%d}", "下緣": "{:,.2f}", "上緣": "{:,.2f}", "缺口大小%": "{:.2f}",
-                          "距離%": "{:+.1f}"}), hide_index=True, width="stretch",
-                 height=min(35 * (len(t) + 1) + 3, 400), key=key)
-    st.caption(f"共 {len(t)} 個還沒回補的缺口，依離目前價位遠近排列。距離＝最先會碰到的那一邊（下方缺口看上緣、上方缺口看下緣）。"
-               "後來的 K 線碰到一部分，缺口會跟著縮小；整個碰到就算回補，從清單移除。")
-
-
-@st.cache_data(ttl=600, show_spinner=False)
-def 券商報告清單(快取鍵):
-    return engine.讀取券商報告(_設定())
-
-
-def 個股價格(代號):
-    """驗收用的每日價格（date, high, low, 收盤）：先用常駐的近一年資料，沒有再讀這檔全史。"""
-    t = 指標[指標["代號"] == str(代號)]
-    if len(t) < 5:
-        全 = 個股全史(str(代號), _版本)
-        t = 全 if 全 is not None else t
-    return t[["date", "high", "low", "收盤"]] if len(t) else None
-
-
-@st.cache_data(ttl=43200, max_entries=1, show_spinner="整理事件後報酬中…")
-def 寬價格(版本鍵):
-    """近一年還原價寬表（日期 × 代號），算申報、加碼之後的報酬用。"""
-    return engine.價格寬表(指標)
-
-
-@st.cache_data(ttl=600, show_spinner=False)
-def 研究筆記():
-    """自己的研究筆記（有密碼時加密存放），每個瀏覽階段從 GitHub 讀一次。"""
-    if "研究筆記" not in st.session_state:
-        try:
-            st.session_state["研究筆記"] = engine.讀取筆記(_設定())
-        except Exception as e:
-            st.caption(f"研究筆記暫時讀不到（{type(e).__name__}）")
-            return []
-    return st.session_state["研究筆記"]
-
-
-def 存研究筆記(筆記們):
-    st.session_state["研究筆記"] = 筆記們
-    try:
-        if engine.儲存筆記(筆記們, _設定()):
-            st.toast("研究筆記已儲存" + ("（已加密）" if _密碼() else ""))
+        報告 = st.session_state.get("回測")
+        if 報告 is None:
+            st.info("設定好左側選股條件與上方參數後，按「開始回測」。")
         else:
-            st.toast("已暫存（網站重新啟動會消失；在 Secrets 設定 GITHUB_TOKEN 就能永久保存）")
-    except Exception as e:
-        st.error(f"研究筆記存檔失敗：{e}")
+            績效卡(報告["績效"], "0050 同期", "0050 同期報酬(%)")
 
+            段落("EQUITY // 資產曲線")
+            曲線 = 報告["曲線"]
+            圖 = go.Figure(go.Scatter(x=曲線.index, y=(曲線 - 1) * 100, name="我的策略",
+                                      line=dict(color=青, width=2)))
+            if 報告["基準"] is not None:
+                圖.add_trace(go.Scatter(x=報告["基準"].index, y=(報告["基準"] - 1) * 100, name="0050",
+                                        line=dict(color=灰, width=1, dash="dot")))
+            圖.update_yaxes(ticksuffix="%")
+            st.plotly_chart(圖表外觀(圖), width="stretch")
 
-def 筆記輸入(key, 代號=None):
-    """新增一則筆記的小表單（04 研究筆記頁、03 個股頁共用）。"""
-    with st.form(f"筆記_{key}", clear_on_submit=True):
-        if 代號 is None:
-            a, b = st.columns([2, 1])
-            股 = a.selectbox("股票（可空白，寫大盤或產業）", 股票選項, index=None, placeholder="輸入代號或名稱", key=f"筆記股_{key}")
-            看 = b.segmented_control("看法", ["看多", "中立", "看空"], default="中立", key=f"筆記看_{key}")
+            段落("DRAWDOWN // 回撤")
+            回撤 = (曲線 / 曲線.cummax() - 1) * 100
+            圖 = go.Figure(go.Scatter(x=回撤.index, y=回撤, fill="tozeroy", line=dict(color=綠, width=1),
+                                      fillcolor="rgba(0,214,143,0.15)", name="回撤"))
+            圖.update_yaxes(ticksuffix="%")
+            st.plotly_chart(圖表外觀(圖, 200), width="stretch")
+
+            段落("TRADES // 交易明細")
+            if 報告["交易"].empty:
+                st.write("這段期間沒有任何股票符合條件。")
+            else:
+                st.dataframe(上色(報告["交易"]), hide_index=True, width="stretch", height=360)
+
+    with 回測分頁[1]:
+        st.caption("訊號在收盤後產生，隔一個交易日以收盤價成交；已計入手續費與證交稅，價格使用還原股價。")
+        全部選項 = (今日["代號"] + " " + 今日["名稱"]).tolist()
+        預設 = next((i for i, v in enumerate(全部選項) if v.startswith("2330 ")), 0)
+        a, b = st.columns([2, 1])
+        標的 = a.selectbox("股票", 全部選項, index=預設, key="個股標的")
+        策略 = b.selectbox("策略", list(engine.個股策略), index=1, key="個股策略")
+        st.caption(engine.個股策略[策略])
+        a, b, c, d = st.columns(4)
+        開始2 = a.date_input("開始日期", max(最早, 最新日.date() - dt.timedelta(days=730)), min_value=最早,
+                          max_value=最新日.date(), key="個股開始")
+        結束2 = b.date_input("結束日期", 最新日.date(), min_value=最早, max_value=最新日.date(), key="個股結束")
+        短 = c.number_input("短均線（日）", 2, 60, 5, key="短均線")
+        長 = d.number_input("長均線（日）", 5, 240, 20, key="長均線")
+        a, b, c, d = st.columns(4)
+        RSI下 = a.number_input("RSI 買進（低於）", 5, 50, 30, key="RSI下")
+        RSI上 = b.number_input("RSI 賣出（高於）", 50, 95, 70, key="RSI上")
+        停損2 = c.number_input("停損 %（0 不設）", 0.0, 50.0, 0.0, step=1.0, key="個股停損")
+        停利2 = d.number_input("停利 %（0 不設）", 0.0, 500.0, 0.0, step=5.0, key="個股停利")
+        if st.button("▶ 開始個股回測"):
+            st.session_state["個股回測"] = engine.個股回測(
+                指標, 標的.split()[0], pd.Timestamp(開始2), pd.Timestamp(結束2), 策略, 短, 長, RSI下, RSI上,
+                停損2 or None, 停利2 or None)
+        報告 = st.session_state.get("個股回測")
+        if 報告 is None:
+            st.info("選好股票和策略後，按「開始個股回測」。")
         else:
-            股, 看 = None, st.segmented_control("看法", ["看多", "中立", "看空"], default="中立", key=f"筆記看_{key}")
-        內容 = st.text_area("筆記內容", placeholder="例如：法說會說下半年毛利率會回到 50%，等月營收確認；跌破 120 停損", key=f"筆記內容_{key}")
-        if st.form_submit_button("存下來", type="primary") and 內容.strip():
-            代 = 代號 or (股.split(" ")[0] if 股 else "")
-            存研究筆記(研究筆記() + [{"日期": f"{dt.date.today():%Y-%m-%d}", "代號": 代, "看法": 看 or "中立", "內容": 內容.strip()}])
-            st.rerun()
+            績效卡(報告["績效"], "買進持有", "買進持有(%)")
+            段落("EQUITY // 資產曲線與買賣點")
+            價 = 報告["價格"]
+            圖 = go.Figure(go.Scatter(x=報告["曲線"].index, y=(報告["曲線"] - 1) * 100, name="策略",
+                                      line=dict(color=青, width=2)))
+            圖.add_trace(go.Scatter(x=報告["基準"].index, y=(報告["基準"] - 1) * 100, name="買進持有",
+                                    line=dict(color=灰, width=1, dash="dot")))
+            交易 = 報告["交易"]
+            if not 交易.empty:
+                對照 = (報告["曲線"] - 1) * 100
+                進 = pd.to_datetime(交易["進場日"])
+                出 = pd.to_datetime(交易["出場日"].dropna())
+                圖.add_trace(go.Scatter(x=進, y=對照.reindex(進).values, mode="markers", name="買進",
+                                        marker=dict(color=紅, size=9, symbol="triangle-up")))
+                圖.add_trace(go.Scatter(x=出, y=對照.reindex(出).values, mode="markers", name="賣出",
+                                        marker=dict(color=綠, size=9, symbol="triangle-down")))
+            圖.update_yaxes(ticksuffix="%")
+            st.plotly_chart(圖表外觀(圖), width="stretch")
+            段落("TRADES // 交易明細")
+            if 交易.empty:
+                st.write("這段期間沒有產生任何交易。")
+            else:
+                st.dataframe(上色(交易), hide_index=True, width="stretch")
 
 
-@st.cache_data(ttl=7 * 86400, show_spinner="查詢公司基本資料…", max_entries=200)
-def 線上公司簡介(代號):
-    return engine.抓公司簡介(代號)
+# ---------- 02 個股查詢 ----------
+if 頁面 == 頁面們[1]:
+    if st.session_state.get("個股查詢") not in 股票選項:
+        st.session_state["個股查詢"] = next((v for v in 股票選項 if v.startswith("2330 ")), 股票選項[0])
+    查詢 = st.selectbox("輸入代號或名稱查詢", 股票選項, key="個股查詢")
+    代號 = 查詢.split()[0]
+    r = 今日[今日["代號"] == 代號].iloc[0]
+    股 = engine._股本表()
+    if "股本億" not in 今日.columns and 代號 in 股.index:
+        r = pd.concat([r, 股.loc[代號]])
+    數 = lambda v, f="{:,.2f}", 尾="": "—" if pd.isna(v) else f.format(v) + 尾
+    比 = r["收盤"] / r["還原價"] if r["還原價"] else 1  # 均線用還原價算，換回原始股價
+    色 = 漲跌色(r["漲跌"])
 
+    段落(f"PROFILE // {代號} {r['名稱']}")
+    股數 = r.get("發行股數")
+    卡片格([
+        卡片("收盤 · " + 最新日.strftime("%m/%d"), 數(r["收盤"]), f"{r['漲跌']:+.2f}（{r['漲跌幅']:+.2f}%）", 色),
+        卡片("產業", r.get("產業") or "—", r["市場"]),
+        卡片("股本", 數(r.get("股本億"), "{:,.1f}", " 億")),
+        卡片("發行股數", 數(股數 / 1000 if pd.notna(股數) else np.nan, "{:,.0f}", " 張")),
+        卡片("市值", 數(股數 * r["收盤"] / 1e8 if pd.notna(股數) else np.nan, "{:,.0f}", " 億")),
+        卡片("成交量", 數(r["成交張數"], "{:,.0f}", " 張"), f"週轉率 {數(r['volume'] / 股數 * 100 if pd.notna(股數) else np.nan, '{:.2f}', '%')}"),
+    ])
+    段落("FUNDAMENTAL // 基本面")
+    營收 = r.get("營收年增率")
+    卡片格([
+        卡片("本益比", 數(r["本益比"])), 卡片("殖利率", 數(r["殖利率"], 尾="%")), 卡片("股價淨值比", 數(r["淨值比"])),
+        卡片("EPS（今年累計）", 數(r.get("EPS")), r.get("EPS季度") or ""),
+        卡片("近三季 EPS 合計", 數(r.get("近三季EPS"))),
+        卡片("月營收年增率", 數(營收, 尾="%"), f"{r.get('營收月份') or ''}"
+             + ("　★ 創歷史新高" if r.get("營收創新高") == True else ""), 漲跌色(營收 if pd.notna(營收) else 0)),
+        卡片("月營收月增率", 數(r.get("營收月增率"), 尾="%"), "", 漲跌色(r.get("營收月增率") or 0)),
+        卡片("累計營收年增率", 數(r.get("累計營收年增率"), 尾="%"), "", 漲跌色(r.get("累計營收年增率") or 0)),
+        卡片("距 52 週高點", 數(r["距52週高點"], "{:+.1f}", "%")),
+    ])
+    if 有籌碼:
+        段落("CHIPS // 籌碼面（張）")
+        卡片格([
+            卡片("外資", 數(r["外資買超"], "{:+,.0f}"), f"連買 {數(r['外資連買'], '{:.0f}')} 天", 漲跌色(r["外資買超"])),
+            卡片("投信", 數(r["投信買超"], "{:+,.0f}"), f"連買 {數(r['投信連買'], '{:.0f}')} 天", 漲跌色(r["投信買超"])),
+            卡片("自營商", 數(r["自營買超"], "{:+,.0f}"), "", 漲跌色(r["自營買超"])),
+            卡片("法人 5 日合計", 數(r["法人5日買超"], "{:+,.0f}"), "", 漲跌色(r["法人5日買超"])),
+            卡片("法人 10 日合計", 數(r["法人10日買超"], "{:+,.0f}"), "", 漲跌色(r["法人10日買超"])),
+            卡片("融資餘額", 數(r["融資餘額"], "{:,.0f}"), f"5 日 {數(r['融資5日增減'], '{:+.1f}', '%')}"),
+        ])
+    段落("TECHNICAL // 技術面")
+    均線 = {n: r[f"MA{n}"] * 比 for n in (5, 10, 20, 60)}
+    卡片格([卡片(f"{n} 日線", 數(v), "站上" if r["收盤"] >= v else "跌破", 紅 if r["收盤"] >= v else 綠)
+           for n, v in 均線.items()] + [
+        卡片("RSI(14)", 數(r["RSI"], "{:.1f}"), "超買" if r["RSI"] > 70 else ("超賣" if r["RSI"] < 30 else "")),
+        卡片("量比（÷20 日均量）", 數(r["量比"])),
+        卡片("20 日漲幅", 數(r["20日漲幅"], "{:+.2f}", "%"), "", 漲跌色(r["20日漲幅"])),
+        卡片("盤整箱頂 / 箱底", f"{數(r['箱頂'])} / {數(r['箱底'])}", f"箱寬 {數(r['箱寬'], '{:.1f}', '%')}"),
+        卡片("今日振幅", 數(r["振幅"], 尾="%")),
+    ])
+    符合 = [名 for 名, 設定 in engine.烏賊條件.items()
+            if 代號 in engine.選股(今日[今日["代號"] == 代號], dict(設定["條件"], 排除ETF=False))["代號"].values]
+    st.markdown("**今天符合的烏賊策略：** " + ("、".join(
+        f"{'🔴' if engine.烏賊條件[x]['方向'] == '多' else '🟢'} {x.replace('烏賊', '')}" for x in 符合) or "無"))
 
-@st.cache_data(ttl=600, show_spinner=False, max_entries=100)
-def 公司介紹紀錄(代號, 快取鍵):
+    內部 = engine.讀取內部人(代號)
+    if 內部 is not None:
+        段落("INSIDER // 公司內部人（董監、經理人、大股東）")
+        最近 = 內部.iloc[-1]
+        前月 = 內部.iloc[-2] if len(內部) > 1 else None
+        增減 = (最近["insider"] - 前月["insider"]) / 1000 if 前月 is not None else np.nan
+        卡片格([
+            卡片(f"內部人持股 · {最近['month']}", 數(最近["insider"] / 1000, "{:,.0f}", " 張"),
+                 f"佔 {數(最近['insider'] / 股數 * 100 if pd.notna(股數) else np.nan, '{:.1f}', '%')}"),
+            卡片("董監持股", 數(最近["directors"] / 1000, "{:,.0f}", " 張"),
+                 f"佔 {數(最近['directors'] / 股數 * 100 if pd.notna(股數) else np.nan, '{:.1f}', '%')}"),
+            卡片("較上月增減", 數(增減, "{:+,.0f}", " 張"), "", 漲跌色(增減)),
+            卡片("設質（質押）", 數(最近["pledged"] / 1000, "{:,.0f}", " 張"),
+                 f"佔內部人 {數(最近['pledged'] / 最近['insider'] * 100 if 最近['insider'] else np.nan, '{:.1f}', '%')}"),
+        ])
+
+    段落("CHART // 走勢與指標")
+    週期 = st.segmented_control("週期", ["當日", "5分", "日", "週", "月", "季"], default="日", key="個股週期",
+                              label_visibility="collapsed") or "日"
+    可選 = ["成交量", "三大法人", "外資", "投信", "自營商", "融資", "RSI", "MACD"] if 有籌碼 else ["成交量", "RSI", "MACD"]
+    if 週期 in ("當日", "5分"):
+        可選 = ["成交量", "RSI", "MACD"]
+    指標們 = st.multiselect("下方指標", 可選, default=[x for x in ["成交量", "三大法人", "MACD"] if x in 可選],
+                           key=f"個股指標{週期 in ('當日', '5分')}")
+    st.caption("官股行庫（八大公股券商）買賣超需要券商分點資料，交易所沒有免費開放，暫時無法提供。")
+
+    if 週期 in ("當日", "5分"):
+        線 = 分鐘線(代號, r["市場"], "1m" if 週期 == "當日" else "5m", "5d")
+        if 線 is None or 線.empty:
+            st.info("分鐘線暫時抓不到，請稍後再試。")
+            st.stop()
+        線 = 線.assign(day=線["datetime"].dt.normalize())
+        if 週期 == "當日":
+            線 = 線[線["day"] == 線["day"].max()]
+        K = pd.DataFrame({"x": 線["datetime"], "open": 線["open"], "high": 線["high"], "low": 線["low"],
+                          "close": 線["close"], "量": 線["volume"] / 1000})
+        st.caption(f"{線['datetime'].iloc[-1]:%Y/%m/%d %H:%M} 為止，資料來源 Yahoo 奇摩股市（盤中約延遲數分鐘）")
+    else:
+        歷史 = 指標[指標["代號"] == 代號]
+        if 週期 != "日":
+            歷史 = engine.週期K線(歷史, 週期)
+        歷史 = 歷史.tail({"日": 180, "週": 156, "月": 72, "季": 40}[週期])
+        K = pd.DataFrame({"x": 歷史["date"], "open": 歷史["open"], "high": 歷史["high"], "low": 歷史["low"],
+                          "close": 歷史["收盤"], "量": 歷史["成交張數"]})
+        for 欄, 名 in (("法人買超", "三大法人"), ("外資買超", "外資"), ("投信買超", "投信"), ("自營買超", "自營商"),
+                      ("融資餘額", "融資")):
+            if 欄 in 歷史.columns:
+                K[名] = 歷史[欄].values
+    K = K.reset_index(drop=True)
+    列數 = 1 + len(指標們)
+    圖 = make_subplots(rows=列數, cols=1, shared_xaxes=True, vertical_spacing=0.025,
+                       row_heights=[0.5] + [0.5 / max(len(指標們), 1)] * len(指標們),
+                       subplot_titles=[""] + 指標們)
+    if 週期 == "當日":
+        昨收 = 線.attrs.get("昨收") or K["close"].iloc[0]
+        色 = 紅 if K["close"].iloc[-1] >= 昨收 else 綠
+        圖.add_trace(go.Scatter(x=K["x"], y=K["close"], name="成交價", line=dict(color=色, width=1.6)), row=1, col=1)
+        圖.add_hline(y=昨收, line=dict(color=灰, width=1, dash="dot"), row=1, col=1)
+    else:
+        圖.add_trace(go.Candlestick(x=K["x"], open=K["open"], high=K["high"], low=K["low"], close=K["close"],
+                                    name="K 線", increasing=dict(line=dict(color=紅), fillcolor=紅),
+                                    decreasing=dict(line=dict(color=綠), fillcolor=綠)), row=1, col=1)
+        for n, c in ((5, "#FFFFFF"), (10, "#FFC24B"), (20, 青), (60, "#FF00E5")):
+            圖.add_trace(go.Scatter(x=K["x"], y=K["close"].rolling(n).mean(), name=f"MA{n}",
+                                    line=dict(color=c, width=1)), row=1, col=1)
+    漲跌色列 = lambda v: [紅 if x >= 0 else 綠 for x in pd.Series(v).fillna(0)]
+    for i, 名 in enumerate(指標們, start=2):
+        if 名 == "成交量":
+            圖.add_trace(go.Bar(x=K["x"], y=K["量"], name="成交量(張)",
+                                marker_color=漲跌色列(K["close"].diff())), row=i, col=1)
+        elif 名 == "RSI":
+            圖.add_trace(go.Scatter(x=K["x"], y=engine.RSI(K["close"]), name="RSI",
+                                    line=dict(color=青, width=1.2)), row=i, col=1)
+            for 線值 in (30, 70):
+                圖.add_hline(y=線值, line=dict(color=灰, width=1, dash="dot"), row=i, col=1)
+        elif 名 == "MACD":
+            DIF, DEA, 柱 = engine.MACD(K["close"])
+            圖.add_trace(go.Bar(x=K["x"], y=柱, name="MACD 柱", marker_color=漲跌色列(柱)), row=i, col=1)
+            圖.add_trace(go.Scatter(x=K["x"], y=DIF, name="DIF", line=dict(color="#FFC24B", width=1)), row=i, col=1)
+            圖.add_trace(go.Scatter(x=K["x"], y=DEA, name="DEA", line=dict(color=青, width=1)), row=i, col=1)
+        elif 名 == "融資":
+            圖.add_trace(go.Scatter(x=K["x"], y=K.get("融資"), name="融資餘額(張)",
+                                    line=dict(color="#FFC24B", width=1.2)), row=i, col=1)
+        elif 名 in K.columns:
+            圖.add_trace(go.Bar(x=K["x"], y=K[名], name=f"{名}(張)", marker_color=漲跌色列(K[名])), row=i, col=1)
+    圖.update_layout(xaxis_rangeslider_visible=False, showlegend=False)
+    if 週期 in ("當日", "5分"):
+        圖.update_xaxes(rangebreaks=[dict(bounds=[13.6, 9], pattern="hour"), dict(bounds=["sat", "mon"])])
+    elif 週期 == "日":
+        圖.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+    圖.update_annotations(font=dict(size=11, color=灰), x=0, xanchor="left")
+    st.plotly_chart(圖表外觀(圖, 380 + 150 * len(指標們)), width="stretch")
+
+    段落("OUTLOOK // 綜合判讀（依數據規則，免費）")
+    判 = engine.規則判讀(r)
+    卡片格([卡片("綜合分數", f"{判['分數']:+d}", 判["看法"], 紅 if 判["分數"] >= 30 else (綠 if 判["分數"] <= -30 else 灰)),
+           卡片("利多因素", f"{len(判['利多'])} 項", "", 紅), 卡片("利空因素", f"{len(判['利空'])} 項", "", 綠)])
+    a, b = st.columns(2)
+    a.markdown("**🔴 利多**\n" + ("".join(f"\n- {x}" for x in 判["利多"]) or "\n- 無"))
+    b.markdown("**🟢 利空**\n" + ("".join(f"\n- {x}" for x in 判["利空"]) or "\n- 無"))
+    st.caption("分數 = 利多權重 − 利空權重，換算成 −100 ~ +100；+30 以上偏多、−30 以下偏空。只看數據，不含新聞內容。")
+
+    段落("NEWS // 近半年新聞")
     try:
-        return engine.讀取公司介紹(代號, _設定())
+        新聞 = 抓新聞(代號, r["名稱"])
     except Exception:
-        return {}
+        新聞 = None
+    if 新聞 is None:
+        st.caption("暫時抓不到新聞，稍後再試。")
+    elif 新聞.empty:
+        st.caption("近半年沒有找到相關新聞。")
+    else:
+        新聞["情緒"] = 新聞["標題"].map(engine.新聞情緒)
+        計 = 新聞["情緒"].value_counts()
+        st.caption(f"共 {len(新聞)} 則：標題偏多 {計.get('利多', 0)}、偏空 {計.get('利空', 0)}、中性 {計.get('中性', 0)}"
+                   "（依標題關鍵字粗略判斷，請點開原文確認）")
+        圖示 = {"利多": "🔴", "利空": "🟢", "中性": "⚪"}
+        列 = lambda x: f"- `{x['日期']:%m/%d}` {圖示[x['情緒']]} [{x['標題']}]({x['連結']}) · {x['來源']}"
+        st.markdown("\n".join(列(x) for _, x in 新聞.head(15).iterrows()))
+        if len(新聞) > 15:
+            with st.expander(f"更多新聞（{len(新聞) - 15}）"):
+                st.markdown("\n".join(列(x) for _, x in 新聞.iloc[15:].iterrows()))
 
-
-def 公司資料(代號):
-    """個股頁、AI 指令、PDF 共用的公司資料：主要業務、營收比重、董事長、規模排名、概念股、產業鏈、AI 公司介紹。
-    資料庫還沒有這檔（每天補 250 檔）時，直接上網查一次（快取 7 天）。"""
-    檔 = 讀檔("讀取公司簡介", _版本)
-    簡 = 檔.loc[代號].to_dict() if 代號 in 檔.index else {}
-    if not (簡.get("業務") or 簡.get("營收比重")) and not str(代號).startswith("0"):
-        try:
-            簡 = 線上公司簡介(代號)
-        except Exception:
-            簡 = {}
-    規 = engine.公司規模(今日, 代號)
-    比重, 年 = engine.營收比重解析(簡.get("營收比重", ""))
-    規模字 = ""
-    if 規:
-        規模字 = f"市值約 {規['市值億']:,.0f} 億元，全市場第 {規['市值排名']:,} 名（共 {規['全部']:,} 檔）"
-        if 規.get("同業市值排名"):
-            規模字 += (f"；在「{規['產業']}」{規['同業家數']} 家公司中市值排第 {規['同業市值排名']}"
-                     + ("（產業市值龍頭）" if 規["同業市值排名"] == 1 else "")
-                     + "，同業市值前三：" + "、".join(f"{c} {n}（{v:,.0f} 億）" for c, n, v in 規["同業市值前三"]))
-        if 規.get("近12月營收億"):
-            規模字 += f"；近 12 個月營收約 {規['近12月營收億']:,.0f} 億元" + (
-                f"，同業第 {規['同業營收排名']} 名" if 規.get("同業營收排名") else "")
-        規模字 += "。"
-    概 = engine.個股概念(代號)
-    鏈 = engine.產業鏈位置(代號, 市場名稱)
-    AI = 公司介紹紀錄(代號, st.session_state.get("_公司介紹版本", 0))
-    return {"簡介": 簡, "規模資料": 規, "規模": 規模字, "比重表": 比重, "比重年度": 年,
-            "業務": 簡.get("業務", ""), "營收比重": "、".join(f"{r['項目']} {r['比重']:.1f}%" for _, r in 比重.iterrows()),
-            "概念": "；".join(x for x in (("概念股：" + "、".join(概)) if 概 else "", 鏈.replace("\n", "；") if 鏈 else "") if x),
-            "AI介紹": AI.get("內容", ""), "AI時間": AI.get("時間", "")}
-
-
-def 公司文字(資料):
-    """給 AI 的公司資料（條列文字）。"""
-    簡 = 資料["簡介"]
-    行 = []
-    if 資料["業務"]:
-        行.append(f"- 主要經營業務（公開資訊觀測站）：{資料['業務']}")
-    if 資料["營收比重"]:
-        行.append(f"- 營收比重（{資料['比重年度'] or '最近'} 年，MoneyDJ）：{資料['營收比重']}")
-    if 資料["規模"]:
-        行.append(f"- 規模：{資料['規模']}")
-    if 資料["概念"]:
-        行.append(f"- {資料['概念']}")
-    基 = "、".join(f"{k} {簡[k]}" for k in ("董事長", "總經理", "成立日期", "上市日期", "員工人數", "同業本益比") if 簡.get(k))
-    if 基:
-        行.append(f"- 基本資料：{基}")
-    return "\n".join(行)
-
-
-def 網紅說法清單(_快取鍵):
-    return engine.讀取網紅說法(_設定())
-
-
-def 張(股):
-    return 股 / 1000
-
-
-
-# ---------- 各頁內容在 views/ 資料夾（一頁一個檔案，只執行目前這一頁） ----------
-def 執行頁面(索引):
-    檔 = Path(__file__).parent / "views" / f"{頁面檔[索引]}.py"
+    段落("AI // 新聞彙整與投資觀點")
     try:
-        exec(compile(檔.read_text("utf-8"), str(檔), "exec"), globals())
-    except Exception as e:  # st.rerun()/st.stop() 不是 Exception，會照常往外傳
-        import traceback
-        st.error(f"這一頁有一部分出錯了（{type(e).__name__}），已自動記錄，每天的資料檢查會用 LINE 通知。其他頁面不受影響，"
-                 "可以先按上方「🔄 更新 → 重新載入」再試一次。")
-        if st.session_state.get("已解鎖") or not _密碼():  # 程式細節（檔案路徑、程式碼）只給站長看
-            st.exception(e)
-        threading.Thread(target=engine.記錄錯誤, args=(_設定(), 頁面們[索引], e, traceback.format_exc()), daemon=True).start()
+        設定 = dict(st.secrets)
+    except Exception:
+        設定 = {}
+    if str(設定.get("GEMINI_API_KEY", "")).strip():
+        引擎, 金鑰, 模型 = "Gemini", engine.清理金鑰(設定["GEMINI_API_KEY"]), str(設定.get("GEMINI_MODEL", "gemini-flash-latest"))
+    else:
+        引擎, 金鑰, 模型 = "Claude", engine.清理金鑰(設定.get("ANTHROPIC_API_KEY")), str(設定.get("AI_MODEL", "claude-opus-5-5"))
+    密碼 = str(設定.get("password", ""))
+    if not 金鑰:
+        st.info("AI 會上網搜尋這檔股票近半年的新聞與法人報告，彙整後給出短、中期看法。"
+                "要啟用，請到 aistudio.google.com 申請 Gemini API 金鑰（有免費額度），"
+                "貼到 Streamlit 的 App settings →「Secrets」：`GEMINI_API_KEY = \"你的金鑰\"`")
+    elif 密碼 and not st.session_state.get("已解鎖"):
+        st.caption("AI 分析會用到你的 API 額度，請先在 01 市場總覽的庫存區輸入密碼解鎖。")
+    else:
+        今天 = 最新日.strftime("%Y-%m-%d")
+        摘要 = "\n".join([
+            f"- 資料日期 {今天}，收盤 {數(r['收盤'])}，漲跌 {r['漲跌幅']:+.2f}%，產業 {r.get('產業') or '—'}，"
+            f"股本 {數(r.get('股本億'), '{:,.1f}', ' 億')}，市值 {數(股數 * r['收盤'] / 1e8 if pd.notna(股數) else np.nan, '{:,.0f}', ' 億')}",
+            f"- 本益比 {數(r['本益比'])}，殖利率 {數(r['殖利率'], 尾='%')}，股價淨值比 {數(r['淨值比'])}，"
+            f"今年累計 EPS {數(r.get('EPS'))}（{r.get('EPS季度') or ''}），近三季 EPS {數(r.get('近三季EPS'))}",
+            f"- 月營收（{r.get('營收月份') or ''}）年增 {數(營收, 尾='%')}，月增 {數(r.get('營收月增率'), 尾='%')}，"
+            f"累計年增 {數(r.get('累計營收年增率'), 尾='%')}" + ("，創歷史新高" if r.get("營收創新高") == True else ""),
+            (f"- 外資 {數(r['外資買超'], '{:+,.0f}')} 張、投信 {數(r['投信買超'], '{:+,.0f}')} 張、"
+             f"法人 10 日合計 {數(r['法人10日買超'], '{:+,.0f}')} 張，融資 5 日 {數(r['融資5日增減'], '{:+.1f}', '%')}"
+             if 有籌碼 else "- 無籌碼資料"),
+            f"- 5/10/20/60 日線 {' / '.join(數(v) for v in 均線.values())}，RSI {數(r['RSI'], '{:.1f}')}，"
+            f"20 日漲幅 {數(r['20日漲幅'], '{:+.2f}', '%')}，距 52 週高點 {數(r['距52週高點'], '{:+.1f}', '%')}",
+            f"- 符合的烏賊策略：{'、'.join(符合) or '無'}",
+        ])
+        if 新聞 is not None and not 新聞.empty:
+            摘要 += "\n\n近半年新聞標題（新到舊）：\n" + "\n".join(
+                f"- {x['日期']:%Y-%m-%d} {x['標題']}（{x['來源']}）" for _, x in 新聞.head(60).iterrows())
+        本益 = 指標.loc[(指標["code"] == 代號) & (指標["date"] >= 最新日 - pd.Timedelta(days=3 * 365)), "本益比"]
+        本益 = 本益[本益 > 0]
+        if len(本益) > 60:
+            摘要 += (f"\n- 近三年本益比區間：最低 {本益.min():.1f}、25% {本益.quantile(.25):.1f}、中位數 {本益.median():.1f}、"
+                   f"75% {本益.quantile(.75):.1f}、最高 {本益.max():.1f}")
+        if 新聞 is not None and not 新聞.empty:
+            摘要 += "\n\n近半年新聞標題（新到舊）：\n" + "\n".join(
+                f"- {x['日期']:%Y-%m-%d} {x['標題']}（{x['來源']}）" for _, x in 新聞.head(60).iterrows())
 
+        try:
+            紀錄們 = AI紀錄快取(代號, 設定.get("GITHUB_TOKEN", ""))
+        except Exception as 錯:
+            紀錄們 = []
+            權杖 = engine.清理金鑰(設定.get("GITHUB_TOKEN"))
+            if "401" in str(錯) or not (權杖.startswith(("github_pat_", "ghp_")) and len(權杖) >= 40):
+                原始 = str(設定.get("GITHUB_TOKEN", ""))
+                怪字 = sorted({f"U+{ord(c):04X}" for c in 原始 if not 33 <= ord(c) <= 126})
+                st.warning("Secrets 裡的 GITHUB_TOKEN 看起來不正確（可能貼上時被改到或少了字），"
+                           "請刪掉那一行重新貼上；報告暫時只會存在網站上。\n\n"
+                           f"檢查資訊（不含金鑰內容）：原始長度 {len(原始)}、清理後長度 {len(權杖)}（正確約 93）、"
+                           f"開頭 {權杖[:11]}、特殊字元 {len([c for c in 原始 if not 33 <= ord(c) <= 126])} 個"
+                           f"{' ' + ' '.join(怪字[:5]) if 怪字 else ''}、錯誤：{str(錯)[:80]}")
+            else:
+                st.caption(f"讀取過去的 AI 報告失敗：{錯}")
+        上次 = 紀錄們[0] if 紀錄們 else None
+        天數 = (pd.Timestamp.now(tz="Asia/Taipei").tz_localize(None).normalize()
+                - pd.Timestamp(上次["時間"][:10])).days if 上次 else None
+        過久 = int(設定.get("AI_STALE_DAYS", 7))
+        if 上次:
+            說明 = "今天" if 天數 == 0 else f"{天數} 天前"
+            if 天數 >= 過久:
+                st.warning(f"上次分析：{上次['時間']}（{說明}，當時收盤 {上次.get('收盤', '—')}）。已超過 {過久} 天，建議重新分析。")
+            else:
+                st.caption(f"上次分析：{上次['時間']}（{說明}，當時收盤 {上次.get('收盤', '—')}，{上次.get('引擎', '')}）")
+        else:
+            st.caption(f"使用 {引擎}。AI 會彙整近半年新聞、法人觀點與網站數據，給出目標價、預估本益比與短中期看法，約需 1 分鐘。")
 
-if 新手 and 頁面 == 頁面們[0]:
-    st.markdown('<div class="sec">BEGINNER // 新手三步驟看盤</div><div class="steps">' + "".join(
-        f'<a href="?p={碼}" target="_self"><b>{標}</b><span>{說}</span></a>' for 標, 說, 碼 in beginner.三步驟) + "</div>",
-        unsafe_allow_html=True)
-    st.caption("網站的設計順序就是這三步：大盤好不好 → 誰最強 → 哪裡買、哪裡停損。名詞旁的 ❓ 可以看白話說明；不想看可以關掉上方「🔰 新手模式」。")
-執行頁面(頁面們.index(頁面))
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def 新鮮度表(版本鍵):
-    return engine.資料新鮮度()
-
-
-_鮮 = 新鮮度表(_版本)
-_落後 = (~_鮮["狀態"].str.startswith("✅")).sum()
-with st.expander(f"🩺 資料新鮮度：{'全部正常' if not _落後 else f'{_落後} 項落後'}", expanded=bool(_落後)):
-    表格(_鮮, hide_index=True, width="stretch")
-    st.caption("每日資料跟最新交易日比；月營收、內部人、季報看距離該期結束多久。休市日不算落後。")
+        按鈕字 = (f"✨ 產生 {代號} {r['名稱']} 的 AI 分析" if not 上次 else
+                 "🔄 重新分析" + ("" if 天數 >= 過久 else "（已有近期報告）"))
+        if (not 上次 or 天數 >= 1) and st.button(按鈕字, key="AI按鈕", type="primary" if not 上次 or 天數 >= 過久 else "secondary"):
+            用量 = AI用量()
+            if 用量.get(今天, 0) >= int(設定.get("AI_DAILY_LIMIT", 20)):
+                st.warning("今天的 AI 分析次數已達上限，明天再試。")
+            else:
+                with st.spinner("AI 整理中，約 1 分鐘…"):
+                    try:
+                        函式 = engine.AI分析Gemini if 引擎 == "Gemini" else engine.AI分析
+                        文字, 來源 = 函式(代號, r["名稱"], 摘要, 金鑰, 模型)
+                        用量[今天] = 用量.get(今天, 0) + 1
+                        新 = {"時間": pd.Timestamp.now(tz="Asia/Taipei").strftime("%Y-%m-%d %H:%M"),
+                             "資料日期": 今天, "收盤": float(r["收盤"]), "引擎": 引擎, "模型": 模型,
+                             "內容": 文字, "來源": 來源}
+                        try:
+                            永久 = engine.儲存AI紀錄(代號, 新, 設定)
+                        except Exception as 錯:
+                            永久 = False
+                            st.warning(f"報告已產生，但存到 GitHub 失敗：{錯}")
+                        if not 永久 and not engine.清理金鑰(設定.get("GITHUB_TOKEN")):
+                            st.caption("目前報告只暫存在網站上，網站重新啟動後會消失。設定 GITHUB_TOKEN 後可永久保存。")
+                        AI紀錄快取.clear()
+                        紀錄們 = [新] + 紀錄們
+                        上次 = 新
+                    except Exception as 錯:
+                        st.error(f"AI 分析失敗：{錯}")
+        if 上次:
+            st.markdown(上次["內容"])
+            if 上次.get("來源"):
+                with st.expander(f"參考來源（{len(上次['來源'])}）"):
+                    st.markdown("\n".join(f"- [{標題}]({網址})" for 網址, 標題 in 上次["來源"]))
+            if len(紀錄們) > 1:
+                with st.expander(f"過去的 AI 報告（{len(紀錄們) - 1}）"):
+                    for 舊 in 紀錄們[1:]:
+                        st.markdown(f"#### {舊['時間']}（當時收盤 {舊.get('收盤', '—')}，{舊.get('引擎', '')}）")
+                        st.markdown(舊["內容"])
+                        st.divider()
 
 st.markdown(f'<div class="sub" style="color:{灰};font-family:JetBrains Mono;font-size:11px;margin-top:30px">'
             '僅供個人研究，不構成投資建議 // DATA: TWSE · TPEx</div>', unsafe_allow_html=True)

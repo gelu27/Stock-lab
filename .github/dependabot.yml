@@ -1,7 +1,0 @@
-# 每月檢查 GitHub Actions 有沒有新版（workflow 已釘 SHA，Dependabot 會開 PR 更新 SHA）
-version: 2
-updates:
-  - package-ecosystem: github-actions
-    directory: /
-    schedule:
-      interval: monthly

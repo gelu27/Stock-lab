@@ -5,9 +5,3 @@ backgroundColor = "#000000"
 secondaryBackgroundColor = "#0B0B0B"
 textColor = "#EDEDED"
 font = "monospace"
-
-[server]
-enableStaticServing = true
-
-[browser]
-gatherUsageStats = false   # 不傳 Streamlit 使用統計（少一個外部請求、也比較隱私）
