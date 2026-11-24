@@ -33,6 +33,14 @@ def main():
     assert "受惠等級：C 間接題材" in 文, 文
     print("✅ 低軌衛星名單、受惠等級、個股產業鏈文字正常")
 
+    for 名 in ["CPO", "NPO", "光通訊", "高壓直流電"]:
+        新 = 鏈[鏈["chain"] == 名]
+        assert len(新) >= 10 and 新["code"].is_unique, 名
+        assert set(新["code"]) == set(註[註["chain"] == 名]["code"]), f"{名} 產業鏈與受惠等級名單要一致"
+        assert set(新["code"]) == set(概[概["concept"] == 名]["code"]), f"概念股 {名} 要跟產業鏈同一份名單"
+    assert not (set(鏈[鏈["chain"] == "NPO"]["code"]) and set(註[(註["chain"] == "NPO") & (註["等級"] == "A 已出貨")]["code"])), "NPO 尚無 A 級"
+    print("✅ CPO／NPO／光通訊／高壓直流電名單與受惠等級一致")
+
     # 指數：兩檔每天各漲 1%、加權每天漲 0.5% → 全部指數每天 ×1.01
     日 = pd.bdate_range("2024-01-01", periods=300)
     碼們 = 人["code"].tolist()[:2]
