@@ -452,6 +452,50 @@ def 產業鏈區():
         st.caption("產業鏈清單自己整理在 data/supply_chain.csv，可直接在 GitHub 增刪。僅供研究參考。")
 
 
+def 連板翻綠回測區(今連):
+    """連板的 5 年回測（分大盤大漲日／一般日、隔天開盤才買得到），以及今天「翻綠」名單與回測（只有天地板是真的警訊）。"""
+    結 = engine.讀取強弱轉折回測()
+    try:
+        翻 = engine.今日翻綠(指標)
+    except Exception:
+        翻 = pd.DataFrame()
+    大盤 = None
+    if 加權 is not None and len(加權) > 1:
+        大盤 = (float(加權["close"].iloc[-1]) / float(加權["close"].iloc[-2]) - 1) * 100
+    欄 = ["條件", "次數", "天數", "1日超額%", "5日超額%", "20日超額%", "20日勝率%", "隔天開盤買5日超額%", "隔天開盤買20日超額%"]
+    if 結:
+        大 = 結["大漲日連板"]
+        今天大漲 = 大盤 is not None and 大盤 >= engine.大漲日門檻
+        st.markdown(f"**連板值不值得關注（{結['起']}～{結['迄']}，5 年全市場）**")
+        表格(pd.DataFrame(結["連板"])[欄], hide_index=True, width="stretch")
+        開頭 = f"今天加權 {大盤:+.1f}%，屬於大盤大漲日。" if 今天大漲 else ""
+        大買 = pd.DataFrame(結["連板"]).set_index("條件").loc["連板＋大盤大漲日", "隔天開盤買20日超額%"]
+        st.markdown(
+            f'<div class="verdict sub">{開頭}'
+            f"連板之後的超額報酬大多發生在隔天開盤跳空（收盤時多半鎖住買不到，隔天還鎖住的比例約 {結['連板隔天仍鎖%']}%）。"
+            "隔天開盤才買，一般日子 5 日超額接近 0；<b>大盤大漲日出現的連板</b>比較有延續性，"
+            f"隔天開盤買 20 日平均超額約 {大買:+.1f}%，"
+            f"但已有 20 日結果的 {大['天數']} 個大漲日裡只有 {大['贏的天數%']}% 贏大盤，最差一天 {大['最差%']:+.0f}%，"
+            "適合列入觀察名單、等打開後量價確認再進，不適合追價。</div>", unsafe_allow_html=True)
+    if len(翻):
+        天地 = next((x for x in (結 or {}).get("翻綠", []) if x["條件"].startswith("天地板")), None)
+        st.markdown(f"**今天翻綠（盤中漲 3% 以上、收盤下跌，成交值 0.5 億以上）：{len(翻)} 檔**")
+        板 = 翻[翻["翻綠類型"] == "天地板"]
+        if len(板):
+            st.error("⚠️ 天地板（盤中碰漲停、收跌停）：" + "、".join(f"{r.代號} {r.名稱}" for r in 板.itertuples())
+                     + (f"。歷史上之後 20 日平均超額 {天地['20日超額%']:+.1f}%、上漲機率 {天地['20日勝率%']}%，盡量避開。"
+                        if 天地 is not None else "。盡量避開。"))
+        表格(翻, hide_index=True, width="stretch", height=min(400, 38 + 35 * len(翻)),
+             column_config={"盤中最高%": st.column_config.NumberColumn(format="%+.2f%%"),
+                            "收盤漲跌%": st.column_config.NumberColumn(format="%+.2f%%")})
+    if 結:
+        st.markdown("**翻綠之後真的比較差嗎（5 年全市場）**")
+        表格(pd.DataFrame(結["翻綠"])[欄], hide_index=True, width="stretch")
+        st.caption("只有「天地板」之後明顯落後；一般的開高走低翻綠、漲停打開翻綠、大盤大漲日逆勢收跌，之後跟大盤差不多，"
+                   "不能單獨當賣出訊號，要配合基本面與籌碼。超額＝減掉同一天全體股票的平均；排除 20 日均成交值不到 500 萬的股票；"
+                   "相鄰日子的樣本會重疊，大盤大漲日只有幾十天，平均值容易被少數幾天拉動。約每月重算。")
+
+
 def 連板與流入區(分類):
     """連續漲停名單與歷史統計、族群連續資金流入天數（短線追強、老二老三補漲用）。"""
     try:
@@ -459,7 +503,7 @@ def 連板與流入區(分類):
         流 = engine.族群連續流入(指標, 分類)
     except Exception:
         return
-    with st.expander(f"🔥 連續漲停與連續資金流入（連板 {len(今連)} 檔、連續流入族群 {len(流)} 個）", expanded=False):
+    with st.expander(f"🔥 連續漲停、翻綠與連續資金流入（連板 {len(今連)} 檔、連續流入族群 {len(流)} 個）", expanded=False):
         if len(今連):
             st.markdown("**今天連續漲停（2 天以上）**")
             表格(今連, hide_index=True, width="stretch", height=min(360, 38 + 35 * len(今連)),
@@ -467,6 +511,7 @@ def 連板與流入區(分類):
         if len(連統):
             st.markdown("**歷史上連板之後隔天、5 天的報酬**")
             表格(連統, hide_index=True, width="stretch")
+        連板翻綠回測區(今連)
         if len(流):
             st.markdown(f"**連續資金流入 3 天以上的{分類}**")
             表格(流, hide_index=True, width="stretch")

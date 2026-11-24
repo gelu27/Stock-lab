@@ -74,7 +74,32 @@ def PDF按鈕(代號, r, 建議, 內文, 時間):
                            mime="application/pdf", key=f"PDF下載{代號}", type="primary")
 
 
-def 預估EPS區(r):
+def 前瞻區間比較(代號, r, 明年EPS, 明年):
+    """網路常見「明年預估本益比 vs 歷史本益比區間」的圖卡，兩者口徑不同：歷史區間是近四季（落後）本益比，
+    成長股的明年本益比一定比較低，看起來永遠「低於區間」。這裡同時列出同口徑的近四季本益比位階，
+    以及「明年 EPS × 歷史本益比」換算的價位（等於假設預估全部實現、市場又給回過去的本益比）。"""
+    帶 = glance.讀本益比位階()
+    if 帶 is None or str(代號) not in 帶.index or not (pd.notna(明年EPS) and 明年EPS > 0):
+        return
+    列 = 帶.loc[str(代號)]
+    分 = [("P10", "pe_p10"), ("P25", "pe_p25"), ("中位", "pe_p50"), ("P75", "pe_p75"), ("P90", "pe_p90")]
+    前瞻 = r["收盤"] / 明年EPS
+    近位 = glance.位階百分位(r["本益比"], 列)
+    with st.expander(f"📏 {明年} 預估本益比 {前瞻:.1f} 倍 vs 歷史本益比區間（注意口徑不同）"):
+        表 = pd.DataFrame({"歷史本益比": [n for n, _ in 分], "倍數": [float(列[c]) for _, c in 分]})
+        表[f"× {明年} 預估 EPS 換算價位"] = (表["倍數"] * 明年EPS).round(1)
+        表["距現價%"] = ((表[f"× {明年} 預估 EPS 換算價位"] / r["收盤"] - 1) * 100).round(1)
+        表格(表, hide_index=True, width="stretch")
+        st.markdown(
+            f'<div class="verdict sub">同口徑看：目前近四季本益比 {數(r["本益比"], "{:.1f}")} 倍，在過去 5 年約第 '
+            f'{"—" if pd.isna(近位) else f"{近位:.0f}"} 百分位（0＝最便宜）。'
+            f"{明年} 預估本益比 {前瞻:.1f} 倍是用還沒發生的獲利算的，拿去跟歷史近四季本益比區間比，"
+            "成長越快的股票看起來越「便宜」，不能直接說成超跌。</div>", unsafe_allow_html=True)
+        st.caption("換算價位＝明年預估 EPS × 過去 5 年近四季本益比的分位數，隱含兩個假設：預估全部實現、市場願意給回過去的本益比。"
+                   "景氣循環股（PCB、記憶體、面板）在獲利高峰時本益比通常會被壓低，換算價位偏樂觀。")
+
+
+def 預估EPS區(r, 代號=None):
     """FORWARD // 三個來源的今年、明年預估 EPS，算預估本益比，跟已公布累計 EPS 對照。"""
     g = lambda k: r.get(k, np.nan)
     if pd.isna(g("預估EPS今年")) and pd.isna(g("預估Vera今年")):
@@ -113,6 +138,8 @@ def 預估EPS區(r):
     表[f"{年} 本益比"] = (r["收盤"] / 表[f"{年} EPS"]).where(表[f"{年} EPS"] > 0)
     表[f"{年 + 1} 本益比"] = (r["收盤"] / 表[f"{年 + 1} EPS"]).where(表[f"{年 + 1} EPS"] > 0)
     表 = 表.dropna(subset=[f"{年} EPS", f"{年 + 1} EPS"], how="all")
+    if 代號 is not None:
+        前瞻區間比較(代號, r, g("預估EPS明年"), 年 + 1)
     with st.expander("三個來源的數字"):
         表格(表.style.format({c: "{:.2f}" for c in 表.columns if "EPS" in c} | {c: "{:.1f}" for c in 表.columns if "本益比" in c},
                             na_rep="—"), hide_index=True, width="stretch")
@@ -1812,7 +1839,7 @@ with 分頁[2], 區塊防護("基本面"):
             卡片("累計營收年增率", 數(r.get("累計營收年增率"), 尾="%"), "", 漲跌色(r.get("累計營收年增率") or 0)),
             卡片("距 52 週高點", 數(r["距52週高點"], "{:+.1f}", "%")),
         ] + 毛利卡片(r) + ROE卡片(代號, r))
-        預估EPS區(r)
+        預估EPS區(r, 代號)
         全年EPS反推區(代號)
         with 區塊防護("檢查表"):
             檢查表區(代號, r)
