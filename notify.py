@@ -7,7 +7,7 @@
 #   python notify.py query 2330  查一檔股票（LINE 打字查詢用，由 Cloudflare Worker 觸發 query.yml）
 #   python notify.py brief 盤前|收盤|夜盤  AI 大盤解讀（要設定 GEMINI_API_KEY 或 ANTHROPIC_API_KEY），存到 ai-reports 並傳 LINE
 #   python notify.py flush   把同一個排程累積的通知（環境變數 LINE_OUTBOX）合成一則推播送出
-#   LINE 打「新片」「解讀」「額度」：用回覆（不算額度）拿最新影片清單、最新 AI 大盤解讀、本月額度
+#   LINE 打「新片」「解讀」「額度」「80分以上」（可改數字）：用回覆（不算額度）拿最新影片清單、最新 AI 大盤解讀、本月額度
 #
 # 需要在 GitHub 專案 Settings → Secrets and variables → Actions 設定：
 #   LINE_TOKEN    LINE Messaging API 的 Channel access token（必填）
@@ -21,6 +21,7 @@ import base64
 import datetime as dt
 import io
 import json
+import re
 import os
 import sys
 from pathlib import Path
@@ -1688,6 +1689,57 @@ def 額度查詢():
     送出([{"type": "text", "text": (feedback.額度文字(額) or "查不到 LINE 額度") + 模式}], "額度提醒")
 
 
+def 高分明細查詢(門檻=80):
+    """LINE 打「80分以上」（也可打「75分以上」等）：用回覆（不算額度）傳目前總分 ≥ 門檻 的個股明細，
+    同時符合烏賊多方策略的排在前面並標註策略名稱。排除 ETF 與 5 日均量 < 500 張的股票（跟收盤摘要的高分榜同口徑）。"""
+    import engine
+    原始 = engine.讀取資料庫(最近天數=260)
+    指標 = engine.計算指標(原始)
+    del 原始
+    分, 細, 大 = engine.今昨評分(指標[指標["date"] >= 指標["date"].max() - pd.Timedelta(days=20)],
+                           engine.讀取基本面(), engine.讀取加權指數())
+    可 = 分[(分["5日均量"] >= 500) & ~分.index.astype(str).str.startswith("00")].dropna(subset=["總分"])
+    高 = 可[可["總分"] >= 門檻].sort_values("總分", ascending=False)
+    日 = 大.get("日期")
+    日字 = f"{pd.Timestamp(日):%m/%d}" if 日 is not None else ""
+    if 高.empty:
+        送出([{"type": "text", "text": f"📊 {日字} 目前沒有總分 ≥ {門檻} 的個股（已排除 ETF 與量太小）。"}], "個股查詢")
+        return
+    策略們 = {}
+    try:
+        今 = 指標[指標["date"] == 指標["date"].max()]
+        今 = engine.加基本面(今, engine.讀取基本面())
+        補 = engine.籌碼補充表(指標)
+        for b in (engine.財報體質表(), engine.合約負債表(), engine.預估EPS表()):
+            if b is not None:
+                補 = 補.join(b, how="outer")
+        今 = engine.加預估本益比(engine.加融資佔股本(今.join(補, on="代號")))
+        for 名, 設 in engine.烏賊條件.items():
+            if 設["方向"] != "多":
+                continue
+            for 代 in engine.選股(今, dict(設["條件"], 排除ETF=True))["代號"].astype(str):
+                策略們.setdefault(代, []).append(名.replace("烏賊", ""))
+    except Exception as e:
+        print("烏賊策略比對失敗：", repr(e))
+    變 = lambda v: "" if pd.isna(v) or round(v) == 0 else f"（{符號(v)}{abs(v):.0f}）"
+    def 行(c, r):
+        價 = f"｜{r['收盤']:,.2f} {符號(r['漲跌幅'])}{abs(r['漲跌幅']):.2f}%" if pd.notna(r.get("收盤")) and pd.notna(r.get("漲跌幅")) else ""
+        return f"{c} {r['名稱']} {r['總分']:.1f}分{變(r.get('較昨日'))}{價}" + (f"\n　　🦑 {'、'.join(策略們[c])}" if c in 策略們 else "")
+    烏賊中 = [c for c in 高.index if c in 策略們]
+    其他 = [c for c in 高.index if c not in 策略們]
+    行們 = [f"📊 {日字} 總分 ≥ {門檻} 的個股 {len(高)} 檔（括號＝較昨日分數變化）"]
+    if 烏賊中:
+        行們 += ["", f"🦑 同時符合烏賊多方策略 {len(烏賊中)} 檔："] + [行(c, 高.loc[c]) for c in 烏賊中]
+    if 其他:
+        行們 += ["", f"其他 {len(其他)} 檔："] + [行(c, 高.loc[c]) for c in 其他]
+    行們.append("\n（規則計分，僅供參考，非投資建議）")
+    段們 = 切段("\n".join(行們))
+    if len(段們) > 5:   # LINE 一次回覆最多 5 個訊息框
+        段們 = 段們[:5]
+        段們[-1] = 段們[-1][:4800] + "\n…名單太長，其餘到網站「07 評分」看"
+    送出([{"type": "text", "text": t} for t in 段們], "個股查詢")
+
+
 文字指令 = {"新片": 新片查詢, "影片": 新片查詢, "新影片": 新片查詢, "解讀": 解讀查詢, "大盤": 解讀查詢, "額度": 額度查詢}
 
 
@@ -1782,6 +1834,10 @@ if __name__ == "__main__":
         問 = " ".join(sys.argv[2:]).strip()
         if 問 in 文字指令:
             文字指令[問]()
+            sys.exit(0)
+        分數指令 = re.fullmatch(r"(\d{2,3})分以上", 問.replace(" ", ""))
+        if 分數指令:
+            高分明細查詢(int(分數指令.group(1)))
             sys.exit(0)
         簡 = 問.endswith(("快", "簡")) and len(問) > 2   # 「2330快」只要文字摘要，不做 AI 與 PDF
         個股查詢(問[:-1].strip() if 簡 else 問, 完整=not 簡)
