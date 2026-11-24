@@ -11895,3 +11895,56 @@ def 前波低點(K, 窗=20, 天數=250, 檔數=4):
         if 低.iloc[i] == 低.iloc[i - 窗:i + 窗 + 1].min():
             出.append((pd.Timestamp(K["date"].iloc[i]), float(低.iloc[i])))
     return 出[::-1][:檔數]
+
+
+def V轉反彈統計(K, 單日門檻=2.0, 前五日跌幅=8.0, 間隔天=20):
+    """急跌後大漲日（單日 ≥ 單日門檻%、且前一天為止的 5 日累計跌 ≥ 前五日跌幅%；20 天內只取第一次）之後的走勢。
+    K 要有 date、close（長期加權 K 線即可）。回傳 (事件表, 摘要 dict)；事件表欄位為各日報酬% 與勝負。
+    用來對照「大跌後利多 V 轉，第 1 天最強、整體反彈 6～12%」這類說法。"""
+    if K is None or len(K) < 60:
+        return pd.DataFrame(), {}
+    c = K.sort_values("date").drop_duplicates("date").set_index("date")["close"].astype(float)
+    r = c.pct_change() * 100
+    前5 = (c.pct_change(5).shift(1)) * 100
+    候選 = r[(r >= 單日門檻) & (前5 <= -前五日跌幅)].index
+    選, 末 = [], None
+    for d in 候選:
+        if 末 is None or (d - 末).days > 間隔天:
+            選.append(d); 末 = d
+    列 = []
+    for d in 選:
+        i = c.index.get_loc(d)
+        if i + 20 >= len(c):
+            continue
+        前收 = c.iloc[i - 1]
+        row = {"日期": d, "當日%": round(r.iloc[i], 2), "前5日%": round(前5.iloc[i], 1)}
+        for k in (1, 2, 3, 5, 10, 20):
+            row[f"T+{k}%"] = round((c.iloc[i + k] / c.iloc[i] - 1) * 100, 2)
+        row["10日內自前收最高%"] = round((c.iloc[i:i + 11].max() / 前收 - 1) * 100, 1)
+        row["第1天最強"] = bool(r.iloc[i] >= r.iloc[i + 1:i + 4].max())
+        列.append(row)
+    表 = pd.DataFrame(列)
+    if 表.empty:
+        return 表, {}
+    摘 = {"次數": len(表)}
+    for k in (1, 2, 3, 5, 10, 20):
+        摘[f"T+{k}均"] = round(float(表[f"T+{k}%"].mean()), 2)
+        摘[f"T+{k}勝率"] = int(round((表[f"T+{k}%"] > 0).mean() * 100))
+    摘["10日內最高均"] = round(float(表["10日內自前收最高%"].mean()), 1)
+    摘["10日內最高中位"] = round(float(表["10日內自前收最高%"].median()), 1)
+    摘["第1天最強比例"] = int(round(表["第1天最強"].mean() * 100))
+    摘["T+20負"] = int((表["T+20%"] < 0).sum())
+    return 表, 摘
+
+
+def 停損雜訊檢查(個股K, 現價, 停損價, 天數=20):
+    """停損離現價的距離，跟這檔近 天數 日平均日內振幅（高低差÷前收）比。
+    倍數 < 1：一天正常的震盪就會掃到；1～1.5 偏緊；≥ 1.5 才比較有緩衝。個股K 要有 high、low、close，依日期排序。"""
+    if 個股K is None or len(個股K) < 天數 + 1 or not 現價 or not 停損價 or 停損價 >= 現價:
+        return None
+    z = 個股K.tail(天數 + 1).reset_index(drop=True)
+    振幅 = ((z["high"] - z["low"]) / z["close"].shift(1)).iloc[1:].mean() * 100
+    距 = (現價 - 停損價) / 現價 * 100
+    倍 = 距 / 振幅 if 振幅 > 0 else np.nan
+    判 = "太緊：一天正常震盪就可能掃到" if 倍 < 1 else ("偏緊" if 倍 < 1.5 else "有緩衝")
+    return {"停損距離%": round(float(距), 1), "近日均振幅%": round(float(振幅), 1), "倍數": round(float(倍), 2), "判讀": 判}
