@@ -11948,3 +11948,117 @@ def 停損雜訊檢查(個股K, 現價, 停損價, 天數=20):
     倍 = 距 / 振幅 if 振幅 > 0 else np.nan
     判 = "太緊：一天正常震盪就可能掃到" if 倍 < 1 else ("偏緊" if 倍 < 1.5 else "有緩衝")
     return {"停損距離%": round(float(距), 1), "近日均振幅%": round(float(振幅), 1), "倍數": round(float(倍), 2), "判讀": 判}
+
+
+# ========== 2026-11-24 連續漲停 × 翻綠：今日名單與 5 年回測 ==========
+大漲日門檻 = 2.0  # 加權單日漲 2% 以上算「大盤大漲日」
+
+
+def _轉折標記(t):
+    """t：一般股票日資料（代號、date、open、high、收盤、日報酬、value），已依代號、日期排序。
+    加上 鎖漲停、昨鎖漲停、盤中最高%、翻綠類型、量比。"""
+    前收 = t["收盤"] / (1 + t["日報酬"])
+    t["盤中最高%"] = (t["high"] / 前收 - 1) * 100
+    t["鎖漲停"] = (t["日報酬"] >= 0.095) & (t["收盤"] >= t["high"] - 1e-9)
+    群 = t.groupby("代號", sort=False)
+    t["昨鎖漲停"] = 群["鎖漲停"].shift(1).fillna(False).astype(bool)
+    均 = 群["value"].transform(lambda s: s.rolling(20, min_periods=10).mean().shift(1))
+    t["量比"] = t["value"] / 均
+    跌 = t["日報酬"] < 0
+    t["翻綠類型"] = np.select(
+        [跌 & (t["盤中最高%"] >= 9.4) & (t["日報酬"] <= -0.094), 跌 & (t["盤中最高%"] >= 9.4), 跌 & (t["盤中最高%"] >= 3)],
+        ["天地板", "漲停打開翻綠", "開高走低翻綠"], default="")
+    return t, 均
+
+
+def 強弱轉折回測(原始=None, 最少均額=5e6):
+    """5 年全市場：連續 2 天鎖漲停、各種「翻綠」之後 1／5／20 日報酬與超額（減同日全體平均）。
+    也算隔天開盤才買得到的版本（連板股收盤多半買不到）。回傳 dict（存 data/limit_flip.json）。"""
+    if 原始 is None:
+        原始 = _讀每日檔("prices")
+    t = 原始[原始["code"].astype(str).str.fullmatch(r"[1-9]\d{3}")].copy()
+    t = t.rename(columns={"code": "代號", "close": "收盤"})
+    t = t[t["收盤"] > 0].sort_values(["代號", "date"]).reset_index(drop=True)
+    前收 = t["收盤"] - t["change"]
+    t["日報酬"] = (t["change"] / 前收).where((前收 > 0) & ((t["change"] / 前收).abs() <= 0.11))
+    t, 均 = _轉折標記(t)
+    群 = t.groupby("代號", sort=False)
+    指數 = (1 + t["日報酬"].fillna(0)).groupby(t["代號"]).cumprod()
+    隔開 = 群["open"].shift(-1) / (群["收盤"].shift(-1) - 群["change"].shift(-1))  # 隔天開盤相對今天收盤（還原）
+    for n in (1, 5, 20):
+        t[f"f{n}"] = (指數.groupby(t["代號"]).shift(-n) / 指數 - 1) * 100
+        t[f"x{n}"] = t[f"f{n}"] - t.groupby("date")[f"f{n}"].transform("mean")
+    for n in (5, 20):
+        t[f"o{n}"] = ((指數.groupby(t["代號"]).shift(-n) / 指數) / 隔開 - 1) * 100
+        t[f"ox{n}"] = t[f"o{n}"] - t.groupby("date")[f"o{n}"].transform("mean")
+    t["隔天仍鎖"] = 群["鎖漲停"].shift(-1)
+    K = 讀取指數K線("TAIEX")
+    大盤 = K.set_index("date")["close"].pct_change() * 100
+    t["大盤%"] = t["date"].map(大盤)
+    t = t[均 >= 最少均額]
+    大 = t["大盤%"] >= 大漲日門檻
+    def 摘(名, 遮):
+        g = t[遮]
+        列 = {"條件": 名, "次數": int(len(g)), "天數": int(g["date"].nunique())}
+        for n in (1, 5, 20):
+            列[f"{n}日%"] = round(float(g[f"f{n}"].mean()), 2)
+            列[f"{n}日超額%"] = round(float(g[f"x{n}"].mean()), 2)
+        列["20日勝率%"] = round(float((g["f20"].dropna() > 0).mean() * 100))
+        for n in (5, 20):
+            列[f"隔天開盤買{n}日超額%"] = round(float(g[f"ox{n}"].mean()), 2)
+        return 列
+    連 = t["鎖漲停"] & t["昨鎖漲停"]
+    翻 = t["翻綠類型"]
+    連板 = [摘("單日鎖漲停", t["鎖漲停"]), 摘("連 2 天以上鎖漲停", 連),
+            摘("連板＋大盤大漲日", 連 & 大), 摘("連板＋一般日", 連 & ~大)]
+    翻綠 = [摘("大盤大漲日個股收跌", 大 & (t["日報酬"] < 0)),
+            摘("開高走低翻綠（盤中漲 3% 以上收跌）", 翻 != ""),
+            摘("漲停打開翻綠（碰漲停收跌）", 翻.isin(["漲停打開翻綠", "天地板"])),
+            摘("天地板（碰漲停收跌停）", 翻 == "天地板")]
+    g = t[連 & 大]
+    逐日 = g.groupby("date")["ox20"].mean().dropna()
+    return {"計算日": f"{pd.Timestamp.now():%Y-%m-%d}", "起": f"{t['date'].min():%Y-%m-%d}", "迄": f"{t['date'].max():%Y-%m-%d}",
+            "連板": 連板, "翻綠": 翻綠, "連板隔天仍鎖%": round(float(t.loc[連, "隔天仍鎖"].dropna().mean() * 100)),
+            "大漲日連板": {"天數": int(len(逐日)), "贏的天數%": round(float((逐日 > 0).mean() * 100)),
+                       "最好%": round(float(逐日.max()), 1), "最差%": round(float(逐日.min()), 1)}}
+
+
+def 更新強弱轉折回測(強制=False, 間隔天數=25):
+    """GitHub Actions 每天呼叫；距離上次超過 間隔天數 才重算，結果存 data/limit_flip.json。"""
+    import json
+    檔 = 資料夾 / "limit_flip.json"
+    if 檔.exists() and not 強制:
+        舊 = json.loads(檔.read_text())
+        if (pd.Timestamp.now() - pd.Timestamp(舊.get("計算日", "2000-01-01"))).days < 間隔天數:
+            print("連板翻綠回測：還不用重算")
+            return
+    結果 = 強弱轉折回測()
+    檔.write_text(json.dumps(結果, ensure_ascii=False, indent=1))
+    print(f"連板翻綠回測：{結果['起']}～{結果['迄']}")
+
+
+def 讀取強弱轉折回測():
+    import json
+    檔 = 資料夾 / "limit_flip.json"
+    return json.loads(檔.read_text()) if 檔.exists() else None
+
+
+def 今日翻綠(指標, 最少成交值=5e7):
+    """今天盤中漲 3% 以上、收盤卻下跌的一般股票（天地板／漲停打開翻綠／開高走低翻綠），成交值 最少成交值 以上。
+    指標要有 代號、名稱、date、open、high、收盤、日報酬、value。回傳 DataFrame（天地板排最前面）。"""
+    if 指標 is None or not len(指標):
+        return pd.DataFrame()
+    t = 指標[指標["代號"].str.fullmatch(r"[1-9]\d{3}")].sort_values(["代號", "date"])
+    t = t[t["date"] >= t["date"].max() - pd.Timedelta(days=60)].copy()
+    t, _ = _轉折標記(t)
+    今 = t[(t["date"] == t["date"].max()) & (t["翻綠類型"] != "") & (t["value"] >= 最少成交值)].copy()
+    if 今.empty:
+        return pd.DataFrame()
+    今["產業"] = 今["代號"].map(_股本表()["產業"])
+    今["盤中最高%"] = 今["盤中最高%"].round(2)
+    今["收盤漲跌%"] = (今["日報酬"] * 100).round(2)
+    今["成交值億"] = (今["value"] / 1e8).round(2)
+    今["量比"] = 今["量比"].round(1)
+    序 = {"天地板": 0, "漲停打開翻綠": 1, "開高走低翻綠": 2}
+    今 = 今.assign(序=今["翻綠類型"].map(序)).sort_values(["序", "value"], ascending=[True, False])
+    return 今[["代號", "名稱", "翻綠類型", "盤中最高%", "收盤漲跌%", "收盤", "成交值億", "量比", "產業"]].reset_index(drop=True)
