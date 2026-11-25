@@ -5940,9 +5940,9 @@ def 庫藏股狀態(庫, 代號, 今天=None):
 庫藏股目的 = {"1": "員工", "2": "轉換", "3": "護盤"}  # 1 轉讓股份予員工、2 股權轉換、3 維護公司信用及股東權益
 
 
-def 庫藏股新決議(庫, 交易日們, 天數=3, 現價=None, 股數=None):
+def 庫藏股新決議(庫, 交易日們, 天數=3, 現價=None, 股數=None, 價表=None):
     """近 天數 個交易日董事會新決議的庫藏股：目的、張數、區間、最多花（張數 × 區間上限）、佔股本、佔市值、現價位置。
-    交易日們：資料庫的交易日（遞增）；現價、股數：以代號為索引的 Series。回傳 DataFrame（新的日期在前、同日最多花大的在前）。"""
+    交易日們：資料庫的交易日（遞增）；現價、股數：以代號為索引的 Series；價表：有 代號、date、收盤 的 DataFrame（算決議前 20 日漲跌）。回傳 DataFrame（新的日期在前、同日最多花大的在前）。"""
     if 庫 is None or 庫.empty or not len(交易日們):
         return pd.DataFrame()
     日們 = sorted(pd.to_datetime(pd.Index(交易日們)).unique())
@@ -5963,6 +5963,14 @@ def 庫藏股新決議(庫, 交易日們, 天數=3, 現價=None, 股數=None):
     t["區間位置%"] = ((現 - t["price_low"]) / 寬 * 100).round(0)
     t["價位"] = np.select([現.isna(), 現 < t["price_low"], 現 > t["price_high"]],
                         ["", "⚠️ 低於下限，暫時買不了", "高於上限，暫停買"], default="區間內，可買")
+    t["決議前20日%"] = np.nan
+    if 價表 is not None and len(價表):
+        p = 價表.pivot_table(index="date", columns="代號", values="收盤").sort_index()
+        for i, r in t.iterrows():
+            if r["code"] in p.columns:
+                s = p[r["code"]].loc[:r["board_date"]].dropna()
+                if len(s) > 20:
+                    t.at[i, "決議前20日%"] = (s.iloc[-1] / s.iloc[-21] - 1) * 100
     return t.sort_values(["board_date", "最多花億"], ascending=[False, False]).reset_index(drop=True)
 
 
@@ -5981,20 +5989,25 @@ def 庫藏股新決議文字(新, 最多每天=None):
                 break
             花 = f"{r['最多花億']:.2f}".rstrip("0").rstrip(".")
             佔 = f"｜佔市值 {r['佔市值%']:.1f}%" if pd.notna(r["佔市值%"]) else ""
+            if pd.notna(r.get("決議前20日%")) and r["決議前20日%"] <= -15:
+                佔 += f"｜📉 前 20 日跌 {abs(r['決議前20日%']):.0f}%"
             行.append(f"・{r['name']} {r['code']}｜{r['目的']}｜{r['張數']:,.0f} 張｜{fmt價(r['price_low'])}～{fmt價(r['price_high'])} 元｜{花} 億{佔}")
     行.append("\n護盤＝維護公司信用及股東權益；員工＝轉讓股份予員工")
+    if "決議前20日%" in 新 and (新["決議前20日%"] <= -15).any():
+        行.append("📉＝決議前 20 日跌超過 15%：過去 5 年這類 20 日平均贏大盤約 3%、六成跑贏，比一般新決議明顯")
     return "\n".join(行)
 
 
 def 最新庫藏股新決議(天數=3):
     """LINE、收盤摘要用：自己讀資料庫最近幾天的收盤價與發行股數，算 庫藏股新決議()。"""
     庫 = 讀取庫藏股()
-    原始 = _讀每日檔("prices", 最近天數=天數 + 2)
+    原始 = _讀每日檔("prices", 最近天數=天數 + 25)
     if 庫 is None or 原始 is None:
         return pd.DataFrame()
     日們 = sorted(原始["date"].unique())
     今 = 原始[原始["date"] == 日們[-1]].drop_duplicates("code").set_index("code")["close"]
-    return 庫藏股新決議(庫, 日們, 天數, 今, _股本表()["發行股數"])
+    價 = 原始[原始["code"].isin(庫["code"])].rename(columns={"code": "代號", "close": "收盤"})
+    return 庫藏股新決議(庫, 日們, 天數, 今, _股本表()["發行股數"], 價)
 
 
 def 庫藏股回測(原始=None, 庫=None):
