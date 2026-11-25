@@ -5974,7 +5974,26 @@ def 庫藏股新決議(庫, 交易日們, 天數=3, 現價=None, 股數=None, �
     return t.sort_values(["board_date", "最多花億"], ascending=[False, False]).reset_index(drop=True)
 
 
-def 庫藏股新決議文字(新, 最多每天=None):
+def 庫藏股個股行情(r):
+    """LINE 第二行：現價、漲跌幅、三大法人買賣超、總分。r 是 Series（收盤、漲跌幅、外資買超…總分、較昨日、看法，缺的略過）。"""
+    號 = lambda v: "▲" if v > 0 else ("▼" if v < 0 else "－")
+    片 = []
+    if pd.notna(r.get("收盤")):
+        漲 = r.get("漲跌幅")
+        片.append(f"{r['收盤']:,.2f}" + (f" {號(漲)}{abs(漲):.2f}%" if pd.notna(漲) else ""))
+    if pd.notna(r.get("法人買超")):
+        細 = "／".join(f"{k}{round(r[c]):+,d}" for k, c in (("外", "外資買超"), ("投", "投信買超"), ("自", "自營買超")) if pd.notna(r.get(c)))
+        五 = f"，5日{round(r['法人5日買超']):+,d}" if pd.notna(r.get("法人5日買超")) else ""
+        片.append(f"法人{round(r['法人買超']):+,d}張" + (f"（{細}）" if 細 else "") + 五)
+    if pd.notna(r.get("總分")):
+        變 = r.get("較昨日")
+        片.append(f"{r['總分']:.1f}分" + (f"（{號(變)}{abs(變):.1f}）" if pd.notna(變) and round(變, 1) != 0 else "")
+                  + (f"{r['看法']}" if isinstance(r.get("看法"), str) else ""))
+    return "｜".join(片)
+
+
+def 庫藏股新決議文字(新, 最多每天=None, 行情=None):
+    """行情：以代號為索引的 DataFrame（收盤、漲跌幅、法人買賣超、總分…），有給就在每檔下面多一行。"""
     """把 庫藏股新決議() 排成文字清單（LINE、複製用）：【11/24（二）6 件】・鈺創 5351｜員工｜5,000 張｜61～146 元｜7.3 億。"""
     if 新 is None or 新.empty:
         return ""
@@ -5992,7 +6011,13 @@ def 庫藏股新決議文字(新, 最多每天=None):
             if pd.notna(r.get("決議前20日%")) and r["決議前20日%"] <= -15:
                 佔 += f"｜📉 前 20 日跌 {abs(r['決議前20日%']):.0f}%"
             行.append(f"・{r['name']} {r['code']}｜{r['目的']}｜{r['張數']:,.0f} 張｜{fmt價(r['price_low'])}～{fmt價(r['price_high'])} 元｜{花} 億{佔}")
+            if 行情 is not None and r["code"] in 行情.index:
+                情 = 庫藏股個股行情(行情.loc[r["code"]])
+                if 情:
+                    行.append(f"　　{情}")
     行.append("\n護盤＝維護公司信用及股東權益；員工＝轉讓股份予員工")
+    if 行情 is not None and len(行情):
+        行.append(f"第二行：{行情.attrs.get('日期', '最新')} 收盤價 漲跌幅｜三大法人買賣超（張，外／投／自）、5 日合計｜規則總分（較昨日）")
     if "決議前20日%" in 新 and (新["決議前20日%"] <= -15).any():
         行.append("📉＝決議前 20 日跌超過 15%：過去 5 年這類 20 日平均贏大盤約 3%、六成跑贏，比一般新決議明顯")
     return "\n".join(行)
