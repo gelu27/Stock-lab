@@ -1745,24 +1745,58 @@ def 高分明細查詢(門檻=80):
     送出([{"type": "text", "text": t} for t in 段們], "個股查詢")
 
 
+def 個股行情表(代號們):
+    """LINE 清單用：這些股票最新收盤、漲跌幅、三大法人買賣超（張）、法人 5 日合計、規則總分與較昨日（跟網站每日評分同一套）。"""
+    import engine
+    原始 = engine.讀取資料庫(最近天數=260)
+    指標 = engine.計算指標(原始)
+    del 原始
+    最新 = 指標["date"].max()
+    今 = 指標[指標["date"] == 最新].drop_duplicates("代號").set_index("代號")
+    欄 = [c for c in ("收盤", "漲跌幅", "外資買超", "投信買超", "自營買超", "法人買超", "法人5日買超") if c in 今.columns]
+    表 = 今.reindex(list(代號們))[欄]
+    try:
+        分, _, _ = engine.今昨評分(指標[指標["date"] >= 最新 - pd.Timedelta(days=20)], engine.讀取基本面(), engine.讀取加權指數())
+        表 = 表.join(分[["總分", "較昨日", "看法"]], how="left")
+    except Exception as e:
+        print("庫藏股清單評分失敗：", repr(e))
+    表.attrs["日期"] = f"{最新:%m/%d}"
+    return 表
+
+
 def 庫藏股查詢():
-    """LINE 打「庫藏股」：用回覆（不算額度）傳近 3 個交易日新決議的庫藏股清單。"""
+    """LINE 打「庫藏股」：用回覆（不算額度）傳近 3 個交易日新決議的庫藏股清單，每檔附收盤、漲跌幅、法人、總分。"""
     import engine
     新 = engine.最新庫藏股新決議(3)
-    文字 = engine.庫藏股新決議文字(新) or "近 3 個交易日沒有新決議的庫藏股。"
+    行情 = None
+    if not 新.empty:
+        try:
+            行情 = 個股行情表(新["code"].unique())
+        except Exception as e:
+            print("庫藏股清單行情失敗：", repr(e))
+    文字 = engine.庫藏股新決議文字(新, 行情=行情) or "近 3 個交易日沒有新決議的庫藏股。"
     送出([{"type": "text", "text": t} for t in 切段(文字)][:5], "個股查詢")
 
 
 def 庫藏股摘要():
-    """收盤摘要用：今天（資料最新交易日）董事會新決議的庫藏股，最多花大的前 5 件。"""
+    """收盤摘要用：今天（資料最新交易日）董事會新決議的庫藏股，最多花大的前 5 件，附收盤、漲跌幅、法人、總分。"""
     import engine
     新 = engine.最新庫藏股新決議(1)
     if 新.empty:
         return []
+    try:
+        行情 = 個股行情表(新["code"].head(5))
+    except Exception as e:
+        print("庫藏股摘要行情失敗：", repr(e))
+        行情 = None
     行們 = ["", f"🛒 今日庫藏股新決議 {len(新)} 件（打「庫藏股」看近 3 日）"]
     for _, r in 新.head(5).iterrows():
         佔 = f"，佔市值 {r['佔市值%']:.1f}%" if pd.notna(r["佔市值%"]) else ""
         行們.append(f"{r['name']} {r['code']} {r['目的']} {r['張數']:,.0f} 張，最多 {r['最多花億']:.2f} 億{佔}")
+        if 行情 is not None and r["code"] in 行情.index:
+            情 = engine.庫藏股個股行情(行情.loc[r["code"]])
+            if 情:
+                行們.append(f"　　{情}")
     return 行們
 
 
