@@ -84,6 +84,9 @@ jobs:
       - name: 連板與翻綠 5 年回測（約每月重算一次）
         continue-on-error: true
         run: python -c "import engine; engine.更新強弱轉折回測()"
+      - name: 庫藏股新決議後報酬回測（約每月重算一次）
+        continue-on-error: true
+        run: python -c "import engine; engine.更新庫藏股回測()"
       - name: 規則體檢（約每月一次，看燈號與訊號有沒有失效）
         continue-on-error: true
         run: python -c "import feedback; feedback.更新規則體檢()"

@@ -5937,6 +5937,151 @@ def 庫藏股狀態(庫, 代號, 今天=None):
     return f"{r['end']:%m/%d} 結束{已}"
 
 
+庫藏股目的 = {"1": "員工", "2": "轉換", "3": "護盤"}  # 1 轉讓股份予員工、2 股權轉換、3 維護公司信用及股東權益
+
+
+def 庫藏股新決議(庫, 交易日們, 天數=3, 現價=None, 股數=None):
+    """近 天數 個交易日董事會新決議的庫藏股：目的、張數、區間、最多花（張數 × 區間上限）、佔股本、佔市值、現價位置。
+    交易日們：資料庫的交易日（遞增）；現價、股數：以代號為索引的 Series。回傳 DataFrame（新的日期在前、同日最多花大的在前）。"""
+    if 庫 is None or 庫.empty or not len(交易日們):
+        return pd.DataFrame()
+    日們 = sorted(pd.to_datetime(pd.Index(交易日們)).unique())
+    起 = 日們[-天數] if len(日們) >= 天數 else 日們[0]
+    # 收盤後才開的董事會（或週末公告）也算進最近一個交易日之後
+    t = 庫[庫["board_date"] >= 起].copy()
+    if t.empty:
+        return pd.DataFrame()
+    t["目的"] = t["purpose"].astype(str).str.replace(r"\.0$", "", regex=True).map(庫藏股目的).fillna("其他")
+    t["張數"] = t["planned"] / 1000
+    t["最多花億"] = t["planned"] * t["price_high"] / 1e8
+    現 = t["code"].map(現價) if 現價 is not None else pd.Series(np.nan, index=t.index)
+    股 = t["code"].map(股數) if 股數 is not None else pd.Series(np.nan, index=t.index)
+    t["現價"] = 現
+    t["佔股本%"] = t["planned"] / 股 * 100
+    t["佔市值%"] = t["planned"] * t["price_high"] / (現 * 股) * 100
+    寬 = (t["price_high"] - t["price_low"]).where(lambda x: x > 0)
+    t["區間位置%"] = ((現 - t["price_low"]) / 寬 * 100).round(0)
+    t["價位"] = np.select([現.isna(), 現 < t["price_low"], 現 > t["price_high"]],
+                        ["", "⚠️ 低於下限，暫時買不了", "高於上限，暫停買"], default="區間內，可買")
+    return t.sort_values(["board_date", "最多花億"], ascending=[False, False]).reset_index(drop=True)
+
+
+def 庫藏股新決議文字(新, 最多每天=None):
+    """把 庫藏股新決議() 排成文字清單（LINE、複製用）：【11/24（二）6 件】・鈺創 5351｜員工｜5,000 張｜61～146 元｜7.3 億。"""
+    if 新 is None or 新.empty:
+        return ""
+    週 = "一二三四五六日"
+    fmt價 = lambda x: f"{x:,.2f}".rstrip("0").rstrip(".")
+    行 = ["📌 庫藏股新決議（近 3 個交易日）", "張數｜買回區間｜最多花（張數×區間最高價）"]
+    for 日, g in 新.groupby("board_date", sort=False):
+        行.append(f"\n【{日:%m/%d}（{週[日.weekday()]}）{len(g)} 件】")
+        for i, (_, r) in enumerate(g.iterrows()):
+            if 最多每天 and i >= 最多每天:
+                行.append(f"・…另 {len(g) - 最多每天} 件")
+                break
+            花 = f"{r['最多花億']:.2f}".rstrip("0").rstrip(".")
+            佔 = f"｜佔市值 {r['佔市值%']:.1f}%" if pd.notna(r["佔市值%"]) else ""
+            行.append(f"・{r['name']} {r['code']}｜{r['目的']}｜{r['張數']:,.0f} 張｜{fmt價(r['price_low'])}～{fmt價(r['price_high'])} 元｜{花} 億{佔}")
+    行.append("\n護盤＝維護公司信用及股東權益；員工＝轉讓股份予員工")
+    return "\n".join(行)
+
+
+def 最新庫藏股新決議(天數=3):
+    """LINE、收盤摘要用：自己讀資料庫最近幾天的收盤價與發行股數，算 庫藏股新決議()。"""
+    庫 = 讀取庫藏股()
+    原始 = _讀每日檔("prices", 最近天數=天數 + 2)
+    if 庫 is None or 原始 is None:
+        return pd.DataFrame()
+    日們 = sorted(原始["date"].unique())
+    今 = 原始[原始["date"] == 日們[-1]].drop_duplicates("code").set_index("code")["close"]
+    return 庫藏股新決議(庫, 日們, 天數, 今, _股本表()["發行股數"])
+
+
+def 庫藏股回測(原始=None, 庫=None):
+    """庫藏股新決議後的報酬：決議日後第一個交易日開盤買，持有 5／20／60 日，超額＝減同期全體股票平均。
+    分組：目的（護盤／員工）、最多花佔市值、決議前 20 日漲跌、現價在區間的位置。也統計公司最後真的買了幾 %。回傳 dict（存 data/buyback_backtest.json）。"""
+    if 庫 is None:
+        庫 = 讀取庫藏股()
+    if 原始 is None:
+        原始 = _讀每日檔("prices")
+    t = 原始[原始["code"].astype(str).str.fullmatch(r"[1-9]\d{3}")].copy()
+    t = t.rename(columns={"code": "代號", "close": "收盤"})
+    t = t[t["收盤"] > 0].sort_values(["代號", "date"]).reset_index(drop=True)
+    前收 = t["收盤"] - t["change"]
+    t["日報酬"] = (t["change"] / 前收).where((前收 > 0) & ((t["change"] / 前收).abs() <= 0.11))
+    群 = t.groupby("代號", sort=False)
+    指數 = (1 + t["日報酬"].fillna(0)).groupby(t["代號"]).cumprod()
+    隔開 = 群["open"].shift(-1) / (群["收盤"].shift(-1) - 群["change"].shift(-1))  # 隔天開盤相對今天收盤
+    for n in (5, 20, 60):
+        t[f"o{n}"] = ((指數.groupby(t["代號"]).shift(-n) / 指數) / 隔開 - 1) * 100
+        t[f"ox{n}"] = t[f"o{n}"] - t.groupby("date")[f"o{n}"].transform("mean")
+    t["前20"] = (指數 / 指數.groupby(t["代號"]).shift(20) - 1) * 100
+    日們 = pd.DatetimeIndex(sorted(t["date"].unique()))
+    事 = 庫.dropna(subset=["board_date", "planned", "price_high"]).copy()
+    事["目的"] = 事["purpose"].astype(str).str.replace(r"\.0$", "", regex=True).map(庫藏股目的).fillna("其他")
+    # 決議日當天或之前最後一個交易日的收盤當基準（決議多在收盤後公告），隔天開盤買進
+    位 = 日們.searchsorted(事["board_date"], side="right") - 1
+    事 = 事[(位 >= 0) & (事["board_date"] <= 日們[-1])]
+    事["基準日"] = 日們[日們.searchsorted(事["board_date"], side="right") - 1]
+    合 = 事.merge(t[["代號", "date", "收盤", "前20", "o5", "o20", "o60", "ox5", "ox20", "ox60"]],
+                 left_on=["code", "基準日"], right_on=["代號", "date"], how="inner")
+    股數 = 合["code"].map(_股本表()["發行股數"])
+    合["佔市值%"] = 合["planned"] * 合["price_high"] / (合["收盤"] * 股數) * 100
+    合["位置"] = (合["收盤"] - 合["price_low"]) / (合["price_high"] - 合["price_low"]).where(lambda x: x > 0)
+    def 摘(名, g):
+        列 = {"條件": 名, "次數": int(len(g))}
+        for n in (5, 20, 60):
+            v = g[f"ox{n}"].dropna()
+            列[f"{n}日%"] = round(float(g[f"o{n}"].mean()), 2) if len(v) else None
+            列[f"{n}日超額%"] = round(float(v.mean()), 2) if len(v) else None
+            列[f"{n}日樣本"] = int(len(v))
+        v = g["ox20"].dropna()
+        列["20日超額中位%"] = round(float(v.median()), 2) if len(v) else None
+        列["20日贏大盤%"] = round(float((v > 0).mean() * 100)) if len(v) else None
+        return 列
+    護, 員 = 合["目的"] == "護盤", 合["目的"] == "員工"
+    佔 = 合["佔市值%"]
+    分組 = [摘("全部新決議", 合), 摘("護盤（維護公司信用）", 合[護]), 摘("員工（轉讓員工）", 合[員]),
+          摘("最多花佔市值 < 1%", 合[佔 < 1]), 摘("最多花佔市值 1～3%", 合[(佔 >= 1) & (佔 < 3)]),
+          摘("最多花佔市值 ≥ 3%", 合[佔 >= 3]),
+          摘("護盤＋佔市值 ≥ 2%", 合[護 & (佔 >= 2)]),
+          摘("決議前 20 日跌超過 15%", 合[合["前20"] <= -15]), 摘("決議前 20 日跌 0～15%", 合[(合["前20"] > -15) & (合["前20"] < 0)]),
+          摘("決議前 20 日上漲", 合[合["前20"] >= 0]),
+          摘("現價在區間下半部", 合[合["位置"] < 0.5]), 摘("現價在區間上半部以上", 合[合["位置"] >= 0.5])]
+    完 = 庫[庫["done"].astype(str).str.upper() == "Y"].copy()
+    完["目的"] = 完["purpose"].astype(str).str.replace(r"\.0$", "", regex=True).map(庫藏股目的).fillna("其他")
+    執行 = [{"目的": k, "完成件數": int(len(g)), "平均買回%": round(float(g["pct_done"].mean()), 1),
+            "買不到一半%": round(float((g["pct_done"] < 50).mean() * 100))} for k, g in 完.groupby("目的") if len(g) >= 5]
+    return {"計算日": f"{pd.Timestamp.now():%Y-%m-%d}", "起": f"{合['board_date'].min():%Y-%m-%d}",
+            "迄": f"{合['board_date'].max():%Y-%m-%d}", "樣本起": f"{庫['board_date'].min():%Y-%m-%d}",
+            "分組": 分組, "執行率": 執行}
+
+
+def 更新庫藏股回測(強制=False, 間隔天數=25):
+    """GitHub Actions 每天呼叫；距離上次超過 間隔天數，或 buyback.csv 補了更早的歷史，才重算 → data/buyback_backtest.json。"""
+    import json
+    檔 = 資料夾 / "buyback_backtest.json"
+    庫 = 讀取庫藏股()
+    if 庫 is None:
+        print("庫藏股回測：沒有庫藏股資料")
+        return
+    if 檔.exists() and not 強制:
+        舊 = json.loads(檔.read_text())
+        if ((pd.Timestamp.now() - pd.Timestamp(舊.get("計算日", "2000-01-01"))).days < 間隔天數
+                and 舊.get("樣本起") == f"{庫['board_date'].min():%Y-%m-%d}"):
+            print("庫藏股回測：還不用重算")
+            return
+    結果 = 庫藏股回測(庫=庫)
+    檔.write_text(json.dumps(結果, ensure_ascii=False, indent=1))
+    print(f"庫藏股回測：{結果['起']}～{結果['迄']}，{結果['分組'][0]['次數']} 件")
+
+
+def 讀取庫藏股回測():
+    import json
+    檔 = 資料夾 / "buyback_backtest.json"
+    return json.loads(檔.read_text()) if 檔.exists() else None
+
+
 def 產業鏈族群表(今日, 評分=None, 鏈="人形機器人", 報告們=None):
     """某條產業鏈每一檔的現況：環節、等級、漲跌、評分、本益比位階、預估本益比、營收年增、合約負債、庫藏股、券商評等、法人。
     今日：app 的 今日資料（要有 收盤、20日漲幅、本益比…）；評分：每日評分 的表（以代號為索引，可有 較昨日）；

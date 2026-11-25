@@ -1853,10 +1853,8 @@ def 抓合約負債歷史(每次=250, 間隔秒=1.2):
     print(f"合約負債歷史：這次補 {合計} 家（有合約負債 {len(有資料)} 家）")
 
 
-def 抓庫藏股(天數=400):
-    """公開資訊觀測站「買回自己公司股份彙總統計表」（上市＋上櫃，董事會決議日在近 天數 天內）→ data/buyback.csv。"""
-    今天 = dt.datetime.now(台北時區).date()
-    起 = 今天 - dt.timedelta(days=天數)
+def _抓庫藏股區間(起, 迄):
+    """公開資訊觀測站「買回自己公司股份彙總統計表」（上市＋上櫃，董事會決議日在 起～迄）→ list of dict。"""
     民國 = lambda d: f"{d.year - 1911}{d:%m%d}"
     去標籤 = lambda t: re.sub(r"<[^>]+>|&nbsp;|\s", "", t)
     列們 = []
@@ -1865,9 +1863,9 @@ def 抓庫藏股(天數=400):
         try:
             r = requests.post("https://mopsov.twse.com.tw/mops/web/ajax_t35sc09", headers=標頭, timeout=60,
                               data={"encodeURIComponent": 1, "step": 1, "firstin": 1, "off": 1, "TYPEK": 類,
-                                    "d1": 民國(起), "d2": 民國(今天), "RD": "1"})
+                                    "d1": 民國(起), "d2": 民國(迄), "RD": "1"})
         except requests.RequestException as 錯誤:
-            print(f"庫藏股 {類} 失敗：{錯誤}")
+            print(f"庫藏股 {類} {起}～{迄} 失敗：{錯誤}")
             continue
         for 列 in re.findall(r"<tr[^>]*>(.*?)</tr>", r.text, re.S):
             格 = [去標籤(t) for t in re.findall(r"<td[^>]*>(.*?)</td>", 列, re.S)]
@@ -1878,12 +1876,44 @@ def 抓庫藏股(天數=400):
                         "start": _民國日期(格[9]), "end": _民國日期(格[10]), "done": 格[11],
                         "bought": 轉數字(格[13]), "pct_done": 轉數字(格[15]), "amount": 轉數字(格[16]),
                         "avg_price": 轉數字(格[17]), "pct_shares": 轉數字(格[18])})
+    return 列們
+
+
+def _存庫藏股(列們):
+    """跟舊檔合併（同一檔同一決議日以新抓的為準），舊的歷史不丟，回測才有多年樣本。"""
+    檔 = 資料夾 / "buyback.csv"
+    表 = pd.DataFrame(列們)
+    if 檔.exists():
+        舊 = pd.read_csv(檔, dtype={"code": str, "purpose": str, "board_date": str, "start": str, "end": str})
+        表 = pd.concat([舊, 表], ignore_index=True)
+    表["code"] = 表["code"].astype(str)
+    表["board_date"] = pd.to_datetime(表["board_date"]).dt.strftime("%Y-%m-%d")
+    表 = 表.drop_duplicates(["code", "board_date"], keep="last").sort_values(["board_date", "code"])
+    表.to_csv(檔, index=False)
+    return len(表)
+
+
+def 抓庫藏股(天數=400):
+    """近 天數 天內董事會決議的庫藏股（上市＋上櫃）→ 合併進 data/buyback.csv。"""
+    今天 = dt.datetime.now(台北時區).date()
+    列們 = _抓庫藏股區間(今天 - dt.timedelta(days=天數), 今天)
     if 列們:
-        表 = pd.DataFrame(列們).drop_duplicates(["code", "board_date"], keep="last").sort_values("board_date")
-        表.to_csv(資料夾 / "buyback.csv", index=False)
-        print(f"庫藏股完成，共 {len(表)} 筆")
+        print(f"庫藏股完成，這次 {len(列們)} 筆，檔案共 {_存庫藏股(列們)} 筆")
     else:
         print("庫藏股沒有資料")
+
+
+def 抓庫藏股歷史(起年=2019):
+    """一次性：從 起年 起每年一段往回補庫藏股決議（回測用），合併進 data/buyback.csv。"""
+    今天 = dt.datetime.now(台北時區).date()
+    列們 = []
+    for 年 in range(起年, 今天.year + 1):
+        起, 迄 = dt.date(年, 1, 1), min(dt.date(年, 12, 31), 今天)
+        這段 = _抓庫藏股區間(起, 迄)
+        print(f"庫藏股 {年}：{len(這段)} 筆")
+        列們 += 這段
+    if 列們:
+        print(f"庫藏股歷史完成，檔案共 {_存庫藏股(列們)} 筆")
 
 
 def 抓可轉債():
