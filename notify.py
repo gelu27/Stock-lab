@@ -7,7 +7,7 @@
 #   python notify.py query 2330  查一檔股票（LINE 打字查詢用，由 Cloudflare Worker 觸發 query.yml）
 #   python notify.py brief 盤前|收盤|夜盤  AI 大盤解讀（要設定 GEMINI_API_KEY 或 ANTHROPIC_API_KEY），存到 ai-reports 並傳 LINE
 #   python notify.py flush   把同一個排程累積的通知（環境變數 LINE_OUTBOX）合成一則推播送出
-#   LINE 打「新片」「解讀」「額度」「80分以上」（可改數字）：用回覆（不算額度）拿最新影片清單、最新 AI 大盤解讀、本月額度
+#   LINE 打「新片」「解讀」「額度」「庫藏股」「80分以上」（可改數字）：用回覆（不算額度）拿最新影片清單、最新 AI 大盤解讀、本月額度
 #
 # 需要在 GitHub 專案 Settings → Secrets and variables → Actions 設定：
 #   LINE_TOKEN    LINE Messaging API 的 Channel access token（必填）
@@ -397,6 +397,11 @@ def 收盤摘要(強制=False):
         行們 += 停損提醒(t)
     except Exception as e:
         print("停損提醒失敗：", repr(e))
+
+    try:
+        行們 += 庫藏股摘要()
+    except Exception as e:
+        print("庫藏股摘要失敗：", repr(e))
 
     try:
         行們 += 評分摘要(持股, 代號們)
@@ -1740,7 +1745,28 @@ def 高分明細查詢(門檻=80):
     送出([{"type": "text", "text": t} for t in 段們], "個股查詢")
 
 
-文字指令 = {"新片": 新片查詢, "影片": 新片查詢, "新影片": 新片查詢, "解讀": 解讀查詢, "大盤": 解讀查詢, "額度": 額度查詢}
+def 庫藏股查詢():
+    """LINE 打「庫藏股」：用回覆（不算額度）傳近 3 個交易日新決議的庫藏股清單。"""
+    import engine
+    新 = engine.最新庫藏股新決議(3)
+    文字 = engine.庫藏股新決議文字(新) or "近 3 個交易日沒有新決議的庫藏股。"
+    送出([{"type": "text", "text": t} for t in 切段(文字)][:5], "個股查詢")
+
+
+def 庫藏股摘要():
+    """收盤摘要用：今天（資料最新交易日）董事會新決議的庫藏股，最多花大的前 5 件。"""
+    import engine
+    新 = engine.最新庫藏股新決議(1)
+    if 新.empty:
+        return []
+    行們 = ["", f"🛒 今日庫藏股新決議 {len(新)} 件（打「庫藏股」看近 3 日）"]
+    for _, r in 新.head(5).iterrows():
+        佔 = f"，佔市值 {r['佔市值%']:.1f}%" if pd.notna(r["佔市值%"]) else ""
+        行們.append(f"{r['name']} {r['code']} {r['目的']} {r['張數']:,.0f} 張，最多 {r['最多花億']:.2f} 億{佔}")
+    return 行們
+
+
+文字指令 = {"庫藏股": 庫藏股查詢, "新片": 新片查詢, "影片": 新片查詢, "新影片": 新片查詢, "解讀": 解讀查詢, "大盤": 解讀查詢, "額度": 額度查詢}
 
 
 # ---------- 排程看門狗：該跑的排程沒跑（或被 GitHub 停用）就 LINE 通知 ----------
