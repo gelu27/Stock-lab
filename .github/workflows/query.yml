@@ -35,3 +35,5 @@ jobs:
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
           GEMINI_SEARCH: ${{ secrets.GEMINI_SEARCH }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
