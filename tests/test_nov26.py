@@ -44,6 +44,19 @@ def test_資券明細與法人累計():
     assert len(x) > 1000
 
 
+
+def test_報告資券段落():
+    t = engine.資券明細("2330", 120)
+    標, 點 = engine.資券解讀(t)
+    assert 標 and any("融資餘額" in x for x in 點) and any("回測提醒" in x for x in 點)
+    文 = engine.資券摘要(t)
+    assert 文.count("\n") >= 10 and "判讀" in 文
+    assert engine.資券一行(t).startswith("🏦 資 ")
+    assert engine.資券解讀(None) is None and engine.資券摘要(None) == "" and engine.資券一行(None) == ""
+    import report
+    assert report.資券圖(t) is not None
+
+
 if __name__ == "__main__":
     for 名, f in list(globals().items()):
         if 名.startswith("test_"):

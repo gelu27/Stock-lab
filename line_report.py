@@ -114,6 +114,12 @@ def 重點行們(代號, r, 全):
         行們.append(f"💰 法人今日 {數(r.get('法人買超'), '{:+,.0f}')} 張、5 日 {數(r['法人5日買超'], '{:+,.0f}')} 張"
                   + (f"（{'、'.join(連)}）" if 連 else "")
                   + (f"，融資 5 日 {數(r.get('融資5日增減'), '{:+.1f}', '%')}" if pd.notna(r.get("融資5日增減")) else ""))
+    try:
+        資券行 = engine.資券一行(engine.資券明細(代號, 30))
+        if 資券行:
+            行們.append(資券行)
+    except Exception as e:
+        print("資券一行失敗：", repr(e))
     技 = [x for x in (均線位置(r), f"RSI {數(r.get('RSI'), '{:.0f}')}",
                      f"距 52 週高 {數(r.get('距52週高點'), '{:+.1f}', '%')}") if x]
     行們.append("📊 " + "、".join(技) + f"（20 日線 {數(r['MA20'] * 比)}）")
@@ -212,6 +218,12 @@ def 數據摘要(代號, r, 全, 公司=None, 新聞=None):
         摘要 += "\n\n近半年股價、週轉率、千張大戶、三大法人變化：\n" + engine.變化摘要(*變化資料(代號, r, 全))
     except Exception as e:
         print("變化摘要失敗：", repr(e))
+    try:
+        資券文 = engine.資券摘要(engine.資券明細(代號, 30))
+        if 資券文:
+            摘要 += "\n\n近 10 日資券（張；融資融券、當沖、借券賣出）：\n" + 資券文
+    except Exception as e:
+        print("資券摘要失敗：", repr(e))
     本益 = 全.loc[全["date"] >= 日 - pd.Timedelta(days=3 * 365), "本益比"]
     本益 = 本益[本益 > 0]
     if len(本益) > 60:
@@ -413,6 +425,11 @@ def 產生PDF(代號, r, 全, 建議, 內文, 時間, 公司=None, 新聞=None):
         資料["變化"] = {"歷史": h, "週轉": 週轉, "大戶": 大, "解讀": engine.變化解讀(h, 週轉, 大)}
     except Exception as e:
         print("變化圖失敗：", repr(e))
+    try:
+        資料["資券"] = engine.資券明細(代號, 120)
+        資料["資券解讀"] = engine.資券解讀(資料["資券"])
+    except Exception as e:
+        print("資券圖失敗：", repr(e))
     return bytes(report.產生PDF(代號, r["名稱"], 資料))
 
 
