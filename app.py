@@ -43,6 +43,7 @@ import feedback
 import glance
 import lab1118
 import lab1120
+import lab1126
 
 @st.cache_resource
 def _模組時間():
@@ -91,6 +92,8 @@ if _已改(lab1118):
     importlib.reload(lab1118)  # 11/18 補強（首頁、個股、選股用）
 if _已改(lab1120):
     importlib.reload(lab1120)  # 11/20 補強（台指 VIX、四象限、ODM 存貨等）
+if _已改(lab1126):
+    importlib.reload(lab1126)  # 11/26 網紅摘要建議（止賣補燈、前低守住、大反彈日）
 
 _圖示 = Path(__file__).parent / "static" / "icon-192.png"
 st.set_page_config(page_title="台股觀測站", page_icon=str(_圖示) if _圖示.exists() else "◢", layout="wide")
