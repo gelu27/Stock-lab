@@ -102,6 +102,95 @@ def 已整理過(標題, 日期, 清單, 容許天=2):
     return any(k == 鍵 and abs((d - 日).days) <= 容許天 for d, k in 清單)
 
 
+def 雲端即時檔名(設=None):
+    """有設定 GOOGLE_API_KEY＋DRIVE_FOLDER_ID（資料夾「知道連結可檢視」）才會即時列出雲端資料夾的檔名，否則回傳空清單。
+    即時列表能補上「剛上傳、22:00 排程還沒記進 seen 檔」的檔案；失敗不影響主流程。"""
+    金鑰, 資料夾 = os.environ.get("GOOGLE_API_KEY", "").strip(), os.environ.get("DRIVE_FOLDER_ID", "").strip()
+    if not (金鑰 and 資料夾):
+        return []
+    結果, 頁 = [], None
+    try:
+        for _ in range(8):
+            參 = {"q": f"'{資料夾}' in parents and trashed=false", "key": 金鑰, "pageSize": 200,
+                  "orderBy": "createdTime desc", "fields": "nextPageToken,files(name,createdTime)"}
+            if 頁:
+                參["pageToken"] = 頁
+            r = requests.get("https://www.googleapis.com/drive/v3/files", params=參, timeout=30)
+            r.raise_for_status()
+            j = r.json()
+            結果 += [(f["name"], (f.get("createdTime") or "")[:10]) for f in j.get("files", [])]
+            頁 = j.get("nextPageToken")
+            if not 頁:
+                break
+    except Exception as e:
+        print(f"雲端資料夾即時列表失敗（改用 seen 檔）：{e!r}")
+    return 結果
+
+
+def 雲端名稱清單(設):
+    """seen 檔（22:00 排程記錄）＋雲端資料夾即時檔名 → [(檔名, 日期字串)]。"""
+    表 = engine.讀取設定檔(設, "influencer_drive_seen.json") or {}
+    清單 = [(x.get("name") or "", x.get("date") or "") for x in 表.get("seen", [])]
+    return 清單 + 雲端即時檔名(設)
+
+
+def _拆檔名(名稱, 備用日期=""):
+    """「緯來1126吳官隆」「[宏爺講股] 宏爺1124.txt」「dup郭1120short」→ (前綴, 月日 4 碼, 關鍵字)。拆不出月日回 None。"""
+    n = re.sub(r"\.(txt|docx?)$", "", 名稱 or "", flags=re.I)
+    n = re.sub(r"_?詳細整理|（重傳）|\(重傳\)|^dup", "", n, flags=re.I)
+    d = re.search(r"\d{4}-(\d{2})-(\d{2})", n)
+    m = re.search(r"(?<!\d)(\d{2})(\d{2})(?!\d)", n)
+    if d:
+        月日, 位 = d.group(1) + d.group(2), d.span()
+    elif m and 1 <= int(m.group(1)) <= 12 and 1 <= int(m.group(2)) <= 31:
+        月日, 位 = m.group(1) + m.group(2), m.span()
+    else:
+        return None
+    前 = "".join(re.findall(r"[\u4e00-\u9fffA-Za-z]", n[:位[0]]))
+    後 = "".join(re.findall(r"[\u4e00-\u9fffA-Za-z0-9]", n[位[1]:]))
+    return 前, 月日, 後
+
+
+def 比對雲端檔名(待, 名稱清單, 頻道對照=None):
+    """待＝[(vid, 網址, 標題, 日期)]。回傳「雲端資料夾已有對應整理檔」的 vid 集合。
+    檔名通常是「頻道簡稱＋月日＋幾個關鍵字」（例「緯來1126吳官隆」），所以：
+    1) 簡稱要出現在頻道名稱裡，月日與影片發布日相差 ≤1 天；
+    2) 檔名有關鍵字的，要有連續 2 字出現在影片標題（直播／short 另認「直播」「shorts」）才算同一支；
+    3) 檔名沒關鍵字的（例「通勤族1126」），同頻道同日有幾份就視為對應幾支（由最早發布者起算），不會整批吞掉。"""
+    頻道對照 = 頻道對照 or 頻道名
+    解 = [x for x in (_拆檔名(n, d) for n, d in 名稱清單) if x and x[0]]
+    已 = set()
+    for 前, 月日, 後 in 解:
+        for v in 待:
+            if v[0] in 已:
+                continue
+            日 = pd.to_datetime(v[3], errors="coerce")
+            if pd.isna(日) or 前 not in (頻道對照.get(v[0]) or ""):
+                continue
+            if abs((pd.Timestamp(year=日.year, month=int(月日[:2]), day=int(月日[2:])) - 日).days) > 1:
+                continue
+            標 = (v[2] or "").lower()
+            if not 後:
+                continue
+            字 = [後[i:i + 2].lower() for i in range(len(後) - 1)]
+            if (any(g in 標 for g in 字 if not g.isdigit())) or (後.lower().startswith("short") and "short" in 標):
+                已.add(v[0])
+                break
+    # 無關鍵字的檔名：以頻道＋月日計份數
+    份數 = {}
+    for 前, 月日, 後 in 解:
+        if not 後:
+            份數[(前, 月日)] = 份數.get((前, 月日), 0) + 1
+    for (前, 月日), 份 in 份數.items():
+        候選 = sorted((v for v in 待 if v[0] not in 已 and 前 in (頻道對照.get(v[0]) or "")
+                     and pd.notna(pd.to_datetime(v[3], errors="coerce"))
+                     and abs((pd.Timestamp(year=pd.to_datetime(v[3]).year, month=int(月日[:2]), day=int(月日[2:])) - pd.to_datetime(v[3])).days) <= 1),
+                    key=lambda v: 發布排序.get(v[0], v[3]))
+        for v in 候選[:份]:
+            已.add(v[0])
+    return 已
+
+
 # ---------- 影片 ----------
 def 影片清單(設, 已看影片, 天數=3, 略過直播=True, 略過已整理=False):
     """回傳 [(影片id, 網址, 標題, 日期)]：頻道 RSS 近 天數 天的新片＋手動網址。"""
@@ -135,11 +224,13 @@ def 影片清單(設, 已看影片, 天數=3, 略過直播=True, 略過已整理
             結果.setdefault(m.group(1), (m.group(1), f"https://www.youtube.com/watch?v={m.group(1)}", "", ""))
     略過 = [k for k in (來源.get("略過關鍵字") or ["直播"]) if k]   # 直播常常好幾個小時，額度吃不消
     整理 = 已整理清單(設) if 略過已整理 else []
+    名稱們 = 雲端名稱清單(設) if 略過已整理 else []
     def 要處理(v):
         return v[0] not in 已看影片 and not (略過直播 and any(k in v[2] for k in 略過))
     待 = [v for v in 結果.values() if 要處理(v)]
-    if 整理:
-        留 = [v for v in 待 if not 已整理過(v[2], v[3], 整理)]
+    if 整理 or 名稱們:
+        已有 = 比對雲端檔名(待, 名稱們) if 名稱們 else set()
+        留 = [v for v in 待 if v[0] not in 已有 and not 已整理過(v[2], v[3], 整理)]
         略過數[0] = len(待) - len(留)
         return 留
     略過數[0] = 0
