@@ -524,6 +524,18 @@ with ETF頁[7]:
     最新日 = 寬績.index.max()
     名 = dict(zip(今日["代號"], 今日["名稱"]))
     數 = lambda f: st.column_config.NumberColumn(format=f)
+    with st.expander("⚡ ETF 單日暴漲暴跌預警（近 5 天單日漲跌 ±8% 以上）"):
+        import lab1126
+        異 = lab1126.ETF單日異動(指標)
+        if 異.empty:
+            st.caption("近 5 天沒有 ETF 單日漲跌超過 ±8%。")
+        else:
+            表格(異.assign(日期=異["日期"].dt.strftime("%m/%d")), hide_index=True, width="stretch",
+                 column_config={c: st.column_config.NumberColumn(format="%+.1f") for c in ("單日%", "次日%")}
+                 | {"收盤": st.column_config.NumberColumn(format="%.2f")})
+            st.caption("這裡沒有淨值，只標單日振幅。一天大漲 20～28%、隔天回吐一樣幅度，多半是市價漲停追高、溢價很大後收斂"
+                       "（例如 11/24 中信台日韓 PCB 市價 +28%、11/25 −23%），不是基金真的賺賠那麼多；"
+                       "溢價很大時不要追，有淨值的主動式 ETF 折溢價看下一個展開區。")
     with st.expander("🚨 主動式 ETF 破發監控：現價 vs 發行價 10 元（含折溢價）"):
         try:
             資訊 = pd.read_csv(engine.資料夾 / "etf" / "info.csv")
