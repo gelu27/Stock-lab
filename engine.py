@@ -269,16 +269,18 @@ def 單季損益(代號=None):
     if 代號 is not None:
         t = t[t["code"] == str(代號)]
     t = t.dropna(subset=["revenue", "gross"]).sort_values(["code", "quarter"]).copy()
-    if "opinc" not in t.columns:
-        t["opinc"] = np.nan
+    for k in ("opinc", "netinc"):
+        if k not in t.columns:
+            t[k] = np.nan
     t["年"], t["季"] = t["quarter"].str[:4], t["quarter"].str[-1].astype(int)
     前季號 = t.groupby(["code", "年"])["季"].shift()
-    for k in ("revenue", "gross", "opinc"):
+    for k in ("revenue", "gross", "opinc", "netinc"):
         前 = t.groupby(["code", "年"])[k].shift()
         t[k + "_q"] = np.where(t["季"] == 1, t[k], np.where(前季號 == t["季"] - 1, t[k] - 前, np.nan))
     有效 = t["revenue_q"] > 0
     t["毛利率"] = np.where(有效, t["gross_q"] / t["revenue_q"] * 100, np.nan).round(2)
     t["營益率"] = np.where(有效, t["opinc_q"] / t["revenue_q"] * 100, np.nan).round(2)
+    t["淨利率"] = np.where(有效, t["netinc_q"] / t["revenue_q"] * 100, np.nan).round(2)
     return t
 
 
@@ -310,17 +312,27 @@ def 毛利率表(單季=None):
     """每檔最新一季的單季毛利率，和上一季、去年同季比較（百分點）。單季＝單季損益() 的結果（回測時只給當時已公布的季）。"""
     t = (單季損益() if 單季 is None else 單季).dropna(subset=["毛利率"])
     if t.empty:
-        return pd.DataFrame(columns=["毛利率", "毛利率季度", "毛利率季增", "毛利率年增", "營益率", "營益率季增", "營益率年增"])
+        return pd.DataFrame(columns=["毛利率", "毛利率季度", "毛利率季增", "毛利率年增", "營益率", "營益率季增", "營益率年增",
+                                     "淨利率", "淨利率季增", "淨利率年增", "三率三升", "三率三降"])
     t["序"] = t["年"].astype(int) * 4 + t["季"]
+    if "淨利率" not in t.columns:
+        t["淨利率"] = np.nan
     最新 = t.groupby("code").tail(1).set_index("code")
-    結果 = {"毛利率": 最新["毛利率"], "毛利率季度": 最新["quarter"], "營益率": 最新["營益率"]}
-    for 欄 in ("毛利率", "營益率"):
+    結果 = {"毛利率": 最新["毛利率"], "毛利率季度": 最新["quarter"], "營益率": 最新["營益率"], "淨利率": 最新["淨利率"]}
+    for 欄 in ("毛利率", "營益率", "淨利率"):
         鍵 = t.set_index(["code", "序"])[欄]
         上季 = 鍵.reindex(list(zip(最新.index, 最新["序"] - 1))).values
         去年 = 鍵.reindex(list(zip(最新.index, 最新["序"] - 4))).values
         結果[欄 + "季增"] = (最新[欄] - 上季).round(2)
         結果[欄 + "年增"] = (最新[欄] - 去年).round(2)
-    return pd.DataFrame(結果, index=最新.index)
+    表 = pd.DataFrame(結果, index=最新.index)
+    # 三率三升：毛利率、營益率、淨利率「比上季、也比去年同季」都提升（2026-11 回測 2022～2026 共 16 季：
+    # 財報公布期限後買進 60 日平均超額 +2.9%，12 季為正）；三率三降＝三率都比去年同季下滑（60 日 −2.0%）
+    季 = 表[["毛利率季增", "營益率季增", "淨利率季增"]]
+    年 = 表[["毛利率年增", "營益率年增", "淨利率年增"]]
+    表["三率三升"] = (季 > 0).all(axis=1) & (年 > 0).all(axis=1)
+    表["三率三降"] = (年 < 0).all(axis=1)
+    return 表
 
 
 def 近四季EPS表():
@@ -5974,7 +5986,26 @@ def 庫藏股新決議(庫, 交易日們, 天數=3, 現價=None, 股數=None, �
     return t.sort_values(["board_date", "最多花億"], ascending=[False, False]).reset_index(drop=True)
 
 
-def 庫藏股新決議文字(新, 最多每天=None):
+def 庫藏股個股行情(r):
+    """LINE 第二行：現價、漲跌幅、三大法人買賣超、總分。r 是 Series（收盤、漲跌幅、外資買超…總分、較昨日、看法，缺的略過）。"""
+    號 = lambda v: "▲" if v > 0 else ("▼" if v < 0 else "－")
+    片 = []
+    if pd.notna(r.get("收盤")):
+        漲 = r.get("漲跌幅")
+        片.append(f"{r['收盤']:,.2f}" + (f" {號(漲)}{abs(漲):.2f}%" if pd.notna(漲) else ""))
+    if pd.notna(r.get("法人買超")):
+        細 = "／".join(f"{k}{round(r[c]):+,d}" for k, c in (("外", "外資買超"), ("投", "投信買超"), ("自", "自營買超")) if pd.notna(r.get(c)))
+        五 = f"，5日{round(r['法人5日買超']):+,d}" if pd.notna(r.get("法人5日買超")) else ""
+        片.append(f"法人{round(r['法人買超']):+,d}張" + (f"（{細}）" if 細 else "") + 五)
+    if pd.notna(r.get("總分")):
+        變 = r.get("較昨日")
+        片.append(f"{r['總分']:.1f}分" + (f"（{號(變)}{abs(變):.1f}）" if pd.notna(變) and round(變, 1) != 0 else "")
+                  + (f"{r['看法']}" if isinstance(r.get("看法"), str) else ""))
+    return "｜".join(片)
+
+
+def 庫藏股新決議文字(新, 最多每天=None, 行情=None):
+    """行情：以代號為索引的 DataFrame（收盤、漲跌幅、法人買賣超、總分…），有給就在每檔下面多一行。"""
     """把 庫藏股新決議() 排成文字清單（LINE、複製用）：【11/24（二）6 件】・鈺創 5351｜員工｜5,000 張｜61～146 元｜7.3 億。"""
     if 新 is None or 新.empty:
         return ""
@@ -5992,7 +6023,13 @@ def 庫藏股新決議文字(新, 最多每天=None):
             if pd.notna(r.get("決議前20日%")) and r["決議前20日%"] <= -15:
                 佔 += f"｜📉 前 20 日跌 {abs(r['決議前20日%']):.0f}%"
             行.append(f"・{r['name']} {r['code']}｜{r['目的']}｜{r['張數']:,.0f} 張｜{fmt價(r['price_low'])}～{fmt價(r['price_high'])} 元｜{花} 億{佔}")
+            if 行情 is not None and r["code"] in 行情.index:
+                情 = 庫藏股個股行情(行情.loc[r["code"]])
+                if 情:
+                    行.append(f"　　{情}")
     行.append("\n護盤＝維護公司信用及股東權益；員工＝轉讓股份予員工")
+    if 行情 is not None and len(行情):
+        行.append(f"第二行：{行情.attrs.get('日期', '最新')} 收盤價 漲跌幅｜三大法人買賣超（張，外／投／自）、5 日合計｜規則總分（較昨日）")
     if "決議前20日%" in 新 and (新["決議前20日%"] <= -15).any():
         行.append("📉＝決議前 20 日跌超過 15%：過去 5 年這類 20 日平均贏大盤約 3%、六成跑贏，比一般新決議明顯")
     return "\n".join(行)
@@ -12324,3 +12361,61 @@ def 暴漲後破前低(K, 單日門檻=5.0, 看=60, 前低窗=10):
                      "再破前低": bool(len(破)), "幾天後": int(破.index[0] - i) if len(破) else None, "可觀察天數": len(後)})
             上次 = i
     return pd.DataFrame(列)
+
+# ---------- 2026-11-26 看盤軟體「資券」頁、法人動向 1～60 日排行 ----------
+法人累計天數 = (1, 2, 3, 5, 10, 20, 60)
+
+
+def 法人累計表(天數們=法人累計天數):
+    """每檔近 N 個交易日外資、投信、自營商、三大法人累計買賣超：張數與金額（億，每天張數 × 當天收盤價再加總）。
+    回傳 DataFrame：index＝代號，欄位如「外資_5_張」「外資_5_億」。"""
+    最長 = max(天數們)
+    籌 = _讀每日檔("chips", 最長)
+    價 = _讀每日檔("prices", 最長)
+    if 籌 is None or 價 is None:
+        return pd.DataFrame()
+    t = 籌[["date", "code", "foreign", "trust", "dealer", "total"]].merge(價[["date", "code", "close"]], on=["date", "code"], how="left")
+    日們 = sorted(t["date"].unique())
+    結果 = {}
+    for 英, 中 in (("foreign", "外資"), ("trust", "投信"), ("dealer", "自營"), ("total", "合計")):
+        t[中 + "張"] = t[英] / 1000
+        t[中 + "億"] = t[英] * t["close"] / 1e8
+    for n in 天數們:
+        段 = t[t["date"] >= 日們[-min(n, len(日們))]]
+        加 = 段.groupby("code")[[f"{中}{單}" for 中 in ("外資", "投信", "自營", "合計") for 單 in ("張", "億")]].sum(min_count=1)
+        for 欄 in 加.columns:
+            結果[f"{欄[:2]}_{n}_{欄[2:]}"] = 加[欄]
+    return pd.DataFrame(結果).round(2)
+
+
+def 資券明細(代號, 天數=120):
+    """看盤軟體「資券」頁：每天收盤、漲跌、融資增減／餘額、融券增減／餘額、券資比、當沖張數與比率、借券賣出與餘額（張）。
+    最新日在最後一列。"""
+    籌 = _讀每日檔("chips", 天數 + 1, 代號)
+    價 = _讀每日檔("prices", 天數 + 1, 代號)
+    if 籌 is None or 價 is None:
+        return None
+    t = 價[["date", "close", "change", "volume"]].merge(籌[["date", "margin", "short"]], on="date", how="left")
+    t = t.sort_values("date").reset_index(drop=True)
+    t["成交張數"] = t["volume"] / 1000
+    t["資增減"] = t["margin"].diff()
+    t["券增減"] = t["short"].diff()
+    t["券資比"] = (t["short"] / t["margin"].replace(0, np.nan) * 100).round(1)
+    t["漲跌%"] = (t["change"] / (t["close"] - t["change"]).replace(0, np.nan) * 100).round(2)
+    當 = 讀取當沖()
+    if 當 is not None:
+        當 = 當[當["code"] == str(代號)][["date", "shares"]]
+        t = t.merge(當, on="date", how="left")
+        t["當沖張數"] = t["shares"] / 1000
+        t["當沖比"] = (t["shares"] / t["volume"].replace(0, np.nan) * 100).round(1)
+    else:
+        t["當沖張數"] = t["當沖比"] = np.nan
+    借 = 讀取借券(str(代號), 天數 + 1)
+    if 借 is not None:
+        t = t.merge(借[["date", "sbl_sell", "sbl_balance"]], on="date", how="left")
+    else:
+        t["sbl_sell"] = t["sbl_balance"] = np.nan
+    t = t.rename(columns={"close": "收盤", "margin": "融資餘額", "short": "融券餘額",
+                          "sbl_sell": "借券賣出", "sbl_balance": "借券餘額"})
+    return t[["date", "收盤", "漲跌%", "成交張數", "資增減", "融資餘額", "券增減", "融券餘額", "券資比",
+              "當沖張數", "當沖比", "借券賣出", "借券餘額"]].iloc[1:].reset_index(drop=True)

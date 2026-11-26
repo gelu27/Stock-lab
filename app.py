@@ -1792,7 +1792,7 @@ def 健檢欄(代號們, 動能=True):
 
 健檢欄設定 = {
     "健檢": st.column_config.TextColumn("健檢", help="表情＝基本面分數（😀 ≥ 58、😟 ≤ 42），↑↓＝總分比昨天變動 3 分以上", width="small"),
-    "徽章": st.column_config.TextColumn("徽章", help="連配N 連續配息、賺 近 8 季都賺、期 有個股期貨、營收高、順勢訊號（回測有效才顯示）、⚠處置／注意、融資危"),
+    "徽章": st.column_config.TextColumn("徽章", help="連配N 連續配息、賺 近 8 季都賺、期 有個股期貨、營收高、三升／三降（三率三升、三率都比去年差）、順勢訊號（回測有效才顯示）、⚠處置／注意、融資危"),
     "估值": st.column_config.TextColumn("估值", help="本益比在這檔過去 5 年的位置：特價／便宜／合理／偏貴／昂貴；括號是用券商預估 EPS 算的", width="medium"),
     "注意": st.column_config.NumberColumn("注意", help="越高越該先處理：處置 3、破 10 日線 3、破 5 日線 2、虧 15% 2、評分降 5 分、基本面弱、融資危、估值昂貴、今天跌 5% 各 1", width="small"),
     "注意理由": st.column_config.TextColumn("該注意", width="medium"),
