@@ -287,6 +287,11 @@ def 做PDF(代號, r, 建議, 內文, 時間):
         資料["變化"] = {"歷史": h, "週轉": 週轉, "大戶": 大, "解讀": engine.變化解讀(h, 週轉, 大)}
     except Exception:
         pass
+    try:
+        資料["資券"] = 資券資料(代號, _版本)
+        資料["資券解讀"] = engine.資券解讀(資料["資券"])
+    except Exception:
+        pass
     return report.產生PDF(代號, r["名稱"], 資料)
 
 
@@ -2242,6 +2247,12 @@ with 分頁[4], 區塊防護("AI 分析"):
             ])
             try:
                 摘要 += "\n\n近半年股價、週轉率、千張大戶、三大法人變化：\n" + engine.變化摘要(*變化資料(代號, 126))
+            except Exception:
+                pass
+            try:
+                資券文 = engine.資券摘要(資券資料(代號, _版本))
+                if 資券文:
+                    摘要 += "\n\n近 10 日資券（張；融資融券、當沖、借券賣出）：\n" + 資券文
             except Exception:
                 pass
             全 = 個股全史(代號, _版本)
