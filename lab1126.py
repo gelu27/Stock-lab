@@ -1,173 +1,117 @@
-"""2026-11-23 網紅摘要建議 N1～N6：流動性恢復燈、鎖死跌停、超跌洗盤積分、護盤跌深榜、循環股本淨比、標普條件價位。
-都是純函式（輸入 DataFrame、輸出 DataFrame／dict），方便測試；畫面在 views/p01_market.py 的「氣氛」區塊。"""
+"""2026-11-26 網紅摘要建議的純計算函式（不碰 streamlit，方便測試）。
+外資止賣補燈、ETF 暴漲暴跌預警、前低守住分類、大反彈日回測。"""
 import numpy as np
 import pandas as pd
 
-import engine
 
-ABF名單 = {"3037": "欣興", "8046": "南電", "3189": "景碩"}
-循環股 = {"2408": "南亞科", "2344": "華邦電", "2337": "旺宏", "8299": "群聯", "2603": "長榮", "2609": "陽明", "2615": "萬海", "2409": "友達", "3481": "群創"}
-標普門檻 = 6845.0  # 彭博／BofA：標普 500 跌破此價＝Fed 最在意的門檻之一（網紅 11/23 引述，2026 年數字）
-
-
-def _股票(表):
-    """只留 4 碼普通股。"""
-    return 表[表["code"].astype(str).str.fullmatch(r"\d{4}")]
+def 外資現貨估算(指標):
+    """每天外資買賣超估算（億元）＝ Σ 外資張數(股) × 收盤 ÷ 1e8；含 ETF，誤差約 5%。回傳 Series（index＝date）。"""
+    d = 指標[["date", "foreign", "收盤"]].dropna()
+    return (d["foreign"] * d["收盤"]).groupby(d["date"]).sum().sort_index() / 1e8
 
 
-def 逐日漲跌(價):
-    """價：date, code, open, high, low, close。回傳加上 昨收、漲跌%、跌停價、漲停價、收跌停、全日鎖死跌停、收漲停 的表。"""
-    d = _股票(價).sort_values(["code", "date"]).copy()
-    d["昨收"] = d.groupby("code")["close"].shift(1)
-    d = d[d["昨收"].notna()]
-    d["漲跌%"] = (d["close"] / d["昨收"] - 1) * 100
-    限 = d["昨收"].map(engine.漲跌停價)
-    d["漲停價"] = 限.map(lambda x: x[0])
-    d["跌停價"] = 限.map(lambda x: x[1])
-    d["收跌停"] = (d["close"] <= d["跌停價"] + 1e-6)
-    d["全日鎖死"] = d["收跌停"] & (d["high"] <= d["跌停價"] + 1e-6)
-    d["收漲停"] = (d["close"] >= d["漲停價"] - 1e-6)
-    return d
-
-
-def 鎖死跌停表(價, 天數=10):
-    """N2：每日 收盤跌停家數、全日鎖死（開盤到收盤都沒打開）家數、漲停家數，上市／上櫃合計。"""
-    d = 逐日漲跌(價)
-    if d.empty:
-        return pd.DataFrame()
-    g = d.groupby("date").agg(收跌停=("收跌停", "sum"), 全日鎖死=("全日鎖死", "sum"), 收漲停=("收漲停", "sum"), 上漲=("漲跌%", lambda s: int((s > 0).sum())),
-                              下跌=("漲跌%", lambda s: int((s < 0).sum()))).reset_index()
-    return g.tail(天數).sort_values("date", ascending=False).reset_index(drop=True)
-
-
-def 連續鎖死(價, 最少=2):
-    """連續 N 天（含最新日）收盤都在跌停的股票。"""
-    d = 逐日漲跌(價)
-    if d.empty:
-        return pd.DataFrame()
-    最新 = d["date"].max()
-    列 = []
-    for 代號, g in d.groupby("code"):
-        g = g.sort_values("date")
-        if g.iloc[-1]["date"] != 最新:
-            continue
-        n = 0
-        for v in g["收跌停"].values[::-1]:
-            if not v:
+def 止賣補燈(外資估, 美債10年=None, 天數=2):
+    """宏爺『外資止賣三部曲』網站原本只有台幣、期貨兩燈；這裡補『外資現貨轉買超』『美債殖利率止升』。
+    網站沒有 2 年期殖利率，改用 10 年期（^TNX）代替，燈上會寫明。回傳 [(名, 燈, 說)]。"""
+    燈們 = []
+    if 外資估 is not None and len(外資估) >= 天數:
+        s = 外資估.dropna()
+        連賣 = 0
+        for v in s.values[::-1]:
+            if v < 0:
+                連賣 += 1
+            else:
                 break
-            n += 1
-        if n >= 最少:
-            列.append({"代號": 代號, "名稱": g.iloc[-1].get("name", ""), "連續跌停天數": n, "收盤": g.iloc[-1]["close"]})
-    return pd.DataFrame(列).sort_values("連續跌停天數", ascending=False).reset_index(drop=True) if 列 else pd.DataFrame()
+        亮 = bool((s.tail(天數) > 0).all())
+        燈們.append(("④ 外資現貨轉買超", "🟢" if 亮 else "🔴",
+                     f"外資估算買賣超最新 {s.iloc[-1]:+,.0f} 億" + (f"，已連賣 {連賣} 天" if 連賣 else "")
+                     + ("：連續買超" if 亮 else f"：要連 {天數} 天買超才亮（用個股張數×收盤估算，誤差約 5%）")))
+    else:
+        燈們.append(("④ 外資現貨轉買超", "🟡", "沒有外資資料"))
+    if 美債10年 is not None and len(美債10年) > 天數:
+        s = 美債10年.astype(float).dropna()
+        差 = s.diff().tail(天數)
+        亮 = bool((差 <= 0).all())
+        燈們.append(("⑤ 美債殖利率止升", "🟢" if 亮 else "🔴",
+                     f"美債 10 年期 {s.iloc[-1]:.2f}%，近 {天數} 天變化 " + "、".join(f"{v:+.2f}" for v in 差)
+                     + "（影片說的是 2 年期，網站沒有，用 10 年期代替）"))
+    else:
+        燈們.append(("⑤ 美債殖利率止升", "🟡", "沒有美債資料"))
+    return 燈們
 
 
-def 流動性四燈(價, 日=None):
-    """N1：通勤族的氣氛指標（只用行情，不用新聞）。回傳 [(燈, 項目, 說明)]。
-    ① ABF 載板（欣興、南電、景碩）有沒有「盤中打到跌停、收盤打開」或跌幅縮到 5% 內；
-    ② 漲停家數 ≥ 跌停家數；③ 本益比低於 15 的股票漲跌中位數高於全部股票的中位數；④ 成交金額不比 5 日均量少 20% 以上。"""
-    d = 逐日漲跌(價)
-    if d.empty:
-        return []
-    日 = 日 or d["date"].max()
-    今 = d[d["date"] == 日]
-    結果 = []
-    a = 今[今["code"].isin(ABF名單)]
-    if len(a):
-        打開 = a[(a["low"] <= a["跌停價"] + 1e-6) & (a["close"] > a["跌停價"] * 1.02)]
-        收小 = a[a["漲跌%"] > -5]
-        字 = "、".join(f"{r['code']}{ABF名單[r['code']]} {r['漲跌%']:+.1f}%" for _, r in a.iterrows())
-        成 = len(打開) > 0 or len(收小) == len(a)
-        結果.append(("🟢" if 成 else "🔴", "ABF 載板跌停打開／跌幅收斂", 字 + ("（有檔盤中跌停後打開）" if len(打開) else "")))
-    漲, 跌 = int(今["收漲停"].sum()), int(今["收跌停"].sum())
-    結果.append(("🟢" if 漲 >= 跌 else "🔴", "漲停家數 ≥ 跌停家數", f"漲停 {漲} 家、跌停 {跌} 家"))
-    if "pe" in 價.columns:
-        低 = 價[(價["date"] == 日) & (價["pe"] > 0) & (價["pe"] < 15)]
-        低 = 今[今["code"].isin(低["code"])]
-        if len(低) > 20:
-            m1, m2 = 低["漲跌%"].median(), 今["漲跌%"].median()
-            結果.append(("🟢" if m1 >= m2 else "🔴", "低本益比股比大家強", f"本益比<15 的 {len(低)} 檔中位數 {m1:+.2f}%、全部 {m2:+.2f}%"))
-    if "value" in 價.columns:
-        每日 = _股票(價).groupby("date")["value"].sum().sort_index()
-        if len(每日) >= 6 and 日 in 每日.index:
-            均 = 每日.loc[:日].iloc[-6:-1].mean()
-            比 = 每日.loc[日] / 均 - 1
-            結果.append(("🟢" if 比 >= -0.2 else "🔴", "成交金額沒有萎縮", f"今日是 5 日均量的 {比 * 100 + 100:.0f}%"))
-    return 結果
+def ETF單日異動(指標, 門檻=8.0, 天數=5):
+    """代號 00 開頭的 ETF，最近 天數 個交易日內單日漲跌幅超過 ±門檻%。沒有淨值資料，只標單日振幅，
+    折溢價另看主動式 ETF 區。回傳 DataFrame（日期、代號、名稱、收盤、單日%、次日%）。"""
+    d = 指標[指標["代號"].astype(str).str.startswith("00")][["date", "代號", "名稱", "收盤"]].sort_values(["代號", "date"]).copy()
+    d["單日%"] = d.groupby("代號")["收盤"].pct_change() * 100
+    d["次日%"] = d.groupby("代號")["單日%"].shift(-1)
+    日們 = sorted(d["date"].unique())[-天數:]
+    r = d[d["date"].isin(日們) & (d["單日%"].abs() >= 門檻)]
+    return r.sort_values("單日%", key=lambda s: -s.abs()).rename(columns={"date": "日期"}).reset_index(drop=True)
 
 
-def 護盤跌深榜(價, 檔數=30, 回看=60, 前幾=10):
-    """N4：成交值前 N 大的權值股，依「距 60 日高點跌幅」排序，並列今日漲跌、是否漲停。看護盤／反彈時資金先拉誰。"""
-    d = _股票(價)
-    if d.empty:
+def 前低守住表(指標, 基準日, 最低成交值億=1.0):
+    """以 基準日 當天的最低價為『前低』。之後有沒有跌破？現在收在前低上還是下？
+    狀態：沒破（之後最低價都≥前低）／破後收復（破過但現在收盤≥前低）／仍在前低下。只看 4 碼股票、基準日成交值≥最低成交值億。"""
+    基準日 = pd.Timestamp(基準日)
+    d = 指標[指標["代號"].astype(str).str.fullmatch(r"\d{4}")]
+    起 = d[d["date"] == 基準日].set_index("代號")
+    if 起.empty:
         return pd.DataFrame()
-    最新 = d["date"].max()
-    近 = d[d["date"] > d["date"].drop_duplicates().sort_values().iloc[-21]] if d["date"].nunique() > 21 else d
-    大 = 近.groupby("code")["value"].mean().nlargest(檔數).index
-    列 = []
-    for c in 大:
-        g = d[d["code"] == c].sort_values("date").tail(回看)
-        if len(g) < 5 or g.iloc[-1]["date"] != 最新:
-            continue
-        昨, 今 = g.iloc[-2]["close"], g.iloc[-1]["close"]
-        上, 下 = engine.漲跌停價(昨)
-        列.append({"代號": c, "名稱": g.iloc[-1].get("name", ""), "距60日高%": round((今 / g["high"].max() - 1) * 100, 1),
-                 "今日%": round((今 / 昨 - 1) * 100, 2), "漲停": bool(今 >= 上 - 1e-6)})
-    return pd.DataFrame(列).sort_values("距60日高%").head(前幾).reset_index(drop=True) if 列 else pd.DataFrame()
-
-
-def 循環股本淨比(價, 名單=None):
-    """N5：循環股改看本淨比位階（資料期間內的百分位，越低越便宜）。價：date, code, pb。"""
-    名單 = 名單 or 循環股
-    列 = []
-    for c, n in 名單.items():
-        g = 價[(價["code"] == c) & (價["pb"] > 0)].sort_values("date")
-        if len(g) < 120:
-            continue
-        pb = g["pb"].astype(float)
-        列.append({"代號": c, "名稱": n, "本淨比": round(pb.iloc[-1], 2), "位階%": round((pb < pb.iloc[-1]).mean() * 100),
-                 "中位數": round(pb.median(), 2), "最低": round(pb.min(), 2), "最高": round(pb.max(), 2),
-                 "本益比": round(float(g["pe"].iloc[-1]), 1) if "pe" in g and pd.notna(g["pe"].iloc[-1]) else np.nan})
-    return pd.DataFrame(列).sort_values("位階%").reset_index(drop=True) if 列 else pd.DataFrame()
-
-
-def 標普條件(美, 門檻=標普門檻):
-    """N6：標普 500 距離門檻（預設 6,845）的空間；美：engine.讀取美股() 的收盤表（欄位用中文名）。"""
-    if 美 is None or "S&P 500" not in 美.columns:
-        return None
-    s = 美["S&P 500"].dropna()
-    if len(s) < 2:
-        return None
-    收 = float(s.iloc[-1])
-    r = {"日期": s.index[-1], "標普收盤": 收, "門檻": 門檻, "距門檻%": (收 / 門檻 - 1) * 100, "破門檻": 收 < 門檻, "單日%": (收 / float(s.iloc[-2]) - 1) * 100}
-    高 = [c for c in 美.columns if "HYG" in c]
-    if 高:
-        h = 美[高[0]].dropna()
-        if len(h) >= 21:
-            r["HYG"] = float(h.iloc[-1])
-            r["HYG距20日均%"] = (float(h.iloc[-1]) / float(h.tail(20).mean()) - 1) * 100
-    return r
-
-
-def 超跌洗盤積分(價, 基本面, 前幾=15, 營收門檻=30.0):
-    """N3（簡化版）：累計營收年增 > 門檻的股票，依「距一年高點跌幅（越深分越低＝越前面）」與「近 5 日融資減幅（越多越前面）」排名加總，
-    總分越低越前面。原影片第三項是融資維持率（網站沒有個股維持率），改用融資減幅當洗盤深度的替代。"""
-    最新 = 價["date"].max()
-    d = _股票(價)
-    今 = d[d["date"] == 最新][["code", "name", "close"]].set_index("code")
-    高 = d[d["date"] > 最新 - pd.Timedelta(days=365)].groupby("code")["high"].max()
-    今["距一年高%"] = (今["close"] / 高.reindex(今.index) - 1) * 100
-    if "margin" in d.columns:
-        前 = d[d["date"] == d["date"].drop_duplicates().sort_values().iloc[-6]].set_index("code")["margin"] if d["date"].nunique() > 6 else None
-        後 = d[d["date"] == 最新].set_index("code")["margin"]
-        if 前 is not None:
-            今["5日融資減%"] = ((後.reindex(今.index) / 前.reindex(今.index) - 1) * 100)
-    營 = 基本面["累計營收年增率"] if "累計營收年增率" in 基本面.columns else None
-    if 營 is None:
+    後 = d[d["date"] > 基準日]
+    if 後.empty:
         return pd.DataFrame()
-    今["累計營收年增%"] = 營.reindex(今.index)
-    今 = 今[今["累計營收年增%"] > 營收門檻].dropna(subset=["距一年高%"])
-    今["空間分"] = 今["距一年高%"].rank(method="min")  # 跌最深＝1
-    今["洗盤分"] = 今["5日融資減%"].rank(method="min") if "5日融資減%" in 今 else 0  # 融資減最多（負最大）＝1
-    今["總分"] = 今["空間分"] + 今["洗盤分"]
-    今 = 今.sort_values(["總分", "距一年高%"]).head(前幾).reset_index()
-    return 今.rename(columns={"code": "代號", "name": "名稱", "close": "收盤"})[[c for c in ["代號", "名稱", "收盤", "累計營收年增%", "距一年高%", "5日融資減%", "總分"] if c in 今.rename(columns={"code": "代號", "name": "名稱", "close": "收盤"}).columns]]
+    最低 = 後.groupby("代號")["low"].min()
+    最新 = 後.sort_values("date").groupby("代號").tail(1).set_index("代號")
+    r = pd.DataFrame({"名稱": 最新["名稱"], "前低": 起["low"], "之後最低": 最低, "現價": 最新["收盤"]}).dropna()
+    r = r[起["成交值億"].reindex(r.index) >= 最低成交值億]
+    r["狀態"] = np.where(r["之後最低"] >= r["前低"], "沒破", np.where(r["現價"] >= r["前低"], "破後收復", "仍在前低下"))
+    r["距前低%"] = (r["現價"] / r["前低"] - 1) * 100
+    r["最深破低%"] = (r["之後最低"] / r["前低"] - 1) * 100
+    return r.reset_index().rename(columns={"index": "代號"}).sort_values("距前低%", ascending=False).reset_index(drop=True)
+
+
+def 大反彈日回測(K, 漲幅=2.5, 前跌=2.5, 回看=10, 後=(1, 5, 20)):
+    """加權『極端大跌後的大反彈日』：當日漲 ≥ 漲幅%，而且過去 回看 日內曾單日跌 ≥ 前跌%。
+    統計之後 後 日的報酬，對照所有日子的平均。K：date、close。回傳 dict(事件表, 統計, 基準)。"""
+    k = K[["date", "close"]].dropna().sort_values("date").reset_index(drop=True)
+    r = k["close"].pct_change() * 100
+    近大跌 = r.shift(1).rolling(回看, min_periods=1).min() <= -前跌
+    亮 = (r >= 漲幅) & 近大跌
+    行 = []
+    for i in np.where(亮)[0]:
+        e = {"日期": k["date"].iloc[i], "當日%": round(r.iloc[i], 2)}
+        for n in 後:
+            e[f"{n}日%"] = round((k["close"].iloc[i + n] / k["close"].iloc[i] - 1) * 100, 2) if i + n < len(k) else np.nan
+        行.append(e)
+    表 = pd.DataFrame(行)
+    統, 基 = [], {}
+    for n in 後:
+        fwd = (k["close"].shift(-n) / k["close"] - 1) * 100
+        基[n] = round(float(fwd.mean()), 2)
+        if len(表) and f"{n}日%" in 表:
+            v = 表[f"{n}日%"].dropna()
+            統.append({"天數": n, "次數": len(v), "平均%": round(float(v.mean()), 2) if len(v) else np.nan,
+                     "上漲機率%": round(float((v > 0).mean() * 100), 0) if len(v) else np.nan, "基準平均%": 基[n]})
+    return {"事件表": 表, "統計": 統, "基準": 基}
+
+
+def 漲停隔日(指標, 日, 漲停門檻=9.5, 後=(1, 5)):
+    """某一天漲停的股票，之後 後 日平均報酬 vs 同日全市場（4 碼股票）平均；日期太新沒有後續就回傳 None。"""
+    d = 指標[指標["代號"].astype(str).str.fullmatch(r"\d{4}")].pivot(index="date", columns="代號", values="還原價").sort_index()
+    日 = pd.Timestamp(日)
+    if 日 not in d.index:
+        return None
+    i = d.index.get_loc(日)
+    當 = (d.iloc[i] / d.iloc[i - 1] - 1) * 100
+    停 = 當[當 >= 漲停門檻].index
+    if len(停) < 5:
+        return None
+    out = {"漲停家數": int(len(停))}
+    for n in 後:
+        if i + n >= len(d):
+            continue
+        fw = (d.iloc[i + n] / d.iloc[i] - 1) * 100
+        out[n] = (round(float(fw[停].mean()), 2), round(float(fw.mean()), 2))
+    return out

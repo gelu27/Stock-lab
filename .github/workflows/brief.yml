@@ -53,6 +53,8 @@ jobs:
         run: python -u auto_intake.py remind
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          DRIVE_FOLDER_ID: ${{ secrets.DRIVE_FOLDER_ID }}
       - name: LINE 合併送出
         if: always()
         continue-on-error: true

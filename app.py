@@ -44,6 +44,7 @@ import glance
 import lab1118
 import lab1120
 import lab1126
+import lab1126m
 
 @st.cache_resource
 def _模組時間():
@@ -90,10 +91,12 @@ if _已改(glance):
     importlib.reload(glance)  # 一眼判斷：清單表情徽章、估值位階、重點卡三格、風險框、檢查表
 if _已改(lab1118):
     importlib.reload(lab1118)  # 11/18 補強（首頁、個股、選股用）
-if _已改(lab1126):
-    importlib.reload(lab1126)  # 11/23 網紅建議：流動性氣氛區塊
+if _已改(lab1126m):
+    importlib.reload(lab1126m)  # 11/23 網紅建議：流動性氣氛區塊
 if _已改(lab1120):
     importlib.reload(lab1120)  # 11/20 補強（台指 VIX、四象限、ODM 存貨等）
+if _已改(lab1126):
+    importlib.reload(lab1126)  # 11/26 網紅摘要建議（止賣補燈、前低守住、大反彈日）
 
 _圖示 = Path(__file__).parent / "static" / "icon-192.png"
 st.set_page_config(page_title="台股觀測站", page_icon=str(_圖示) if _圖示.exists() else "◢", layout="wide")
@@ -1138,7 +1141,7 @@ def 選股條件區():
                 條件["融資洗完"] = True
             if st.checkbox("個股融資維持率上限（估算）", key="條_融資維持率上限"):
                 條件["融資維持率上限"] = st.number_input("融資維持率(%) ≤", value=150.0, step=5.0, key="條_融資維持率(%) ≤",
-                                                    help="網站自己估算，可能偏高 2～15 個百分點；130% 以下券商會追繳")
+                                                    help="網站自己估算，可能偏高 2～15 個百分點；120% 以下券商會追繳（11/24 起由 130% 調降）")
             if st.checkbox("排除融資佔股本最高的股票（籌碼不安定）", key="條_融資佔股本排除",
                            help="融資佔股本＝融資餘額 × 1,000 ÷ 發行股數。網路評論：融資高的標的殺盤時是重災區；"
                                 "2026-11 回測 9 次急跌，融資佔股本最高 1/5 平均多跌約 5 個百分點（但大多是高波動股的另一面）"):
@@ -1795,7 +1798,7 @@ def 健檢欄(代號們, 動能=True):
 
 健檢欄設定 = {
     "健檢": st.column_config.TextColumn("健檢", help="表情＝基本面分數（😀 ≥ 58、😟 ≤ 42），↑↓＝總分比昨天變動 3 分以上", width="small"),
-    "徽章": st.column_config.TextColumn("徽章", help="連配N 連續配息、賺 近 8 季都賺、期 有個股期貨、營收高、順勢訊號（回測有效才顯示）、⚠處置／注意、融資危"),
+    "徽章": st.column_config.TextColumn("徽章", help="連配N 連續配息、賺 近 8 季都賺、期 有個股期貨、營收高、三升／三降（三率三升、三率都比去年差）、順勢訊號（回測有效才顯示）、⚠處置／注意、融資危"),
     "估值": st.column_config.TextColumn("估值", help="本益比在這檔過去 5 年的位置：特價／便宜／合理／偏貴／昂貴；括號是用券商預估 EPS 算的", width="medium"),
     "注意": st.column_config.NumberColumn("注意", help="越高越該先處理：處置 3、破 10 日線 3、破 5 日線 2、虧 15% 2、評分降 5 分、基本面弱、融資危、估值昂貴、今天跌 5% 各 1", width="small"),
     "注意理由": st.column_config.TextColumn("該注意", width="medium"),

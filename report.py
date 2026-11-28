@@ -198,6 +198,30 @@ def 法人圖(歷史, 寬=7.4, 高=3.6):
     return _存圖(plt, 圖)
 
 
+def 資券圖(資券, 寬=7.4, 高=4.4):
+    """看盤軟體「資券」頁：收盤、融資餘額、融券餘額、借券賣出餘額四層共用時間軸。"""
+    if 資券 is None or len(資券) < 5 or 資券["融資餘額"].isna().all():
+        return None
+    plt = _畫布()
+    h = 資券.reset_index(drop=True)
+    有借 = h["借券餘額"].notna().any()
+    列們 = [("收盤", "股價", None), ("融資餘額", "融資(張)", "#3FA7D6"), ("融券餘額", "融券(張)", "#3FA7D6")]
+    if 有借:
+        列們.append(("借券餘額", "借券賣出\n餘額(張)", "#8F7CFF"))
+    圖, 軸們 = plt.subplots(len(列們), 1, figsize=(寬, 高), sharex=True,
+                         gridspec_kw={"height_ratios": [1.4] + [1] * (len(列們) - 1), "hspace": 0.12})
+    日 = h["date"]
+    for 軸, (欄, 名, 色) in zip(軸們, 列們):
+        if 色 is None:
+            軸.plot(日, h[欄], color=青, linewidth=1.3)
+        else:
+            軸.bar(日, h[欄], color=色, width=1)
+        軸.set_ylabel(名, fontsize=11)
+        軸.tick_params(labelsize=10)
+    軸們[-1].xaxis.set_major_formatter(__import__("matplotlib.dates", fromlist=["DateFormatter"]).DateFormatter("%m/%d"))
+    return _存圖(plt, 圖)
+
+
 def 變化圖(變化, 寬=7.4, 高=4.8):
     """FLOW：股價、週轉率、千張大戶、三大法人買賣超四層共用時間軸。"""
     if not 變化 or 變化["歷史"] is None or len(變化["歷史"]) < 5:
@@ -642,6 +666,10 @@ def 產生PDF(代號, 名稱, 資料):
     if 變化:
         左圖右文("Flow", "股價・週轉率・大戶・法人 變化（近半年）", 變化圖(變化, 高=4.4),
                  ("籌碼與股價一起看", 變化["解讀"]), 105)
+    資券 = 資料.get("資券")
+    if 資券 is not None:
+        左圖右文("Margin & Short", "資券：融資、融券、借券賣出（近半年）", 資券圖(資券, 高=4.2),
+                 資料.get("資券解讀"), 100)
 
     # 目標價
     def 價(v):

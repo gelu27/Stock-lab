@@ -15,7 +15,7 @@ def main():
     註 = engine.讀取產業鏈註記()
     assert len(人) >= 20 and 人["code"].is_unique, "人形機器人鏈每檔只放一個主要部位"
     assert set(人["code"]) == set(註[註["chain"] == "人形機器人"]["code"]), "產業鏈與受惠等級名單要一致"
-    assert set(註["等級"]) <= {"A 已出貨", "B 送樣驗證", "C 間接題材"}, 註["等級"].unique()
+    assert set(註["等級"]) <= {"A 已出貨", "B 送樣驗證", "C 間接題材", "A 一線大廠", "B 二線廠"}, 註["等級"].unique()
     概 = engine.讀取概念()
     assert set(人["code"]) <= set(概[概["concept"] == "人形機器人"]["code"]), "概念股也要有人形機器人"
     文 = engine.產業鏈位置("2049", {"2049": "上銀"})

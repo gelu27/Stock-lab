@@ -4,6 +4,52 @@ def 借券資料(代號, 版本鍵):
     return engine.讀取借券(代號)
 
 
+@st.cache_data(ttl=43200, show_spinner=False, max_entries=50)
+def 資券資料(代號, 版本鍵):
+    return engine.資券明細(代號, 120)
+
+
+def 資券區(代號):
+    """看盤軟體「資券」頁：股價＋融資餘額、融券餘額、借券賣出餘額三張柱狀圖，旁邊每日資券明細表。"""
+    t = 資券資料(代號, _版本)
+    if t is None or not len(t) or t["融資餘額"].isna().all():
+        return
+    段落("MARGIN // 資券：融資、融券、當沖、借券每日明細（張）")
+    最 = t.iloc[-1]
+    近5 = t.tail(5)
+    卡片格([
+        卡片(f"融資餘額 · {最['date']:%m/%d}", 數(最["融資餘額"], "{:,.0f}"), f"今日 {數(最['資增減'], '{:+,.0f}')}　5 日 {數(近5['資增減'].sum(), '{:+,.0f}')}",
+             漲跌色(最["資增減"])),
+        卡片("融券餘額", 數(最["融券餘額"], "{:,.0f}"), f"今日 {數(最['券增減'], '{:+,.0f}')}　5 日 {數(近5['券增減'].sum(), '{:+,.0f}')}",
+             漲跌色(-最["券增減"] if pd.notna(最["券增減"]) else 0)),
+        卡片("券資比", 數(最["券資比"], "{:.1f}", "%"), "融券 ÷ 融資"),
+        卡片("近 5 日當沖比", 數(近5["當沖張數"].sum() / max(近5["成交張數"].sum(), 1) * 100 if 近5["當沖張數"].notna().any() else np.nan,
+                              "{:.1f}", "%"), "只有上市股票" if 近5["當沖張數"].isna().all() else "當沖張數 ÷ 成交張數"),
+    ])
+    圖 = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.34, 0.22, 0.22, 0.22],
+                       subplot_titles=["收盤價", "融資餘額（張）", "融券餘額（張）", "借券賣出餘額（張）"])
+    圖.add_trace(go.Scatter(x=t["date"], y=t["收盤"], name="收盤", line=dict(color="#FFFFFF", width=1.4)), row=1, col=1)
+    for i, (欄, 色) in enumerate((("融資餘額", "#3FA7D6"), ("融券餘額", "#3FA7D6"), ("借券餘額", "#8F7CFF")), start=2):
+        圖.add_trace(go.Bar(x=t["date"], y=t[欄], name=欄, marker_color=色), row=i, col=1)
+    圖.update_layout(showlegend=False)
+    圖.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
+    圖.update_annotations(font=dict(size=11, color=灰), x=0, xanchor="left")
+    st.plotly_chart(圖表外觀(圖, 520), width="stretch")
+    明細 = t.iloc[::-1].head(30).copy()
+    明細["日期"] = 明細["date"].dt.strftime("%m/%d")
+    明細 = 明細[["日期", "收盤", "漲跌%", "資增減", "融資餘額", "券增減", "融券餘額", "券資比", "當沖張數", "當沖比", "借券賣出", "借券餘額"]]
+    紅綠 = lambda v: f"color:{紅}" if pd.notna(v) and v > 0 else (f"color:{綠}" if pd.notna(v) and v < 0 else "")
+    樣式 = 明細.style.map(紅綠, subset=["漲跌%", "資增減", "券增減"]).format(
+        {"收盤": "{:,.2f}", "漲跌%": "{:+.2f}", "資增減": "{:+,.0f}", "融資餘額": "{:,.0f}", "券增減": "{:+,.0f}", "融券餘額": "{:,.0f}",
+         "券資比": "{:.1f}%", "當沖張數": "{:,.0f}", "當沖比": "{:.1f}%", "借券賣出": "{:,.0f}", "借券餘額": "{:,.0f}"}, na_rep="—")
+    表格(樣式, hide_index=True, width="stretch", height=360)
+    st.caption("資料：證交所、櫃買中心每日融資融券、當沖、借券賣出（借券賣出從 2026-07 起、當沖從 2026-09 起，只有上市）。"
+               "2021-11～2026-11 回測（成交值 5 千萬以上、融資 500 張以上）："
+               "「資減券增」之後 20 日比大盤 −0.2%、券資比 ≥ 30% −0.6%、券資比高又創 20 日新高（俗稱軋空）−0.9%，"
+               "常聽到的「券多會軋空」「資減券增籌碼乾淨」都不成立；融資 5 日大增 10% 以上平均 +0.9%，但中位數比大盤差，是少數飆股拉高平均。"
+               "資券變化適合拿來看「誰在買、誰在賣」，不適合單獨當買賣訊號。")
+
+
 @st.cache_data(ttl=30, show_spinner=False, max_entries=50)
 def 即時一檔(代號, 市場):
     """個股報告用的即時價（快取 30 秒，避免每次點按鈕都重抓）。"""
@@ -32,6 +78,10 @@ def 毛利卡片(r):
         卡片(f"營業利益率 · {季度[:4]} Q{季度[-1:]}", f"{r['營益率']:.1f}%" if pd.notna(r.get("營益率")) else "—",
              變化(r.get("營益率季增"), "較上季") + "<br>" + 變化(r.get("營益率年增"), "較去年同季"),
              漲跌色(r.get("營益率季增") if pd.notna(r.get("營益率季增")) else 0)),
+        卡片(f"稅後淨利率 · {季度[:4]} Q{季度[-1:]}", f"{r['淨利率']:.1f}%" if pd.notna(r.get("淨利率")) else "—",
+             變化(r.get("淨利率季增"), "較上季") + "<br>" + 變化(r.get("淨利率年增"), "較去年同季")
+             + ("<br>★ 三率三升" if r.get("三率三升") == True else ("<br>⚠ 三率都比去年差" if r.get("三率三降") == True else "")),  # noqa: E712
+             漲跌色(r.get("淨利率季增") if pd.notna(r.get("淨利率季增")) else 0)),
     ]
 
 
@@ -235,6 +285,11 @@ def 做PDF(代號, r, 建議, 內文, 時間):
     try:
         h, 週轉, 大 = 變化資料(代號, 126)
         資料["變化"] = {"歷史": h, "週轉": 週轉, "大戶": 大, "解讀": engine.變化解讀(h, 週轉, 大)}
+    except Exception:
+        pass
+    try:
+        資料["資券"] = 資券資料(代號, _版本)
+        資料["資券解讀"] = engine.資券解讀(資料["資券"])
     except Exception:
         pass
     return report.產生PDF(代號, r["名稱"], 資料)
@@ -865,6 +920,8 @@ def 個股券商報告(代號, 收盤):
                             f"外資 {共['外資家數']} 家、本土 {共['本土家數']} 家"))
         卡片格(卡們)
         st.caption("共識只算近半年、每家券商最新一份，用中位數不用平均，避免被一個極端目標價帶走。")
+        for _異 in engine.目標價異常(共, 收盤):
+            st.warning(f"🚩 {_異}")
     集 = [x for x in engine.集體升降評(報告們) if x[0] == str(代號)]
     for _, _, 方向, 家, 名們 in 集:
         (st.success if 方向 == "上修" else st.warning)(f"📣 近 3 天 {家} 家券商同時{方向}目標價：{名們}")
@@ -1712,7 +1769,7 @@ with 分頁[1], 區塊防護("籌碼"):
                      "#FFC24B" if r.get("融資佔股本排名%", 0) >= 90 else "#EDEDED"),
                 卡片("融資維持率（估算）", 數(r.get("融資維持率", np.nan), "{:.0f}", "%"),
                      f"成本約 {數(r.get('融資成本', np.nan), '{:,.1f}')}　20 日 {數(r.get('融資20日增減', np.nan), '{:+.1f}', '%')}　"
-                     + (engine.融資訊號(r) or "130% 以下會追繳"),
+                     + (engine.融資訊號(r) or "120% 以下會追繳"),
                      綠 if r.get("融資維持率", 200) < 145 else "#EDEDED"),
             ])
         內部 = 內部人資料(代號)
@@ -1766,6 +1823,9 @@ with 分頁[1], 區塊防護("籌碼"):
                                     opacity=0.6), secondary_y=True)
                 st.plotly_chart(圖表外觀(圖, 260), width="stretch")
             st.caption("集保結算所每週五公布。大戶比例上升、股東人數下降，通常代表籌碼往大戶集中（表中紅色＝籌碼變集中）。")
+
+        with 區塊防護("資券明細"):
+            資券區(代號)
 
         借 = 借券資料(代號, _版本)
         if 借 is not None and len(借):
@@ -2187,6 +2247,12 @@ with 分頁[4], 區塊防護("AI 分析"):
             ])
             try:
                 摘要 += "\n\n近半年股價、週轉率、千張大戶、三大法人變化：\n" + engine.變化摘要(*變化資料(代號, 126))
+            except Exception:
+                pass
+            try:
+                資券文 = engine.資券摘要(資券資料(代號, _版本))
+                if 資券文:
+                    摘要 += "\n\n近 10 日資券（張；融資融券、當沖、借券賣出）：\n" + 資券文
             except Exception:
                 pass
             全 = 個股全史(代號, _版本)
