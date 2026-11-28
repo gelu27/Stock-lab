@@ -44,6 +44,7 @@ import glance
 import lab1118
 import lab1120
 import lab1126
+import lab1126m
 
 @st.cache_resource
 def _模組時間():
@@ -90,6 +91,8 @@ if _已改(glance):
     importlib.reload(glance)  # 一眼判斷：清單表情徽章、估值位階、重點卡三格、風險框、檢查表
 if _已改(lab1118):
     importlib.reload(lab1118)  # 11/18 補強（首頁、個股、選股用）
+if _已改(lab1126m):
+    importlib.reload(lab1126m)  # 11/23 網紅建議：流動性氣氛區塊
 if _已改(lab1120):
     importlib.reload(lab1120)  # 11/20 補強（台指 VIX、四象限、ODM 存貨等）
 if _已改(lab1126):
